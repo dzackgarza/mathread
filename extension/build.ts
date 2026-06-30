@@ -50,7 +50,7 @@ if (!viewer.includes('mathread/capture-ui.js')) {
   // Add capture button next to download button
   viewer = viewer.replace(
     '<button id="downloadButton"',
-    '<button id="mathreadCaptureButton" class="toolbarButton" type="button" tabindex="0" title="Capture to MathRead">Capture</button>\n                  <button id="downloadButton"'
+    '<button id="mathreadCaptureButton" class="toolbarButton" type="button" tabindex="0" title="Checking MathRead backend" disabled>Checking</button>\n                  <button id="downloadButton"'
   );
   writeFileSync(viewerPath, viewer);
 }
