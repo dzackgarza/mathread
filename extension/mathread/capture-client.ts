@@ -10,14 +10,9 @@ export type CaptureUrlRequest = {
   headers?: CaptureHeaders;
 };
 
-export type CaptureResponse = {
-  stored_path: string;
-  original_sha256: string;
-  stored_sha256: string;
-  pdf_url: string;
-  source_url: string;
-  capture: "capture-url" | "capture-bytes";
-  existing: boolean;
+export type RuntimeCaptureMessage = {
+  type: "mathread:capture-url";
+  request: CaptureUrlRequest;
 };
 
 export function isLikelyPdfUrl(rawUrl: string): boolean {
@@ -36,10 +31,19 @@ export function captureRequestForClickedPdfLink(
   };
 }
 
+export function runtimeCaptureMessage(
+  request: CaptureUrlRequest,
+): RuntimeCaptureMessage {
+  return {
+    type: "mathread:capture-url",
+    request,
+  };
+}
+
 export async function postCaptureUrl(
   request: CaptureUrlRequest,
   endpoint: string,
-): Promise<CaptureResponse> {
+): Promise<void> {
   const response = await fetch(endpoint, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -49,10 +53,6 @@ export async function postCaptureUrl(
     response.ok,
     `MathRead backend rejected capture request: ${response.status} ${response.statusText}`,
   );
-
-  const value: unknown = await response.json();
-  assertCaptureResponse(value);
-  return value;
 }
 
 export function captureUrlEndpointFromManifest(manifest: {
@@ -75,30 +75,6 @@ export function captureUrlEndpointFromManifest(manifest: {
     `extension backend permission must end with /*: ${backendPermission}`,
   );
   return `${backendPermission.slice(0, -2)}/capture-url`;
-}
-
-function assertCaptureResponse(value: unknown): asserts value is CaptureResponse {
-  invariant(typeof value === "object" && value !== null, "capture response must be an object");
-  invariant(
-    typeof (value as CaptureResponse).stored_path === "string",
-    "capture response stored_path must be a string",
-  );
-  invariant(
-    typeof (value as CaptureResponse).original_sha256 === "string",
-    "capture response original_sha256 must be a string",
-  );
-  invariant(
-    typeof (value as CaptureResponse).stored_sha256 === "string",
-    "capture response stored_sha256 must be a string",
-  );
-  invariant(
-    typeof (value as CaptureResponse).pdf_url === "string",
-    "capture response pdf_url must be a string",
-  );
-  invariant(
-    typeof (value as CaptureResponse).source_url === "string",
-    "capture response source_url must be a string",
-  );
 }
 
 function invariant(condition: unknown, message: string): asserts condition {

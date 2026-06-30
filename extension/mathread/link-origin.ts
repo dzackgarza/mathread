@@ -1,6 +1,7 @@
 import {
   captureRequestForClickedPdfLink,
   isLikelyPdfUrl,
+  runtimeCaptureMessage,
 } from "./capture-client";
 
 type ChromeRuntime = {
@@ -33,10 +34,7 @@ document.addEventListener(
       return;
     }
 
-    void chrome.runtime.sendMessage({
-      type: "mathread:capture-url",
-      request,
-    });
+    void chrome.runtime.sendMessage(runtimeCaptureMessage(request));
   },
   true,
 );

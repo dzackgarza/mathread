@@ -1,15 +1,11 @@
 import {
   type CaptureHeaders,
+  type RuntimeCaptureMessage,
   type CaptureUrlRequest,
   captureUrlEndpointFromManifest,
   isLikelyPdfUrl,
   postCaptureUrl,
 } from "./capture-client";
-
-type RuntimeMessage = {
-  type: "mathread:capture-url";
-  request: CaptureUrlRequest;
-};
 
 type ChromeCookie = {
   name: string;
@@ -22,7 +18,7 @@ type ChromeApi = {
     onMessage: {
       addListener(
         listener: (
-          message: unknown,
+          message: RuntimeCaptureMessage,
           sender: { tab?: { id?: number; url?: string; title?: string } },
         ) => void,
       ): void;
@@ -47,7 +43,7 @@ type ChromeApi = {
 declare const chrome: ChromeApi;
 
 chrome.runtime.onMessage.addListener(message => {
-  void handleRuntimeMessage(message);
+  void capturePdfUrl(message.request);
 });
 
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
@@ -64,11 +60,6 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
     ...(tab.title === undefined ? {} : { title_hint: tab.title }),
   });
 });
-
-async function handleRuntimeMessage(message: unknown): Promise<void> {
-  assertRuntimeMessage(message);
-  await capturePdfUrl(message.request);
-}
 
 async function capturePdfUrl(request: CaptureUrlRequest): Promise<void> {
   await postCaptureUrl({
@@ -91,31 +82,4 @@ async function requestHeaders(
     ...headers,
     cookie: cookies.map(cookie => `${cookie.name}=${cookie.value}`).join("; "),
   };
-}
-
-function assertRuntimeMessage(
-  message: unknown,
-): asserts message is RuntimeMessage {
-  invariant(
-    typeof message === "object" && message !== null,
-    "runtime message must be an object",
-  );
-  invariant(
-    (message as RuntimeMessage).type === "mathread:capture-url",
-    "runtime message type must be mathread:capture-url",
-  );
-  invariant(
-    typeof (message as RuntimeMessage).request?.pdf_url === "string",
-    "runtime message request.pdf_url must be a string",
-  );
-  invariant(
-    typeof (message as RuntimeMessage).request?.source_url === "string",
-    "runtime message request.source_url must be a string",
-  );
-}
-
-function invariant(condition: unknown, message: string): asserts condition {
-  if (!condition) {
-    throw new Error(message);
-  }
 }
