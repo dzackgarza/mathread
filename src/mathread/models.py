@@ -45,3 +45,10 @@ class CaptureResult(BaseModel):
     source_url: HttpUrl
     capture: CaptureMode
     existing: bool
+
+
+class BackendStatus(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    root: Path
+    inbox: Path

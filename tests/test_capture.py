@@ -183,6 +183,20 @@ def test_capture_url_downloads_pdf_and_embeds_provenance(
     assert metadata["/MathReadOriginalSHA256"] == result["original_sha256"]
 
 
+def test_status_reports_configured_root_and_inbox_without_creating_inbox(tmp_path: Path) -> None:
+    reading_root = tmp_path / "reading-root"
+    client = TestClient(create_app(reading_root))
+
+    response = client.get("/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "root": str(reading_root),
+        "inbox": str(reading_root / "inbox"),
+    }
+    assert not (reading_root / "inbox").exists()
+
+
 def test_capture_bytes_stores_browser_authenticated_pdf_bytes(
     tmp_path: Path,
     sample_pdf_bytes: bytes,

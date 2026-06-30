@@ -7,7 +7,7 @@ from fastapi import FastAPI, Form, Request, Response, UploadFile
 from pydantic import HttpUrl
 
 from mathread.capture import InvalidPdfCaptureError, capture_bytes, capture_url
-from mathread.models import CaptureBytesRequest, CaptureResult, CaptureUrlRequest
+from mathread.models import BackendStatus, CaptureBytesRequest, CaptureResult, CaptureUrlRequest
 
 
 def create_app(root: Path) -> FastAPI:
@@ -23,6 +23,10 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/capture-url", response_model=CaptureResult)
     def capture_url_endpoint(request: CaptureUrlRequest) -> CaptureResult:
         return capture_url(root, request)
+
+    @app.get("/status", response_model=BackendStatus)
+    def status_endpoint() -> BackendStatus:
+        return BackendStatus(root=root, inbox=root / "inbox")
 
     @app.post("/capture-bytes", response_model=CaptureResult)
     async def capture_bytes_endpoint(
