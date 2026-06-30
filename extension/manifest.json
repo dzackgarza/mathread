@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "MathRead Capture Shim",
+  "version": "0.1.0",
+  "description": "Capture PDF provenance and hand storage to the local MathRead service.",
+  "permissions": ["tabs", "cookies"],
+  "host_permissions": ["http://127.0.0.1:8765/*", "http://*/*", "https://*/*"],
+  "background": {
+    "service_worker": "mathread/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["mathread/link-origin.js"],
+      "run_at": "document_start"
+    }
+  ]
+}
