@@ -21,6 +21,10 @@ from mathread.naming import (
 )
 
 
+class InvalidPdfCaptureError(Exception):
+    pass
+
+
 @validate_call
 def capture_url(root: Path, request: CaptureUrlRequest) -> CaptureResult:
     with httpx.Client(follow_redirects=True) as client:
@@ -67,7 +71,8 @@ def store_pdf(
     capture: CaptureMode,
     filename: str,
 ) -> CaptureResult:
-    assert pdf_bytes.startswith(b"%PDF-"), "captured bytes must be a PDF"
+    if not pdf_bytes.startswith(b"%PDF-"):
+        raise InvalidPdfCaptureError from None
 
     original_sha256 = sha256(pdf_bytes).hexdigest()
     inbox = root / "inbox"
