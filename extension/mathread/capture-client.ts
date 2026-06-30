@@ -10,6 +10,20 @@ export type CaptureUrlRequest = {
   headers?: CaptureHeaders;
 };
 
+export type CaptureResult = {
+  stored_path: string;
+  original_sha256: string;
+  stored_sha256: string;
+  pdf_url: string;
+  source_url: string;
+  capture: "capture-url" | "capture-bytes";
+  existing: boolean;
+};
+
+export type RuntimeCaptureResponse =
+  | { ok: true; result: CaptureResult }
+  | { ok: false; error: string };
+
 export type RuntimeCaptureMessage = {
   type: "mathread:capture-url";
   request: CaptureUrlRequest;
@@ -43,7 +57,7 @@ export function runtimeCaptureMessage(
 export async function postCaptureUrl(
   request: CaptureUrlRequest,
   endpoint: string,
-): Promise<void> {
+): Promise<CaptureResult> {
   const response = await fetch(endpoint, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -53,6 +67,7 @@ export async function postCaptureUrl(
     response.ok,
     `MathRead backend rejected capture request: ${response.status} ${response.statusText}`,
   );
+  return parseCaptureResult(await response.json());
 }
 
 export function captureUrlEndpointFromManifest(manifest: {
@@ -81,4 +96,50 @@ function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+function parseCaptureResult(value: unknown): CaptureResult {
+  invariant(isRecord(value), "MathRead backend capture response must be an object");
+  const capture = value.capture;
+  invariant(
+    capture === "capture-url" || capture === "capture-bytes",
+    "MathRead backend capture response must declare a valid capture mode",
+  );
+  invariant(
+    typeof value.stored_path === "string",
+    "MathRead backend capture response must declare stored_path",
+  );
+  invariant(
+    typeof value.original_sha256 === "string",
+    "MathRead backend capture response must declare original_sha256",
+  );
+  invariant(
+    typeof value.stored_sha256 === "string",
+    "MathRead backend capture response must declare stored_sha256",
+  );
+  invariant(
+    typeof value.pdf_url === "string",
+    "MathRead backend capture response must declare pdf_url",
+  );
+  invariant(
+    typeof value.source_url === "string",
+    "MathRead backend capture response must declare source_url",
+  );
+  invariant(
+    typeof value.existing === "boolean",
+    "MathRead backend capture response must declare existing",
+  );
+  return {
+    stored_path: value.stored_path,
+    original_sha256: value.original_sha256,
+    stored_sha256: value.stored_sha256,
+    pdf_url: value.pdf_url,
+    source_url: value.source_url,
+    capture,
+    existing: value.existing,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

@@ -1,5 +1,7 @@
 import {
+  type CaptureResult,
   type CaptureHeaders,
+  type RuntimeCaptureResponse,
   type RuntimeCaptureMessage,
   type CaptureUrlRequest,
   captureUrlEndpointFromManifest,
@@ -20,7 +22,8 @@ type ChromeApi = {
         listener: (
           message: RuntimeCaptureMessage,
           sender: { tab?: { id?: number; url?: string; title?: string } },
-        ) => void,
+          sendResponse: (response: RuntimeCaptureResponse) => void,
+        ) => boolean | undefined,
       ): void;
     };
   };
@@ -43,16 +46,23 @@ type ChromeApi = {
 type UnknownRecord = Record<string, unknown>;
 
 const captureCooldownMs = 3_000;
-const inFlightCaptures = new Map<string, Promise<void>>();
-const recentSuccessfulCapturesMs = new Map<string, number>();
+const inFlightCaptures = new Map<string, Promise<CaptureResult>>();
+const recentSuccessfulCaptures = new Map<string, { capturedAtMs: number; result: CaptureResult }>();
 
 declare const chrome: ChromeApi;
 
-chrome.runtime.onMessage.addListener(message => {
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!isCaptureMessage(message)) {
-    return;
+    return undefined;
   }
-  void capturePdfUrl(message.request);
+  void capturePdfUrl(message.request)
+    .then(result => {
+      sendResponse({ ok: true, result });
+    })
+    .catch(error => {
+      sendResponse({ ok: false, error: String(error) });
+    });
+  return true;
 });
 
 chrome.tabs.onUpdated.addListener((_, changeInfo, tab) => {
@@ -65,47 +75,45 @@ chrome.tabs.onUpdated.addListener((_, changeInfo, tab) => {
     return;
   }
 
-    void capturePdfUrl({
+  void capturePdfUrl({
     pdf_url: captureUrl,
     source_url: captureUrl,
     ...(tab.title === undefined ? {} : { title_hint: tab.title }),
+  }).catch(error => {
+    console.error(`[mathread] capturePdfUrl failed for ${captureUrl}: ${String(error)}`);
   });
 });
 
 
 
-async function capturePdfUrl(request: CaptureUrlRequest): Promise<void> {
+async function capturePdfUrl(request: CaptureUrlRequest): Promise<CaptureResult> {
   const now = Date.now();
-  const lastCaptureMs = recentSuccessfulCapturesMs.get(request.pdf_url);
-  if (lastCaptureMs !== undefined && now - lastCaptureMs < captureCooldownMs) {
-    return;
+  const lastCapture = recentSuccessfulCaptures.get(request.pdf_url);
+  if (lastCapture !== undefined && now - lastCapture.capturedAtMs < captureCooldownMs) {
+    return lastCapture.result;
   }
 
   const inFlightCapture = inFlightCaptures.get(request.pdf_url);
   if (inFlightCapture !== undefined) {
-    await inFlightCapture;
-    return;
+    return await inFlightCapture;
   }
 
   const capture = capturePdfUrlOnce(request);
   inFlightCaptures.set(request.pdf_url, capture);
   try {
-    await capture;
-    recentSuccessfulCapturesMs.set(request.pdf_url, Date.now());
+    const result = await capture;
+    recentSuccessfulCaptures.set(request.pdf_url, { capturedAtMs: Date.now(), result });
+    return result;
   } finally {
     inFlightCaptures.delete(request.pdf_url);
   }
 }
 
-async function capturePdfUrlOnce(request: CaptureUrlRequest): Promise<void> {
-  try {
-    await postCaptureUrl({
-      ...request,
-      headers: await requestHeaders(request.pdf_url, request.source_url),
-    }, captureUrlEndpointFromManifest(chrome.runtime.getManifest()));
-  } catch (error) {
-    console.error(`[mathread] capturePdfUrl failed for ${request.pdf_url}: ${String(error)}`);
-  }
+async function capturePdfUrlOnce(request: CaptureUrlRequest): Promise<CaptureResult> {
+  return await postCaptureUrl({
+    ...request,
+    headers: await requestHeaders(request.pdf_url, request.source_url),
+  }, captureUrlEndpointFromManifest(chrome.runtime.getManifest()));
 }
 
 function isCaptureMessage(value: unknown): value is RuntimeCaptureMessage {
