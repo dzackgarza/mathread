@@ -28,3 +28,7 @@ run *args:
 # Run the local capture service
 serve:
     @uv run mathread serve --host 127.0.0.1 --port 8765 --root ~/math-reading
+
+# Watch extension source and rebuild on change (load dist/extension/ as unpacked in Chrome)
+dev:
+    @bun run dev
