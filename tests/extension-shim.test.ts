@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "fs";
+import { join } from "path";
 import {
   captureRequestForClickedPdfLink,
   captureUrlEndpointFromManifest,
@@ -31,3 +33,18 @@ test("capture endpoint is derived from the extension manifest host permission", 
     }),
   ).toBe("http://127.0.0.1:8765/capture-url");
 });
+
+test("built extension manifest uses only Chrome-recognized top-level keys", () => {
+  expect(parseBuiltManifest()).not.toHaveProperty("mathread");
+});
+
+test("built extension manifest declares the MathRead backend permission explicitly", () => {
+  expect(parseBuiltManifest().host_permissions).toContain("http://127.0.0.1:8765/*");
+});
+
+function parseBuiltManifest(): {
+  host_permissions?: string[];
+  [key: string]: unknown;
+} {
+  return JSON.parse(readFileSync(join("dist", "extension", "manifest.json"), "utf-8"));
+}

@@ -11,7 +11,6 @@ declare global {
 
 type ChromeRuntime = {
   runtime: {
-    getManifest(): unknown;
     sendMessage(message: unknown): Promise<unknown>;
   };
 };
@@ -26,7 +25,13 @@ type CaptureUiConfig = {
   captureMessageMaxRetries: number;
 };
 
-const captureUiConfig = captureUiConfigFromManifest(chrome.runtime.getManifest());
+const captureUiConfig: CaptureUiConfig = {
+  initializationRetryMs: 250,
+  urlResolutionRetryMs: 200,
+  urlResolutionMaxRetries: 60,
+  captureMessageRetryMs: 250,
+  captureMessageMaxRetries: 20,
+};
 
 void initCaptureUi();
 
@@ -183,45 +188,6 @@ async function resolveCaptureUrlsWithRetries(): Promise<{
   return undefined;
 }
 
-function captureUiConfigFromManifest(manifest: unknown): CaptureUiConfig {
-  invariant(isRecord(manifest), "extension manifest must be an object");
-  const mathread = manifest.mathread;
-  invariant(isRecord(mathread), "extension manifest must declare mathread config");
-  const captureUi = mathread.capture_ui;
-  invariant(isRecord(captureUi), "extension manifest must declare mathread.capture_ui config");
-
-  return {
-    initializationRetryMs: requiredPositiveInteger(
-      captureUi.initialization_retry_ms,
-      "mathread.capture_ui.initialization_retry_ms",
-    ),
-    urlResolutionRetryMs: requiredPositiveInteger(
-      captureUi.url_resolution_retry_ms,
-      "mathread.capture_ui.url_resolution_retry_ms",
-    ),
-    urlResolutionMaxRetries: requiredPositiveInteger(
-      captureUi.url_resolution_max_retries,
-      "mathread.capture_ui.url_resolution_max_retries",
-    ),
-    captureMessageRetryMs: requiredPositiveInteger(
-      captureUi.capture_message_retry_ms,
-      "mathread.capture_ui.capture_message_retry_ms",
-    ),
-    captureMessageMaxRetries: requiredPositiveInteger(
-      captureUi.capture_message_max_retries,
-      "mathread.capture_ui.capture_message_max_retries",
-    ),
-  };
-}
-
-function requiredPositiveInteger(value: unknown, key: string): number {
-  invariant(
-    typeof value === "number" && Number.isInteger(value) && value > 0,
-    `extension manifest ${key} must be a positive integer`,
-  );
-  return value;
-}
-
 function safeDecode(value: string): string {
   try {
     return decodeURIComponent(value);
@@ -232,14 +198,4 @@ function safeDecode(value: string): string {
 
 function wait(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function invariant(condition: unknown, message: string): asserts condition {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

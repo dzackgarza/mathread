@@ -2,14 +2,13 @@ import { readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 
 const distExt = "dist/extension";
+const mathreadBackendPermission = "http://127.0.0.1:8765/*";
 
 type Manifest = {
   name: string;
   permissions: string[];
+  host_permissions: string[];
   content_scripts: Array<{ js: string[] }>;
-  mathread: {
-    capture_ui: Record<string, unknown>;
-  };
 };
 
 // 1. Patch manifest.json
@@ -18,6 +17,10 @@ const manifest = parseManifest(readFileSync(manifestPath, "utf-8"));
 if (!manifest.permissions.includes("cookies")) {
   manifest.permissions.push("cookies");
 }
+if (!manifest.host_permissions.includes(mathreadBackendPermission)) {
+  manifest.host_permissions.unshift(mathreadBackendPermission);
+}
+delete (manifest as Record<string, unknown>).mathread;
 manifest.name = "MathRead PDF Viewer";
 for (const contentScript of manifest.content_scripts) {
   if (!contentScript.js.includes("mathread/link-origin.js")) {
@@ -68,6 +71,12 @@ function parseManifest(raw: string): Manifest {
   if (typeof value.name !== "string") {
     throw new Error("manifest.json missing name");
   }
+  if (!Array.isArray(value.host_permissions)) {
+    throw new Error("manifest.json missing host_permissions array");
+  }
+  if (!value.host_permissions.every(item => typeof item === "string")) {
+    throw new Error("manifest.json host_permissions must be a string array");
+  }
   if (!Array.isArray(value.content_scripts)) {
     throw new Error("manifest.json missing content_scripts array");
   }
@@ -78,9 +87,6 @@ function parseManifest(raw: string): Manifest {
     if (!contentScript.js.every(item => typeof item === "string")) {
       throw new Error("manifest.json content_scripts js entries must be strings");
     }
-  }
-  if (!isRecord(value.mathread) || !isRecord(value.mathread.capture_ui)) {
-    throw new Error("manifest.json missing mathread.capture_ui config");
   }
   return value as Manifest;
 }
