@@ -15,5 +15,14 @@
       "js": ["mathread/link-origin.js"],
       "run_at": "document_start"
     }
-  ]
+  ],
+  "mathread": {
+    "capture_ui": {
+      "initialization_retry_ms": 250,
+      "url_resolution_retry_ms": 200,
+      "url_resolution_max_retries": 60,
+      "capture_message_retry_ms": 250,
+      "capture_message_max_retries": 20
+    }
+  }
 }

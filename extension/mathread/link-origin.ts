@@ -12,6 +12,15 @@ type ChromeRuntime = {
 
 declare const chrome: ChromeRuntime;
 
+capturePdfFromCurrentDocument();
+document.addEventListener(
+  "DOMContentLoaded",
+  () => {
+    capturePdfFromCurrentDocument();
+  },
+  true,
+);
+
 document.addEventListener(
   "click",
   event => {
@@ -38,3 +47,30 @@ document.addEventListener(
   },
   true,
 );
+
+function capturePdfFromCurrentDocument(): void {
+  if (document.contentType.toLowerCase() !== "application/pdf") {
+    return;
+  }
+
+  const request = captureRequestForClickedPdfLink(
+    document.location.href,
+    document.referrer || document.location.href,
+    document.title,
+  );
+
+  if (!isLikelyPdfUrlForCurrentDocument(document.location.href)) {
+    return;
+  }
+
+  void chrome.runtime.sendMessage(runtimeCaptureMessage(request));
+}
+
+function isLikelyPdfUrlForCurrentDocument(value: string): boolean {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}

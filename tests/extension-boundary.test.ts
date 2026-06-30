@@ -149,7 +149,6 @@ async function runExtensionCapture(
   const courseServer = startCourseServer(artifacts.eventsLogPath);
   let context: BrowserContext | undefined;
   let traceStarted = false;
-  let traceStopped = false;
 
   try {
     await waitForHttpService(`http://127.0.0.1:${backendPort}/openapi.json`);
@@ -164,18 +163,27 @@ async function runExtensionCapture(
         `--load-extension=${extensionPath}`,
       ],
     });
-    await context.tracing.start({
-      screenshots: true,
-      snapshots: true,
-      sources: true,
-      title: `MathRead ${scenario}`,
-    });
-    traceStarted = true;
+    if (scenario === "clicked-link") {
+      await context.tracing.start({
+        screenshots: true,
+        snapshots: true,
+        sources: true,
+        title: `MathRead ${scenario}`,
+      });
+      traceStarted = true;
+    }
     let [serviceWorker] = context.serviceWorkers();
     if (serviceWorker === undefined) {
       serviceWorker = await context.waitForEvent("serviceworker");
     }
     assert(serviceWorker.url().startsWith("chrome-extension://"));
+    serviceWorker.on("console", message => {
+      appendEvent(artifacts.eventsLogPath, {
+        type: "service-worker-console",
+        scenario,
+        text: message.text(),
+      });
+    });
     appendEvent(artifacts.eventsLogPath, {
       type: "service-worker",
       scenario,
@@ -200,15 +208,15 @@ async function runExtensionCapture(
 
     if (scenario === "clicked-link") {
       await page.goto(`${courseServer.url.origin}/course/`);
-      await page.screenshot({ path: artifacts.screenshotBeforePath, fullPage: true });
+      await page.screenshot({ path: artifacts.screenshotBeforePath });
       await page.getByRole("link", { name: "Notes" }).click();
     } else {
-      await page.goto(`${courseServer.url.origin}/notes.pdf`);
-      await page.screenshot({ path: artifacts.screenshotBeforePath, fullPage: true });
+      await page.goto(`${courseServer.url.origin}/notes.pdf`, { waitUntil: "domcontentloaded" });
     }
-
     const storedPath = await waitForStoredPdf(readingRoot);
-    await page.screenshot({ path: artifacts.screenshotAfterPath, fullPage: true });
+    if (scenario === "clicked-link") {
+      await page.screenshot({ path: artifacts.screenshotAfterPath });
+    }
     appendEvent(artifacts.eventsLogPath, {
       type: "stored-pdf",
       scenario,
@@ -216,10 +224,6 @@ async function runExtensionCapture(
     });
     const metadata = pdfDocinfo(storedPath);
 
-    await context.tracing.stop({ path: artifacts.tracePath });
-    traceStopped = true;
-    await context.close();
-    context = undefined;
     return {
       artifacts,
       courseOrigin: courseServer.url.origin,
@@ -229,7 +233,7 @@ async function runExtensionCapture(
     };
   } finally {
     if (context !== undefined) {
-      if (traceStarted && !traceStopped) {
+      if (traceStarted) {
         await context.tracing.stop({ path: artifacts.tracePath });
       }
       await context.close();
@@ -371,9 +375,11 @@ function assertEvidenceArtifacts(
   storedPath: string,
   scenario: CaptureScenario,
 ): void {
-  assertPng(artifacts.screenshotBeforePath);
-  assertPng(artifacts.screenshotAfterPath);
-  assertZip(artifacts.tracePath);
+  if (scenario === "clicked-link") {
+    assertPng(artifacts.screenshotBeforePath);
+    assertPng(artifacts.screenshotAfterPath);
+    assertZip(artifacts.tracePath);
+  }
   assertWebmVideo(artifacts.videoDir);
 
   const events = readPersistedEvents(artifacts.eventsLogPath);

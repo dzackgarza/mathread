@@ -13,8 +13,8 @@
   "scripts": {
     "test": "bun run build && bun test",
     "typecheck": "tsc --noEmit",
-    "build": "bun build ./extension/mathread/background.ts ./extension/mathread/link-origin.ts --outdir dist/extension/mathread --target browser && cp extension/manifest.json dist/extension/manifest.json",
-    "dev": "mkdir -p dist/extension && cp extension/manifest.json dist/extension/manifest.json && bun build --watch ./extension/mathread/background.ts ./extension/mathread/link-origin.ts --outdir dist/extension/mathread --target browser"
+    "build": "rm -rf dist/extension && cp -r vendor/pdfjs dist/extension && bun build ./extension/mathread/background.ts ./extension/mathread/capture-ui.ts ./extension/mathread/link-origin.ts --outdir dist/extension/mathread --target browser && bun run extension/build.ts",
+    "dev": "bun run build && bun build --watch ./extension/mathread/background.ts ./extension/mathread/capture-ui.ts ./extension/mathread/link-origin.ts --outdir dist/extension/mathread --target browser"
   },
   "type": "module"
 }
