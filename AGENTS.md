@@ -26,7 +26,9 @@ agent-memory add --scope project --type plan --title <title> --content <content>
 
 Use `agent-memory retrieve <key>`, `agent-memory update <key>`, and `agent-memory delete <key>` for memory CRUD.
 
-The vault should be committed at all times. Treat staged or unstaged vault changes as an ephemeral error state. Before normal memory work resumes, load the bundled vault-maintenance skill with `agent-memory maintain skill vault-maintenance` and follow its referenced check, repair, and commit workflows.
+The vault should be committed at all times.
+Treat staged or unstaged vault changes as an ephemeral error state.
+Before normal memory work resumes, load the bundled vault-maintenance skill with `agent-memory maintain skill vault-maintenance` and follow its referenced check, repair, and commit workflows.
 
 Move reusable lessons during maintenance with:
 
