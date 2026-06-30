@@ -53,7 +53,7 @@ type ExtensionManifest = {
   host_permissions: string[];
 };
 
-type CaptureScenario = "clicked-link" | "direct-pdf-tab";
+type CaptureScenario = "clicked-link" | "direct-pdf-tab" | "direct-pdf-without-extension";
 
 type CaptureArtifacts = {
   root: string;
@@ -116,11 +116,12 @@ test("built extension captures a clicked PDF link through the real local backend
     ),
   ).toBe(true);
   assertEvidenceArtifacts(evidence.artifacts, evidence.storedPath, "clicked-link");
-});
+}, 20_000);
 
 test("built extension captures a direct PDF tab through the real local backend", async () => {
   const evidence = await runExtensionCapture("direct-pdf-tab");
-  const expectedPdfUrl = new URL("/notes.pdf", evidence.courseOrigin).href;
+  const expectedPath = pdfPathForScenario("direct-pdf-tab");
+  const expectedPdfUrl = new URL(expectedPath, evidence.courseOrigin).href;
 
   expect(evidence.metadata["/MathReadSourceURL"]).toBe(expectedPdfUrl);
   expect(evidence.metadata["/MathReadPDFURL"]).toBe(expectedPdfUrl);
@@ -128,13 +129,32 @@ test("built extension captures a direct PDF tab through the real local backend",
   expect(evidence.metadata["/MathReadOriginalSHA256"]).toBe(pdfSha256());
   expect(
     evidence.courseRequests.some(request =>
-      request.path === "/notes.pdf"
+      request.path === expectedPath
       && request.cookie?.includes(`${cookieName}=${cookieValue}`) === true
       && request.referer === expectedPdfUrl
     ),
   ).toBe(true);
   assertEvidenceArtifacts(evidence.artifacts, evidence.storedPath, "direct-pdf-tab");
-});
+}, 30_000);
+
+test("built extension captures an application/pdf URL without a .pdf suffix", async () => {
+  const evidence = await runExtensionCapture("direct-pdf-without-extension");
+  const expectedPath = pdfPathForScenario("direct-pdf-without-extension");
+  const expectedPdfUrl = new URL(expectedPath, evidence.courseOrigin).href;
+
+  expect(evidence.metadata["/MathReadSourceURL"]).toBe(expectedPdfUrl);
+  expect(evidence.metadata["/MathReadPDFURL"]).toBe(expectedPdfUrl);
+  expect(evidence.metadata["/MathReadCapture"]).toBe("capture-url");
+  expect(evidence.metadata["/MathReadOriginalSHA256"]).toBe(pdfSha256());
+  expect(
+    evidence.courseRequests.some(request =>
+      request.path === expectedPath
+      && request.cookie?.includes(`${cookieName}=${cookieValue}`) === true
+      && request.referer === expectedPdfUrl
+    ),
+  ).toBe(true);
+  assertEvidenceArtifacts(evidence.artifacts, evidence.storedPath, "direct-pdf-without-extension");
+}, 30_000);
 
 async function runExtensionCapture(
   scenario: CaptureScenario,
@@ -211,7 +231,9 @@ async function runExtensionCapture(
       await page.screenshot({ path: artifacts.screenshotBeforePath });
       await page.getByRole("link", { name: "Notes" }).click();
     } else {
-      await page.goto(`${courseServer.url.origin}/notes.pdf`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${courseServer.url.origin}${pdfPathForScenario(scenario)}`, {
+        waitUntil: "domcontentloaded",
+      });
     }
     const storedPath = await waitForStoredPdf(readingRoot);
     if (scenario === "clicked-link") {
@@ -322,7 +344,7 @@ function startCourseServer(eventsLogPath: string): RunningCourseServer {
           headers: { "content-type": "text/html" },
         });
       }
-      if (url.pathname === "/notes.pdf") {
+      if (url.pathname === "/notes.pdf" || url.pathname === "/pdf/2301.12345") {
         if (courseRequest.cookie?.includes(`${cookieName}=${cookieValue}`) !== true) {
           return new Response("missing browser session cookie", { status: 403 });
         }
@@ -393,7 +415,7 @@ function assertEvidenceArtifacts(
   expect(
     events.some(event =>
       event.type === "course-request"
-      && event.path === "/notes.pdf"
+      && event.path === pdfPathForScenario(scenario)
       && event.cookie?.includes(`${cookieName}=${cookieValue}`) === true
     ),
   ).toBe(true);
@@ -443,6 +465,13 @@ function assertPersistedEvent(value: unknown): asserts value is PersistedEvent {
 
 function pdfSha256(): string {
   return createHash("sha256").update(pdfBytes).digest("hex");
+}
+
+function pdfPathForScenario(scenario: CaptureScenario): string {
+  if (scenario === "direct-pdf-without-extension") {
+    return "/pdf/2301.12345";
+  }
+  return "/notes.pdf";
 }
 
 async function waitForHttpService(url: string): Promise<void> {
