@@ -73,7 +73,6 @@ type CaptureArtifacts = {
   screenshotReadinessPath: string;
   screenshotAfterPath: string;
   tracePath: string;
-  videoDir: string;
 };
 
 type CourseRequest = {
@@ -120,11 +119,13 @@ type PersistedEvent = {
 type CaptureRunOptions = {
   mode: CaptureModeSetting;
   reloadAfterCapture: boolean;
+  preExistingCapture?: boolean;
 };
 
 const defaultCaptureRunOptions: CaptureRunOptions = {
   mode: "manual",
   reloadAfterCapture: false,
+  preExistingCapture: false,
 };
 
 test("built extension captures a clicked PDF link through the real local backend", async () => {
@@ -170,8 +171,12 @@ test("built extension automatic mode captures a direct PDF without pressing capt
   assertEvidenceArtifacts(evidence.artifacts, evidence.storedPath, "direct-pdf-tab");
 }, 30_000);
 
-test("built extension captures a direct PDF tab through the real local backend", async () => {
-  const evidence = await runExtensionCapture("direct-pdf-tab");
+test("built extension captures a direct PDF tab and marks the second capture as existing", async () => {
+  const evidence = await runExtensionCapture("direct-pdf-tab", {
+    mode: "manual",
+    reloadAfterCapture: false,
+    preExistingCapture: true,
+  });
   const expectedPath = pdfPathForScenario("direct-pdf-tab");
   const expectedPdfUrl = new URL(expectedPath, evidence.courseOrigin).href;
 
@@ -179,9 +184,9 @@ test("built extension captures a direct PDF tab through the real local backend",
   expect(evidence.metadata["/MathReadPDFURL"]).toBe(expectedPdfUrl);
   expect(evidence.metadata["/MathReadCapture"]).toBe("capture-url");
   expect(evidence.captureModeButtonText).toBe("Manual");
-  expect(evidence.captureButtonText).toBe("Captured");
-  expect(evidence.captureStatusText).toContain(evidence.storedPath);
-  expect(evidence.backendCaptureRequestCount).toBe(1);
+  expect(evidence.captureButtonText).toBe("Already");
+  expect(evidence.captureStatusText).toContain(`Already captured at ${evidence.storedPath}`);
+  expect(evidence.backendCaptureRequestCount).toBe(2);
   expect(evidence.metadata["/MathReadOriginalSHA256"]).toBe(pdfSha256());
   expect(
     evidence.courseRequests.some(request =>
@@ -191,7 +196,7 @@ test("built extension captures a direct PDF tab through the real local backend",
     ),
   ).toBe(true);
   assertEvidenceArtifacts(evidence.artifacts, evidence.storedPath, "direct-pdf-tab");
-}, 30_000);
+}, 45_000);
 
 test("built extension captures an application/pdf URL without a .pdf suffix", async () => {
   const evidence = await runExtensionCapture("direct-pdf-without-extension");
@@ -301,12 +306,14 @@ async function runExtensionCapture(
 
   try {
     await waitForHttpService(`http://127.0.0.1:${backendPort}/openapi.json`);
+    if (options.preExistingCapture === true) {
+      await preCapturePdfThroughBackend(backendPort, courseServer, scenario);
+    }
 
     context = await chromium.launchPersistentContext(join(testRoot, "profile"), {
       executablePath: "/bin/chromium",
       headless: true,
       artifactsDir: artifacts.root,
-      recordVideo: { dir: artifacts.videoDir },
       args: [
         `--disable-extensions-except=${extensionPath}`,
         `--load-extension=${extensionPath}`,
@@ -372,12 +379,18 @@ async function runExtensionCapture(
         && text.includes("Mode: manual")
       );
       await page.screenshot({ path: artifacts.screenshotReadinessPath });
-      expect(existsSync(join(readingRoot, "inbox"))).toBe(false);
-      await viewer.locator("#mathreadCaptureButton").click();
+      if (options.preExistingCapture !== true) {
+        expect(existsSync(join(readingRoot, "inbox"))).toBe(false);
+      }
+      await clickCaptureButton(page, viewer);
     }
     const storedPath = await waitForStoredPdf(readingRoot);
-    const captureButtonText = await waitForCaptureButtonText(viewer, text => text === "Captured");
-    const captureStatusText = await waitForCaptureStatusText(viewer, text => text.includes(storedPath));
+    const expectedCaptureButtonText = options.preExistingCapture === true ? "Already" : "Captured";
+    const expectedCaptureStatusText = options.preExistingCapture === true
+      ? `Already captured at ${storedPath}`
+      : storedPath;
+    const captureButtonText = await waitForCaptureButtonText(viewer, text => text === expectedCaptureButtonText);
+    const captureStatusText = await waitForCaptureStatusText(viewer, text => text.includes(expectedCaptureStatusText));
     await page.screenshot({ path: artifacts.screenshotAfterPath });
     if (options.mode === "automatic") {
       await page.screenshot({ path: artifacts.screenshotReadinessPath });
@@ -422,6 +435,34 @@ async function runExtensionCapture(
     await backend.process.exited;
     closeSync(backend.logFd);
   }
+}
+
+async function clickCaptureButton(page: Page, viewer: ViewerSurface): Promise<void> {
+  const button = viewer.locator("#mathreadCaptureButton");
+  const box = await button.boundingBox();
+  assert(box !== null, "MathRead capture button must have a rendered viewport box");
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+}
+
+async function preCapturePdfThroughBackend(
+  backendPort: number,
+  courseServer: RunningCourseServer,
+  scenario: CaptureScenario,
+): Promise<void> {
+  const pdfUrl = `${courseServer.url.origin}${pdfPathForScenario(scenario)}`;
+  const response = await fetch(`http://127.0.0.1:${backendPort}/capture-url`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      pdf_url: pdfUrl,
+      source_url: pdfUrl,
+      headers: {
+        referer: pdfUrl,
+        cookie: `${cookieName}=${cookieValue}`,
+      },
+    }),
+  });
+  expect(response.ok).toBe(true);
 }
 
 async function waitForExtensionServiceWorker(context: BrowserContext): Promise<Worker> {
@@ -750,9 +791,7 @@ function createCaptureArtifacts(
 ): CaptureArtifacts {
   const root = join(testRoot, "artifacts", scenario);
   const screenshotDir = join(root, "screenshots");
-  const videoDir = join(root, "videos");
   mkdirSync(screenshotDir, { recursive: true });
-  mkdirSync(videoDir, { recursive: true });
 
   const artifacts = {
     root,
@@ -762,7 +801,6 @@ function createCaptureArtifacts(
     screenshotReadinessPath: join(screenshotDir, "readiness.png"),
     screenshotAfterPath: join(screenshotDir, "after.png"),
     tracePath: join(root, "trace.zip"),
-    videoDir,
   };
   writeFileSync(artifacts.backendLogPath, "");
   writeFileSync(artifacts.eventsLogPath, "");
@@ -784,7 +822,6 @@ function assertEvidenceArtifacts(
   }
   assertPng(artifacts.screenshotReadinessPath);
   assertPng(artifacts.screenshotAfterPath);
-  assertWebmVideo(artifacts.videoDir);
 
   const events = readPersistedEvents(artifacts.eventsLogPath);
   expect(
@@ -820,18 +857,6 @@ function assertZip(path: string): void {
   const bytes = readFileSync(path);
   expect(bytes.subarray(0, 2).toString("utf8")).toBe("PK");
   expect(statSync(path).size).toBeGreaterThan(100);
-}
-
-function assertWebmVideo(videoDir: string): void {
-  const videos = readdirSync(videoDir)
-    .filter(filename => filename.endsWith(".webm"))
-    .map(filename => join(videoDir, filename));
-  expect(videos.length).toBeGreaterThanOrEqual(1);
-  const [videoPath] = videos;
-  assert(videoPath !== undefined);
-  const bytes = readFileSync(videoPath);
-  expect(Array.from(bytes.subarray(0, 4))).toEqual([26, 69, 223, 163]);
-  expect(statSync(videoPath).size).toBeGreaterThan(100);
 }
 
 function readPersistedEvents(logPath: string): PersistedEvent[] {

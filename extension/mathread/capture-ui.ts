@@ -60,6 +60,12 @@ type BackendStatus = {
 
 type CaptureResult = {
   stored_path: string;
+  original_sha256: string;
+  stored_sha256: string;
+  pdf_url: string;
+  source_url: string;
+  capture: "capture-url" | "capture-bytes";
+  existing: boolean;
 };
 
 type RuntimeCaptureResponse =
@@ -74,7 +80,7 @@ type BackendState =
 type CaptureState =
   | { kind: "idle" }
   | { kind: "in-flight" }
-  | { kind: "success"; storedPath: string }
+  | { kind: "success"; result: CaptureResult }
   | { kind: "failure"; error: string };
 
 const captureUiConfig: CaptureUiConfig = {
@@ -289,7 +295,7 @@ async function captureResolvedPdf(
   });
   const captureResponse = parseRuntimeCaptureResponse(response);
   if (captureResponse.ok) {
-    captureState = { kind: "success", storedPath: captureResponse.result.stored_path };
+    captureState = { kind: "success", result: captureResponse.result };
     renderCaptureButton(captureBtn);
     return;
   }
@@ -427,13 +433,13 @@ function renderCaptureInFlight(captureBtn: HTMLButtonElement): void {
   renderCaptureStatus("Capturing to MathRead...");
 }
 
-function renderCaptureSuccess(captureBtn: HTMLButtonElement, storedPath: string): void {
+function renderCaptureSuccess(captureBtn: HTMLButtonElement, result: CaptureResult): void {
   setButtonPresentation(captureBtn, {
     disabled: false,
-    text: "Captured",
-    title: storedPath,
+    text: result.existing ? "Already" : "Captured",
+    title: result.stored_path,
   });
-  renderCaptureStatus(`Captured to ${storedPath}`);
+  renderCaptureStatus(result.existing ? `Already captured at ${result.stored_path}` : `Captured to ${result.stored_path}`);
 }
 
 function renderCaptureFailure(captureBtn: HTMLButtonElement, error: string): void {
@@ -451,7 +457,7 @@ function renderCaptureButton(captureBtn: HTMLButtonElement): void {
     return;
   }
   if (captureState.kind === "success") {
-    renderCaptureSuccess(captureBtn, captureState.storedPath);
+    renderCaptureSuccess(captureBtn, captureState.result);
     return;
   }
   if (captureState.kind === "failure") {
@@ -516,12 +522,32 @@ function parseRuntimeCaptureResponse(value: unknown): RuntimeCaptureResponse {
   invariant(isRecord(value), "MathRead capture response must be an object");
   if (value.ok === true) {
     invariant(isRecord(value.result), "MathRead capture success response must declare result");
-    invariant(typeof value.result.stored_path === "string", "MathRead capture result must declare stored_path");
-    return { ok: true, result: { stored_path: value.result.stored_path } };
+    return { ok: true, result: parseCaptureResult(value.result) };
   }
   invariant(value.ok === false, "MathRead capture response must declare ok");
   invariant(typeof value.error === "string", "MathRead capture failure response must declare error");
   return { ok: false, error: value.error };
+}
+
+function parseCaptureResult(value: unknown): CaptureResult {
+  invariant(isRecord(value), "MathRead capture result must be an object");
+  const capture = value.capture;
+  invariant(capture === "capture-url" || capture === "capture-bytes", "MathRead capture result must declare capture");
+  invariant(typeof value.stored_path === "string", "MathRead capture result must declare stored_path");
+  invariant(typeof value.original_sha256 === "string", "MathRead capture result must declare original_sha256");
+  invariant(typeof value.stored_sha256 === "string", "MathRead capture result must declare stored_sha256");
+  invariant(typeof value.pdf_url === "string", "MathRead capture result must declare pdf_url");
+  invariant(typeof value.source_url === "string", "MathRead capture result must declare source_url");
+  invariant(typeof value.existing === "boolean", "MathRead capture result must declare existing");
+  return {
+    stored_path: value.stored_path,
+    original_sha256: value.original_sha256,
+    stored_sha256: value.stored_sha256,
+    pdf_url: value.pdf_url,
+    source_url: value.source_url,
+    capture,
+    existing: value.existing,
+  };
 }
 
 function invariant(condition: unknown, message: string): asserts condition {
