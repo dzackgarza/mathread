@@ -82,3 +82,39 @@ class BackendStatus(BaseModel):
     storage: BackendStorageStatus
     capabilities: BackendCapabilities
     ready: bool
+
+
+class LibraryEntry(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    key: str
+    stored_path: Path
+    pdf_url: HttpUrl
+    source_url: HttpUrl
+    capture: CaptureMode
+    original_sha256: str
+    title: str
+    has_note: bool
+    first_read: str
+    last_read: str
+    last_position: float
+
+
+class NoteContent(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    key: str
+    text: str
+
+
+class NoteImageResult(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    relative_path: str
+
+
+class ReadEventRequest(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    key: str
+    position: float | None = None

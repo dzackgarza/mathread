@@ -5,10 +5,12 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import FastAPI, Form, Request, Response, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import HttpUrl
 
 from mathread import __version__
 from mathread.capture import InvalidPdfCaptureError, capture_bytes, capture_url
+from mathread.library import InvalidNoteImageError, UnknownLibraryKeyError
 from mathread.models import (
     BackendCapabilities,
     BackendServiceStatus,
@@ -18,10 +20,19 @@ from mathread.models import (
     CaptureResult,
     CaptureUrlRequest,
 )
+from mathread.portal import create_portal_router
 
 
 def create_app(root: Path) -> FastAPI:
     app = FastAPI(title="MathRead")
+
+    # Local reading portal (vite dev + <slug>.localhost) reaches the backend cross-origin.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^http://(localhost|127\.0\.0\.1|[a-z0-9-]+\.localhost)(:\d+)?$",
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.exception_handler(InvalidPdfCaptureError)
     def invalid_pdf_capture_error_handler(
@@ -29,6 +40,22 @@ def create_app(root: Path) -> FastAPI:
         _error: InvalidPdfCaptureError,
     ) -> Response:
         return Response(status_code=400)
+
+    @app.exception_handler(UnknownLibraryKeyError)
+    def unknown_library_key_error_handler(
+        _request: Request,
+        _error: UnknownLibraryKeyError,
+    ) -> Response:
+        return Response(status_code=404)
+
+    @app.exception_handler(InvalidNoteImageError)
+    def invalid_note_image_error_handler(
+        _request: Request,
+        _error: InvalidNoteImageError,
+    ) -> Response:
+        return Response(status_code=400)
+
+    app.include_router(create_portal_router(root))
 
     @app.post("/capture-url", response_model=CaptureResult)
     def capture_url_endpoint(request: CaptureUrlRequest) -> CaptureResult:
