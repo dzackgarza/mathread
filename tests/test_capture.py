@@ -195,6 +195,7 @@ def test_status_reports_ready_storage_contract_for_existing_root(tmp_path: Path)
     assert response.status_code == 200
     assert response.json() == {
         "backend_url": "http://127.0.0.1:8765",
+        "portal_url": "http://markdown-editor.localhost",
         "root": str(reading_root),
         "inbox": str(reading_root / "inbox"),
         "service": {
@@ -209,7 +210,7 @@ def test_status_reports_ready_storage_contract_for_existing_root(tmp_path: Path)
         },
         "capabilities": {
             "capture": True,
-            "open_file": False,
+            "open_file": True,
             "reveal_file": False,
             "open_root": False,
         },
@@ -227,6 +228,7 @@ def test_status_reports_missing_root_as_not_ready_without_creating_storage(tmp_p
     assert response.status_code == 200
     assert response.json() == {
         "backend_url": "http://127.0.0.1:8765",
+        "portal_url": "http://markdown-editor.localhost",
         "root": str(reading_root),
         "inbox": str(reading_root / "inbox"),
         "service": {
@@ -241,7 +243,7 @@ def test_status_reports_missing_root_as_not_ready_without_creating_storage(tmp_p
         },
         "capabilities": {
             "capture": False,
-            "open_file": False,
+            "open_file": True,
             "reveal_file": False,
             "open_root": False,
         },

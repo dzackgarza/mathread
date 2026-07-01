@@ -391,6 +391,10 @@ async function runExtensionCapture(
       : storedPath;
     const captureButtonText = await waitForCaptureButtonText(viewer, text => text === expectedCaptureButtonText);
     const captureStatusText = await waitForCaptureStatusText(viewer, text => text.includes(expectedCaptureStatusText));
+    const captureKey = storedPath.split("/").pop();
+    assert(captureKey !== undefined && captureKey !== "", `Stored PDF path must have a filename: ${storedPath}`);
+    const portalLinkHref = await waitForPortalLinkHref(viewer);
+    expect(portalLinkHref).toBe(`http://markdown-editor.localhost/?key=${encodeURIComponent(captureKey)}`);
     await page.screenshot({ path: artifacts.screenshotAfterPath });
     if (options.mode === "automatic") {
       await page.screenshot({ path: artifacts.screenshotReadinessPath });
@@ -601,6 +605,24 @@ async function waitForCaptureStatusText(
     await Bun.sleep(100);
   }
   throw new Error(`Timed out waiting for MathRead capture status text; last text: ${lastText}`);
+}
+
+async function waitForPortalLinkHref(page: ViewerSurface): Promise<string> {
+  const link = page.locator("#mathreadPortalLink");
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (await link.count() === 0) {
+      await Bun.sleep(100);
+      continue;
+    }
+    const href = await link.evaluate(el =>
+      el instanceof HTMLAnchorElement && !el.hidden ? el.href : null,
+    );
+    if (href !== null) {
+      return href;
+    }
+    await Bun.sleep(100);
+  }
+  throw new Error("Timed out waiting for MathRead portal link to become visible");
 }
 
 async function waitForMathReadViewer(context: BrowserContext, page: Page): Promise<ViewerSurface> {

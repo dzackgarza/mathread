@@ -22,8 +22,10 @@ from mathread.models import (
 )
 from mathread.portal import create_portal_router
 
+DEFAULT_PORTAL_URL = "http://markdown-editor.localhost"
 
-def create_app(root: Path) -> FastAPI:
+
+def create_app(root: Path, portal_url: str = DEFAULT_PORTAL_URL) -> FastAPI:
     app = FastAPI(title="MathRead")
 
     # Local reading portal (vite dev + <slug>.localhost) reaches the backend cross-origin.
@@ -68,6 +70,7 @@ def create_app(root: Path) -> FastAPI:
         inbox_writable = inbox.is_dir() and access(inbox, W_OK)
         return BackendStatus(
             backend_url=str(request.base_url).rstrip("/"),
+            portal_url=portal_url,
             root=root,
             inbox=inbox,
             service=BackendServiceStatus(name="mathread", version=__version__),
@@ -79,7 +82,7 @@ def create_app(root: Path) -> FastAPI:
             ),
             capabilities=BackendCapabilities(
                 capture=root_writable,
-                open_file=False,
+                open_file=True,
                 reveal_file=False,
                 open_root=False,
             ),

@@ -37,6 +37,7 @@ type CaptureUiConfig = {
 
 type BackendStatus = {
   backend_url: string;
+  portal_url: string;
   root: string;
   inbox: string;
   service: {
@@ -452,6 +453,7 @@ function renderCaptureFailure(captureBtn: HTMLButtonElement, error: string): voi
 }
 
 function renderCaptureButton(captureBtn: HTMLButtonElement): void {
+  renderPortalLink(captureState.kind === "success" ? captureState.result : undefined);
   if (captureState.kind === "in-flight") {
     renderCaptureInFlight(captureBtn);
     return;
@@ -478,6 +480,7 @@ function renderCaptureButton(captureBtn: HTMLButtonElement): void {
 function parseBackendStatus(value: unknown): BackendStatus {
   invariant(isRecord(value), "MathRead backend status response must be an object");
   invariant(typeof value.backend_url === "string", "MathRead backend status response must declare backend_url");
+  invariant(typeof value.portal_url === "string", "MathRead backend status response must declare portal_url");
   invariant(typeof value.root === "string", "MathRead backend status response must declare root");
   invariant(typeof value.inbox === "string", "MathRead backend status response must declare inbox");
   invariant(isRecord(value.service), "MathRead backend status response must declare service");
@@ -496,6 +499,7 @@ function parseBackendStatus(value: unknown): BackendStatus {
   invariant(typeof value.ready === "boolean", "MathRead backend status response must declare ready");
   return {
     backend_url: value.backend_url,
+    portal_url: value.portal_url,
     root: value.root,
     inbox: value.inbox,
     service: {
@@ -616,6 +620,38 @@ function renderCaptureStatus(text: string): void {
   if (panel.innerText !== text) {
     panel.innerText = text;
   }
+}
+
+function renderPortalLink(result: CaptureResult | undefined): void {
+  const link = portalLinkAnchor();
+  if (
+    result === undefined ||
+    backendState.kind !== "ready" ||
+    !backendState.status.capabilities.open_file
+  ) {
+    link.hidden = true;
+    return;
+  }
+  const key = result.stored_path.split("/").pop();
+  invariant(key !== undefined && key !== "", `MathRead stored_path has no filename: ${result.stored_path}`);
+  link.href = `${backendState.status.portal_url}/?key=${encodeURIComponent(key)}`;
+  link.hidden = false;
+}
+
+function portalLinkAnchor(): HTMLAnchorElement {
+  const existing = document.getElementById("mathreadPortalLink");
+  if (existing instanceof HTMLAnchorElement) {
+    return existing;
+  }
+
+  const link = document.createElement("a");
+  link.id = "mathreadPortalLink";
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.innerText = "Open in portal";
+  link.hidden = true;
+  document.body.append(link);
+  return link;
 }
 
 function captureStatusPanel(): HTMLDivElement {

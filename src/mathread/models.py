@@ -77,6 +77,7 @@ class BackendStatus(BaseModel):
     model_config = ConfigDict(strict=True)
 
     backend_url: str
+    portal_url: str
     root: Path
     inbox: Path
     service: BackendServiceStatus
