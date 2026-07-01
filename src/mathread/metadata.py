@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from io import BytesIO
+from pathlib import Path
+from typing import cast
 
 import pikepdf
+from pydantic import HttpUrl
 
-from mathread.models import CaptureProvenance
+from mathread.models import CaptureMode, CaptureProvenance
 
 MATHREAD_XMP_NS = "https://mathread.local/ns/provenance/1.0/"
 
@@ -36,3 +39,25 @@ def read_original_sha256(path: str) -> str | None:
     with pikepdf.open(path) as pdf:
         value = pdf.docinfo.get("/MathReadOriginalSHA256")
     return None if value is None else str(value)
+
+
+def read_capture_provenance(path: Path) -> CaptureProvenance:
+    with pikepdf.open(path) as pdf:
+        docinfo = {str(key): str(value) for key, value in pdf.docinfo.items()}
+
+    capture = required_docinfo(docinfo, path, "/MathReadCapture")
+    assert capture in {"capture-url", "capture-bytes"}, f"Stored MathRead PDF has invalid capture mode: {path}"
+
+    return CaptureProvenance(
+        pdf_url=cast(HttpUrl, required_docinfo(docinfo, path, "/MathReadPDFURL")),
+        source_url=cast(HttpUrl, required_docinfo(docinfo, path, "/MathReadSourceURL")),
+        capture=cast(CaptureMode, capture),
+        original_sha256=required_docinfo(docinfo, path, "/MathReadOriginalSHA256"),
+        title_hint=docinfo.get("/MathReadTitleHint"),
+    )
+
+
+def required_docinfo(docinfo: dict[str, str], path: Path, key: str) -> str:
+    value = docinfo.get(key)
+    assert value is not None, f"Stored MathRead PDF is missing {key}: {path}"
+    return value

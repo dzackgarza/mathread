@@ -44,6 +44,7 @@ class CaptureResult(BaseModel):
     pdf_url: HttpUrl
     source_url: HttpUrl
     capture: CaptureMode
+    title_hint: str | None = None
     existing: bool
 
 

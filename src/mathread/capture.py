@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 from pydantic import validate_call
 
-from mathread.metadata import embed_provenance
+from mathread.metadata import embed_provenance, read_capture_provenance
 from mathread.models import (
     CaptureBytesRequest,
     CaptureMode,
@@ -87,13 +87,16 @@ def store_pdf(
         original_sha256,
     )
     if existing:
+        provenance = read_capture_provenance(destination)
+        assert provenance.original_sha256 == original_sha256, f"Stored MathRead PDF provenance hash does not match captured PDF: {destination}"
         return CaptureResult(
             stored_path=destination,
             original_sha256=original_sha256,
             stored_sha256=sha256(destination.read_bytes()).hexdigest(),
-            pdf_url=request.pdf_url,
-            source_url=request.source_url,
-            capture=capture,
+            pdf_url=provenance.pdf_url,
+            source_url=provenance.source_url,
+            capture=provenance.capture,
+            title_hint=provenance.title_hint,
             existing=True,
         )
 
@@ -116,5 +119,6 @@ def store_pdf(
         pdf_url=request.pdf_url,
         source_url=request.source_url,
         capture=capture,
+        title_hint=request.title_hint,
         existing=False,
     )

@@ -315,10 +315,12 @@ def test_cli_capture_url_forwards_headers_and_stores_pdf_with_provenance(
     assert result["capture"] == "capture-url"
     assert result["source_url"] == "https://example.edu/course/"
     assert result["pdf_url"] == authenticated_pdf_server.pdf_url
+    assert result["title_hint"] == "Course page"
     assert metadata["/MathReadSourceURL"] == "https://example.edu/course/"
     assert metadata["/MathReadPDFURL"] == authenticated_pdf_server.pdf_url
     assert metadata["/MathReadCapture"] == "capture-url"
     assert metadata["/MathReadOriginalSHA256"] == result["original_sha256"]
+    assert metadata["/MathReadTitleHint"] == result["title_hint"]
 
 
 def test_cli_service_uses_mathread_root_and_accepts_real_http_capture(
@@ -363,6 +365,9 @@ def test_cli_service_reuses_matching_pdf_and_splits_same_filename_different_hash
         mathread_service,
         sample_pdf_bytes,
         "notes.pdf",
+        source_url="https://example.edu/other-course/",
+        pdf_url="https://example.edu/other-course/notes.pdf",
+        title_hint="Other course page",
     )
     different_pdf_bytes = altered_pdf_bytes()
     different_response = post_capture_bytes(
@@ -387,6 +392,10 @@ def test_cli_service_reuses_matching_pdf_and_splits_same_filename_different_hash
     assert second["existing"] is True
     assert Path(second["stored_path"]) == first_path
     assert second["original_sha256"] == first["original_sha256"]
+    assert second["source_url"] == first["source_url"]
+    assert second["pdf_url"] == first["pdf_url"]
+    assert second["capture"] == first["capture"]
+    assert second["title_hint"] == first["title_hint"]
     assert different["existing"] is False
     assert different["original_sha256"] == sha256(different_pdf_bytes).hexdigest()
     assert different["original_sha256"] != first["original_sha256"]
@@ -445,13 +454,17 @@ def post_capture_bytes(
     mathread_service: RunningMathReadService,
     pdf_bytes: bytes,
     filename: str,
+    *,
+    source_url: str = "https://example.edu/course/",
+    pdf_url: str = "https://example.edu/course/notes.pdf",
+    title_hint: str = "Course page",
 ) -> httpx.Response:
     return httpx.post(
         f"{mathread_service.base_url}/capture-bytes",
         data={
-            "source_url": "https://example.edu/course/",
-            "pdf_url": "https://example.edu/course/notes.pdf",
-            "title_hint": "Course page",
+            "source_url": source_url,
+            "pdf_url": pdf_url,
+            "title_hint": title_hint,
         },
         files={"pdf": (filename, pdf_bytes, "application/pdf")},
     )
