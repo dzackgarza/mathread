@@ -1,0 +1,30 @@
+#mathreadCaptureButton.mathreadToolbarTextButton,
+#mathreadCaptureModeButton.mathreadToolbarTextButton {
+  width: auto;
+  min-width: 58px;
+  padding-inline: 8px;
+  font: 12px system-ui, sans-serif;
+}
+
+#mathreadCaptureButton.mathreadToolbarTextButton::before,
+#mathreadCaptureModeButton.mathreadToolbarTextButton::before {
+  content: none;
+  display: none;
+}
+
+#mathreadCaptureStatus {
+  position: fixed;
+  top: 38px;
+  right: 12px;
+  z-index: 10000;
+  max-width: min(680px, calc(100vw - 24px));
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+  color: #1f2328;
+  font: 12px system-ui, sans-serif;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16);
+}

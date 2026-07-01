@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "fs";
+import { copyFileSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 
 const distExt = "dist/extension";
@@ -37,14 +37,20 @@ if (!bg.includes('mathread/background.js')) {
   writeFileSync(bgPath, bg);
 }
 
-// 3. Patch viewer.html
+// 3. Copy MathRead viewer stylesheet
+copyFileSync(
+  join("extension", "mathread", "capture-ui.css"),
+  join(distExt, "mathread", "capture-ui.css"),
+);
+
+// 4. Patch viewer.html
 const viewerPath = join(distExt, "content/web/viewer.html");
 let viewer = readFileSync(viewerPath, "utf-8");
 
 if (!viewer.includes('mathread/capture-ui.js')) {
   viewer = viewer.replace(
     '</head>',
-    '<script src="../../mathread/capture-ui.js" type="module"></script>\n  </head>'
+    '<link rel="stylesheet" href="../../mathread/capture-ui.css">\n    <script src="../../mathread/capture-ui.js" type="module"></script>\n  </head>'
   );
   
   // Add capture button next to download button

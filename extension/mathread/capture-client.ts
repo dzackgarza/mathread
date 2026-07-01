@@ -20,6 +20,18 @@ export type CaptureResult = {
   existing: boolean;
 };
 
+export type CaptureModeSetting = "manual" | "automatic";
+
+export type CaptureModeStorage = {
+  get(keys: string[]): Promise<Record<string, unknown>>;
+  set(items: Record<string, unknown>): Promise<void>;
+};
+
+export type PdfLinkOrigin = {
+  source_url: string;
+  title_hint?: string;
+};
+
 export type RuntimeCaptureResponse =
   | { ok: true; result: CaptureResult }
   | { ok: false; error: string };
@@ -28,6 +40,9 @@ export type RuntimeCaptureMessage = {
   type: "mathread:capture-url";
   request: CaptureUrlRequest;
 };
+
+export const captureModeStorageKey = "mathread.captureMode";
+export const pdfLinkOriginsStorageKey = "mathread.pdfLinkOrigins";
 
 export function isLikelyPdfUrl(rawUrl: string): boolean {
   return new URL(rawUrl).pathname.toLowerCase().endsWith(".pdf");
@@ -70,6 +85,46 @@ export async function postCaptureUrl(
   return parseCaptureResult(await response.json());
 }
 
+export async function storedCaptureMode(
+  storage: CaptureModeStorage,
+): Promise<CaptureModeSetting> {
+  const values = await storage.get([captureModeStorageKey]);
+  const value = values[captureModeStorageKey];
+  if (value === undefined) {
+    await storage.set({ [captureModeStorageKey]: "manual" });
+    return "manual";
+  }
+  return parseCaptureModeSetting(value);
+}
+
+export async function setStoredCaptureMode(
+  storage: CaptureModeStorage,
+  mode: CaptureModeSetting,
+): Promise<void> {
+  await storage.set({ [captureModeStorageKey]: mode });
+}
+
+export async function rememberPdfLinkOrigin(
+  storage: CaptureModeStorage,
+  request: CaptureUrlRequest,
+): Promise<void> {
+  const values = await storage.get([pdfLinkOriginsStorageKey]);
+  const origins = parsePdfLinkOrigins(values[pdfLinkOriginsStorageKey]);
+  origins[request.pdf_url] = request.title_hint === undefined
+    ? { source_url: request.source_url }
+    : { source_url: request.source_url, title_hint: request.title_hint };
+  await storage.set({ [pdfLinkOriginsStorageKey]: origins });
+}
+
+export async function storedPdfLinkOrigin(
+  storage: CaptureModeStorage,
+  pdfUrl: string,
+): Promise<PdfLinkOrigin | undefined> {
+  const values = await storage.get([pdfLinkOriginsStorageKey]);
+  const origins = parsePdfLinkOrigins(values[pdfLinkOriginsStorageKey]);
+  return origins[pdfUrl];
+}
+
 export function captureUrlEndpointFromManifest(manifest: {
   host_permissions?: string[];
 }): string {
@@ -90,6 +145,35 @@ export function captureUrlEndpointFromManifest(manifest: {
     `extension backend permission must end with /*: ${backendPermission}`,
   );
   return `${backendPermission.slice(0, -2)}/capture-url`;
+}
+
+function parseCaptureModeSetting(value: unknown): CaptureModeSetting {
+  invariant(
+    value === "manual" || value === "automatic",
+    "MathRead capture mode must be manual or automatic",
+  );
+  return value;
+}
+
+function parsePdfLinkOrigins(value: unknown): Record<string, PdfLinkOrigin> {
+  if (value === undefined) {
+    return {};
+  }
+  invariant(isRecord(value), "MathRead PDF link origins must be an object");
+  const origins: Record<string, PdfLinkOrigin> = {};
+  for (const [pdfUrl, origin] of Object.entries(value)) {
+    invariant(typeof pdfUrl === "string", "MathRead PDF link origin key must be a string");
+    invariant(isRecord(origin), `MathRead PDF link origin must be an object: ${pdfUrl}`);
+    invariant(typeof origin.source_url === "string", `MathRead PDF link origin must declare source_url: ${pdfUrl}`);
+    invariant(
+      typeof origin.title_hint === "undefined" || typeof origin.title_hint === "string",
+      `MathRead PDF link origin title_hint must be a string when present: ${pdfUrl}`,
+    );
+    origins[pdfUrl] = origin.title_hint === undefined
+      ? { source_url: origin.source_url }
+      : { source_url: origin.source_url, title_hint: origin.title_hint };
+  }
+  return origins;
 }
 
 function invariant(condition: unknown, message: string): asserts condition {

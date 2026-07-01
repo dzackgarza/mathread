@@ -1,11 +1,13 @@
 import {
   type CaptureResult,
   type CaptureHeaders,
+  type CaptureModeStorage,
   type RuntimeCaptureResponse,
   type RuntimeCaptureMessage,
   type CaptureUrlRequest,
   captureUrlEndpointFromManifest,
   postCaptureUrl,
+  storedCaptureMode,
 } from "./capture-client";
 
 type ChromeCookie = {
@@ -41,6 +43,9 @@ type ChromeApi = {
   cookies: {
     getAll(details: { url: string }): Promise<ChromeCookie[]>;
   };
+  storage: {
+    local: CaptureModeStorage;
+  };
 };
 
 type UnknownRecord = Record<string, unknown>;
@@ -66,6 +71,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 chrome.tabs.onUpdated.addListener((_, changeInfo, tab) => {
+  void captureUpdatedPdfTab(changeInfo, tab);
+});
+
+async function captureUpdatedPdfTab(
+  changeInfo: { status?: string },
+  tab: { url?: string; title?: string },
+): Promise<void> {
+  if (await storedCaptureMode(chrome.storage.local) !== "automatic") {
+    return;
+  }
+
   if (changeInfo.status !== "complete" || tab.url === undefined) {
     return;
   }
@@ -75,14 +91,12 @@ chrome.tabs.onUpdated.addListener((_, changeInfo, tab) => {
     return;
   }
 
-  void capturePdfUrl({
+  await capturePdfUrl({
     pdf_url: captureUrl,
     source_url: captureUrl,
     ...(tab.title === undefined ? {} : { title_hint: tab.title }),
-  }).catch(error => {
-    console.error(`[mathread] capturePdfUrl failed for ${captureUrl}: ${String(error)}`);
   });
-});
+}
 
 
 

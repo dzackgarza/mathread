@@ -1,22 +1,28 @@
 import {
   captureRequestForClickedPdfLink,
+  type CaptureModeStorage,
   isLikelyPdfUrl,
+  rememberPdfLinkOrigin,
   runtimeCaptureMessage,
+  storedCaptureMode,
 } from "./capture-client";
 
 type ChromeRuntime = {
   runtime: {
     sendMessage(message: unknown): Promise<unknown>;
   };
+  storage: {
+    local: CaptureModeStorage;
+  };
 };
 
 declare const chrome: ChromeRuntime;
 
-capturePdfFromCurrentDocument();
+void capturePdfFromCurrentDocument();
 document.addEventListener(
   "DOMContentLoaded",
   () => {
-    capturePdfFromCurrentDocument();
+    void capturePdfFromCurrentDocument();
   },
   true,
 );
@@ -29,26 +35,38 @@ document.addEventListener(
       return;
     }
 
-    const anchor = target.closest<HTMLAnchorElement>("a[href]");
-    if (anchor === null) {
-      return;
-    }
-
-    const request = captureRequestForClickedPdfLink(
-      anchor.href,
-      location.href,
-      document.title,
-    );
-    if (!isLikelyPdfUrl(request.pdf_url)) {
-      return;
-    }
-
-    void chrome.runtime.sendMessage(runtimeCaptureMessage(request));
+    void captureClickedPdfLink(target);
   },
   true,
 );
 
-function capturePdfFromCurrentDocument(): void {
+async function captureClickedPdfLink(target: Element): Promise<void> {
+  const anchor = target.closest<HTMLAnchorElement>("a[href]");
+  if (anchor === null) {
+    return;
+  }
+
+  const request = captureRequestForClickedPdfLink(
+    anchor.href,
+    location.href,
+    document.title,
+  );
+  if (!isLikelyPdfUrl(request.pdf_url)) {
+    return;
+  }
+
+  await rememberPdfLinkOrigin(chrome.storage.local, request);
+  if (await storedCaptureMode(chrome.storage.local) === "automatic") {
+    void chrome.runtime.sendMessage(runtimeCaptureMessage(request));
+    return;
+  }
+}
+
+async function capturePdfFromCurrentDocument(): Promise<void> {
+  if (await storedCaptureMode(chrome.storage.local) !== "automatic") {
+    return;
+  }
+
   if (document.contentType.toLowerCase() !== "application/pdf") {
     return;
   }

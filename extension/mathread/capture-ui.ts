@@ -1,3 +1,11 @@
+import {
+  type CaptureModeSetting,
+  type CaptureModeStorage,
+  setStoredCaptureMode,
+  storedCaptureMode,
+  storedPdfLinkOrigin,
+} from "./capture-client";
+
 type MathReadPdfViewerApplication = {
   url: string;
   initializedPromise: Promise<unknown>;
@@ -13,6 +21,9 @@ type ChromeRuntime = {
   runtime: {
     getManifest(): { host_permissions?: string[] };
     sendMessage(message: unknown): Promise<unknown>;
+  };
+  storage: {
+    local: CaptureModeStorage;
   };
 };
 
@@ -75,6 +86,8 @@ const captureUiConfig: CaptureUiConfig = {
 let installedCaptureUi = false;
 let backendState: BackendState = { kind: "checking" };
 let captureState: CaptureState = { kind: "idle" };
+let captureMode: CaptureModeSetting | undefined = undefined;
+const automaticCapturePdfUrls = new Set<string>();
 
 void initCaptureUi();
 
@@ -115,7 +128,12 @@ function getPdfUrlFromPage(): string | undefined {
   return undefined;
 }
 
-function getCaptureSourceUrl(pdfUrl: string): string {
+async function getCaptureSourceUrl(pdfUrl: string): Promise<string> {
+  const storedOrigin = await storedPdfLinkOrigin(chrome.storage.local, pdfUrl);
+  if (storedOrigin !== undefined) {
+    return storedOrigin.source_url;
+  }
+
   const referrer = document.referrer;
   if (referrer.length > 0) {
     try {
@@ -136,14 +154,14 @@ function getCaptureSourceUrl(pdfUrl: string): string {
   return pdfUrl;
 }
 
-function resolveCaptureUrls(): { pdfUrl: string; sourceUrl: string } | undefined {
+async function resolveCaptureUrls(): Promise<{ pdfUrl: string; sourceUrl: string } | undefined> {
   const pdfUrl = getPdfUrlFromPage();
   if (pdfUrl === undefined || pdfUrl.length === 0) {
     return undefined;
   }
   return {
     pdfUrl,
-    sourceUrl: getCaptureSourceUrl(pdfUrl),
+    sourceUrl: await getCaptureSourceUrl(pdfUrl),
   };
 }
 
@@ -181,7 +199,7 @@ async function resolveCaptureUrlsWithRetries(): Promise<{
   sourceUrl: string;
 } | undefined> {
   for (let attempt = 0; attempt < captureUiConfig.urlResolutionMaxRetries; attempt += 1) {
-    const resolved = resolveCaptureUrls();
+    const resolved = await resolveCaptureUrls();
     if (resolved !== undefined && resolved.pdfUrl.length > 0) {
       return resolved;
     }
@@ -205,11 +223,21 @@ function wait(ms: number): Promise<void> {
 async function initializeCaptureButton(): Promise<void> {
   for (let attempt = 0; attempt < captureUiConfig.urlResolutionMaxRetries; attempt += 1) {
     if (synchronizeCaptureButton()) {
+      await initializeCaptureMode();
       await refreshBackendStatus();
+      const captureBtn = currentCaptureButton();
+      if (captureBtn !== undefined) {
+        void triggerAutomaticCapture(captureBtn);
+      }
       return;
     }
     await wait(captureUiConfig.initializationRetryMs);
   }
+}
+
+async function initializeCaptureMode(): Promise<void> {
+  captureMode = await storedCaptureMode(chrome.storage.local);
+  synchronizeCaptureButton();
 }
 
 async function triggerCapture(captureBtn: HTMLButtonElement): Promise<void> {
@@ -219,6 +247,36 @@ async function triggerCapture(captureBtn: HTMLButtonElement): Promise<void> {
     renderCaptureButton(captureBtn);
     return;
   }
+  await captureResolvedPdf(captureBtn, resolved);
+}
+
+async function triggerAutomaticCapture(captureBtn: HTMLButtonElement): Promise<void> {
+  if (captureMode !== "automatic") {
+    return;
+  }
+  if (backendState.kind !== "ready" || !backendState.status.capabilities.capture) {
+    return;
+  }
+  if (captureState.kind !== "idle") {
+    return;
+  }
+  const resolved = await resolveCaptureUrlsWithRetries();
+  if (resolved === undefined) {
+    captureState = { kind: "failure", error: "PDF URL unavailable" };
+    renderCaptureButton(captureBtn);
+    return;
+  }
+  if (automaticCapturePdfUrls.has(resolved.pdfUrl)) {
+    return;
+  }
+  automaticCapturePdfUrls.add(resolved.pdfUrl);
+  await captureResolvedPdf(captureBtn, resolved);
+}
+
+async function captureResolvedPdf(
+  captureBtn: HTMLButtonElement,
+  resolved: { pdfUrl: string; sourceUrl: string },
+): Promise<void> {
   captureState = { kind: "in-flight" };
   renderCaptureButton(captureBtn);
   const response = await chrome.runtime.sendMessage({
@@ -239,11 +297,21 @@ async function triggerCapture(captureBtn: HTMLButtonElement): Promise<void> {
   renderCaptureButton(captureBtn);
 }
 
+function currentCaptureButton(): HTMLButtonElement | undefined {
+  const captureBtn = document.getElementById("mathreadCaptureButton");
+  if (!(captureBtn instanceof HTMLButtonElement)) {
+    return undefined;
+  }
+  return captureBtn;
+}
+
 function synchronizeCaptureButton(): boolean {
   const captureBtn = document.getElementById("mathreadCaptureButton");
   if (!(captureBtn instanceof HTMLButtonElement)) {
     return false;
   }
+  captureBtn.classList.add("mathreadToolbarTextButton");
+  synchronizeCaptureModeButton(captureBtn);
   if (captureBtn.dataset.mathreadCaptureBound !== "true") {
     captureBtn.dataset.mathreadCaptureBound = "true";
     captureBtn.addEventListener("click", event => {
@@ -256,6 +324,43 @@ function synchronizeCaptureButton(): boolean {
   }
   renderCaptureButton(captureBtn);
   return true;
+}
+
+function synchronizeCaptureModeButton(captureBtn: HTMLButtonElement): void {
+  const modeBtn = captureModeButton(captureBtn);
+  if (modeBtn.dataset.mathreadCaptureModeBound !== "true") {
+    modeBtn.dataset.mathreadCaptureModeBound = "true";
+    modeBtn.addEventListener("click", event => {
+      event.preventDefault();
+      void toggleCaptureMode(captureBtn);
+    });
+  }
+  renderCaptureModeButton(modeBtn);
+}
+
+function captureModeButton(captureBtn: HTMLButtonElement): HTMLButtonElement {
+  const existing = document.getElementById("mathreadCaptureModeButton");
+  if (existing instanceof HTMLButtonElement) {
+    return existing;
+  }
+
+  const modeBtn = document.createElement("button");
+  modeBtn.id = "mathreadCaptureModeButton";
+  modeBtn.className = "toolbarButton mathreadToolbarTextButton";
+  modeBtn.type = "button";
+  modeBtn.tabIndex = 0;
+  captureBtn.insertAdjacentElement("afterend", modeBtn);
+  return modeBtn;
+}
+
+async function toggleCaptureMode(captureBtn: HTMLButtonElement): Promise<void> {
+  const nextMode: CaptureModeSetting = captureMode === "automatic" ? "manual" : "automatic";
+  await setStoredCaptureMode(chrome.storage.local, nextMode);
+  captureMode = nextMode;
+  synchronizeCaptureButton();
+  if (nextMode === "automatic") {
+    await triggerAutomaticCapture(captureBtn);
+  }
 }
 
 async function refreshBackendStatus(): Promise<void> {
@@ -444,10 +549,30 @@ function setButtonPresentation(
   }
 }
 
+function renderCaptureModeButton(modeBtn: HTMLButtonElement): void {
+  const mode = captureMode;
+  if (mode === undefined) {
+    setButtonPresentation(modeBtn, {
+      disabled: true,
+      text: "Mode",
+      title: "Loading MathRead capture mode",
+    });
+    return;
+  }
+
+  setButtonPresentation(modeBtn, {
+    disabled: false,
+    text: mode === "automatic" ? "Auto" : "Manual",
+    title: `MathRead capture mode: ${mode}`,
+  });
+}
+
 function backendReadinessText(status: BackendStatus): string {
   const storageState = status.ready ? "ready" : "not ready";
+  const modeState = captureMode === undefined ? "loading" : captureMode;
   return [
     status.ready ? "MathRead backend ready" : "MathRead backend storage not ready",
+    `Mode: ${modeState}`,
     `Backend: ${status.backend_url}`,
     `Root: ${status.root}`,
     `Inbox: ${status.inbox}`,
@@ -476,20 +601,6 @@ function captureStatusPanel(): HTMLDivElement {
   const panel = document.createElement("div");
   panel.id = "mathreadCaptureStatus";
   panel.setAttribute("role", "status");
-  panel.style.position = "fixed";
-  panel.style.top = "38px";
-  panel.style.right = "12px";
-  panel.style.zIndex = "10000";
-  panel.style.maxWidth = "min(680px, calc(100vw - 24px))";
-  panel.style.padding = "6px 8px";
-  panel.style.background = "rgba(255, 255, 255, 0.96)";
-  panel.style.border = "1px solid rgba(0, 0, 0, 0.2)";
-  panel.style.borderRadius = "4px";
-  panel.style.color = "#1f2328";
-  panel.style.font = "12px system-ui, sans-serif";
-  panel.style.lineHeight = "1.35";
-  panel.style.overflowWrap = "anywhere";
-  panel.style.boxShadow = "0 2px 6px rgba(0, 0, 0, 0.16)";
   document.body.append(panel);
   return panel;
 }
