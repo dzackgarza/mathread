@@ -25,8 +25,26 @@ type CaptureUiConfig = {
 };
 
 type BackendStatus = {
+  backend_url: string;
   root: string;
   inbox: string;
+  service: {
+    name: string;
+    version: string;
+  };
+  storage: {
+    root_exists: boolean;
+    root_writable: boolean;
+    inbox_exists: boolean;
+    inbox_writable: boolean;
+  };
+  capabilities: {
+    capture: boolean;
+    open_file: boolean;
+    reveal_file: boolean;
+    open_root: boolean;
+  };
+  ready: boolean;
 };
 
 type CaptureResult = {
@@ -277,11 +295,13 @@ function renderBackendChecking(captureBtn: HTMLButtonElement): void {
 
 function renderBackendReady(captureBtn: HTMLButtonElement, status: BackendStatus): void {
   setButtonPresentation(captureBtn, {
-    disabled: false,
-    text: "Capture",
-    title: `Capture to ${status.inbox}`,
+    disabled: !status.capabilities.capture,
+    text: status.capabilities.capture ? "Capture" : "Storage",
+    title: status.capabilities.capture
+      ? `Capture to ${status.inbox}`
+      : `MathRead storage root is not ready: ${status.root}`,
   });
-  renderCaptureStatus(`MathRead backend: ${status.inbox}`);
+  renderCaptureStatus(backendReadinessText(status));
 }
 
 function renderBackendUnavailable(captureBtn: HTMLButtonElement, error: string): void {
@@ -346,9 +366,45 @@ function renderCaptureButton(captureBtn: HTMLButtonElement): void {
 
 function parseBackendStatus(value: unknown): BackendStatus {
   invariant(isRecord(value), "MathRead backend status response must be an object");
+  invariant(typeof value.backend_url === "string", "MathRead backend status response must declare backend_url");
   invariant(typeof value.root === "string", "MathRead backend status response must declare root");
   invariant(typeof value.inbox === "string", "MathRead backend status response must declare inbox");
-  return { root: value.root, inbox: value.inbox };
+  invariant(isRecord(value.service), "MathRead backend status response must declare service");
+  invariant(typeof value.service.name === "string", "MathRead backend service status must declare name");
+  invariant(typeof value.service.version === "string", "MathRead backend service status must declare version");
+  invariant(isRecord(value.storage), "MathRead backend status response must declare storage");
+  invariant(typeof value.storage.root_exists === "boolean", "MathRead backend storage status must declare root_exists");
+  invariant(typeof value.storage.root_writable === "boolean", "MathRead backend storage status must declare root_writable");
+  invariant(typeof value.storage.inbox_exists === "boolean", "MathRead backend storage status must declare inbox_exists");
+  invariant(typeof value.storage.inbox_writable === "boolean", "MathRead backend storage status must declare inbox_writable");
+  invariant(isRecord(value.capabilities), "MathRead backend status response must declare capabilities");
+  invariant(typeof value.capabilities.capture === "boolean", "MathRead backend capabilities must declare capture");
+  invariant(typeof value.capabilities.open_file === "boolean", "MathRead backend capabilities must declare open_file");
+  invariant(typeof value.capabilities.reveal_file === "boolean", "MathRead backend capabilities must declare reveal_file");
+  invariant(typeof value.capabilities.open_root === "boolean", "MathRead backend capabilities must declare open_root");
+  invariant(typeof value.ready === "boolean", "MathRead backend status response must declare ready");
+  return {
+    backend_url: value.backend_url,
+    root: value.root,
+    inbox: value.inbox,
+    service: {
+      name: value.service.name,
+      version: value.service.version,
+    },
+    storage: {
+      root_exists: value.storage.root_exists,
+      root_writable: value.storage.root_writable,
+      inbox_exists: value.storage.inbox_exists,
+      inbox_writable: value.storage.inbox_writable,
+    },
+    capabilities: {
+      capture: value.capabilities.capture,
+      open_file: value.capabilities.open_file,
+      reveal_file: value.capabilities.reveal_file,
+      open_root: value.capabilities.open_root,
+    },
+    ready: value.ready,
+  };
 }
 
 function parseRuntimeCaptureResponse(value: unknown): RuntimeCaptureResponse {
@@ -386,6 +442,22 @@ function setButtonPresentation(
   if (captureBtn.title !== state.title) {
     captureBtn.title = state.title;
   }
+}
+
+function backendReadinessText(status: BackendStatus): string {
+  const storageState = status.ready ? "ready" : "not ready";
+  return [
+    status.ready ? "MathRead backend ready" : "MathRead backend storage not ready",
+    `Backend: ${status.backend_url}`,
+    `Root: ${status.root}`,
+    `Inbox: ${status.inbox}`,
+    `Storage: ${storageState}`,
+    `Root exists: ${status.storage.root_exists}`,
+    `Root writable: ${status.storage.root_writable}`,
+    `Inbox exists: ${status.storage.inbox_exists}`,
+    `Inbox writable: ${status.storage.inbox_writable}`,
+    `Service: ${status.service.name} ${status.service.version}`,
+  ].join("\n");
 }
 
 function renderCaptureStatus(text: string): void {

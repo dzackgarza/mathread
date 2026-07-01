@@ -14,6 +14,7 @@ app = App(help="MathRead local PDF capture service")
 @app.command
 def serve(host: str = "127.0.0.1", port: int = 8765, root: Path | None = None) -> None:
     service_root = root_from_cli_or_environment(root)
+    service_root.mkdir(parents=True, exist_ok=True)
     uvicorn.run(create_app(service_root), host=host, port=port)
 
 

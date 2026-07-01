@@ -47,8 +47,38 @@ class CaptureResult(BaseModel):
     existing: bool
 
 
+class BackendServiceStatus(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    name: str
+    version: str
+
+
+class BackendStorageStatus(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    root_exists: bool
+    root_writable: bool
+    inbox_exists: bool
+    inbox_writable: bool
+
+
+class BackendCapabilities(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    capture: bool
+    open_file: bool
+    reveal_file: bool
+    open_root: bool
+
+
 class BackendStatus(BaseModel):
     model_config = ConfigDict(strict=True)
 
+    backend_url: str
     root: Path
     inbox: Path
+    service: BackendServiceStatus
+    storage: BackendStorageStatus
+    capabilities: BackendCapabilities
+    ready: bool

@@ -157,7 +157,9 @@ def test_capture_url_downloads_pdf_and_embeds_provenance(
     tmp_path: Path,
     pdf_server: str,
 ) -> None:
-    client = TestClient(create_app(tmp_path / "reading-root"))
+    reading_root = tmp_path / "reading-root"
+    reading_root.mkdir()
+    client = TestClient(create_app(reading_root))
 
     response = client.post(
         "/capture-url",
@@ -183,25 +185,78 @@ def test_capture_url_downloads_pdf_and_embeds_provenance(
     assert metadata["/MathReadOriginalSHA256"] == result["original_sha256"]
 
 
-def test_status_reports_configured_root_and_inbox_without_creating_inbox(tmp_path: Path) -> None:
+def test_status_reports_ready_storage_contract_for_existing_root(tmp_path: Path) -> None:
     reading_root = tmp_path / "reading-root"
-    client = TestClient(create_app(reading_root))
+    reading_root.mkdir()
+    client = TestClient(create_app(reading_root), base_url="http://127.0.0.1:8765")
 
     response = client.get("/status")
 
     assert response.status_code == 200
     assert response.json() == {
+        "backend_url": "http://127.0.0.1:8765",
         "root": str(reading_root),
         "inbox": str(reading_root / "inbox"),
+        "service": {
+            "name": "mathread",
+            "version": "0.1.0",
+        },
+        "storage": {
+            "root_exists": True,
+            "root_writable": True,
+            "inbox_exists": False,
+            "inbox_writable": False,
+        },
+        "capabilities": {
+            "capture": True,
+            "open_file": False,
+            "reveal_file": False,
+            "open_root": False,
+        },
+        "ready": True,
     }
     assert not (reading_root / "inbox").exists()
+
+
+def test_status_reports_missing_root_as_not_ready_without_creating_storage(tmp_path: Path) -> None:
+    reading_root = tmp_path / "missing-reading-root"
+    client = TestClient(create_app(reading_root), base_url="http://127.0.0.1:8765")
+
+    response = client.get("/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "backend_url": "http://127.0.0.1:8765",
+        "root": str(reading_root),
+        "inbox": str(reading_root / "inbox"),
+        "service": {
+            "name": "mathread",
+            "version": "0.1.0",
+        },
+        "storage": {
+            "root_exists": False,
+            "root_writable": False,
+            "inbox_exists": False,
+            "inbox_writable": False,
+        },
+        "capabilities": {
+            "capture": False,
+            "open_file": False,
+            "reveal_file": False,
+            "open_root": False,
+        },
+        "ready": False,
+    }
+    assert not reading_root.exists()
 
 
 def test_capture_bytes_stores_browser_authenticated_pdf_bytes(
     tmp_path: Path,
     sample_pdf_bytes: bytes,
 ) -> None:
-    client = TestClient(create_app(tmp_path / "reading-root"))
+    reading_root = tmp_path / "reading-root"
+    reading_root.mkdir()
+    client = TestClient(create_app(reading_root))
 
     response = client.post(
         "/capture-bytes",

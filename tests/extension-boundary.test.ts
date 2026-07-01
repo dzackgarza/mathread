@@ -60,6 +60,7 @@ type CaptureArtifacts = {
   backendLogPath: string;
   eventsLogPath: string;
   screenshotBeforePath: string;
+  screenshotReadinessPath: string;
   screenshotAfterPath: string;
   tracePath: string;
   videoDir: string;
@@ -78,6 +79,7 @@ type ExtensionCaptureEvidence = {
   courseOrigin: string;
   courseRequests: CourseRequest[];
   metadata: Record<string, string>;
+  readinessStatusText: string;
   storedPath: string;
 };
 
@@ -111,6 +113,7 @@ test("built extension captures a clicked PDF link through the real local backend
   expect(evidence.metadata["/MathReadSourceURL"]).toBe(expectedCourseUrl);
   expect(evidence.metadata["/MathReadPDFURL"]).toBe(expectedPdfUrl);
   expect(evidence.metadata["/MathReadCapture"]).toBe("capture-url");
+  expect(evidence.readinessStatusText).toContain("Storage: ready");
   expect(evidence.captureButtonText).toBe("Captured");
   expect(evidence.captureStatusText).toContain(evidence.storedPath);
   expect(evidence.metadata["/MathReadOriginalSHA256"]).toBe(pdfSha256());
@@ -285,13 +288,18 @@ async function runExtensionCapture(
     }
     const viewer = await waitForMathReadViewer(context, page);
     await waitForCaptureButtonText(viewer, text => text === "Capture");
+    const readinessStatusText = await waitForCaptureStatusText(viewer, text =>
+      text.includes(`Backend: http://127.0.0.1:${backendPort}`)
+      && text.includes(`Root: ${readingRoot}`)
+      && text.includes(`Inbox: ${join(readingRoot, "inbox")}`)
+      && text.includes("Storage: ready")
+    );
+    await page.screenshot({ path: artifacts.screenshotReadinessPath });
     await viewer.locator("#mathreadCaptureButton").click();
     const storedPath = await waitForStoredPdf(readingRoot);
     const captureButtonText = await waitForCaptureButtonText(viewer, text => text === "Captured");
     const captureStatusText = await waitForCaptureStatusText(viewer, text => text.includes(storedPath));
-    if (scenario === "clicked-link") {
-      await page.screenshot({ path: artifacts.screenshotAfterPath });
-    }
+    await page.screenshot({ path: artifacts.screenshotAfterPath });
     appendEvent(artifacts.eventsLogPath, {
       type: "stored-pdf",
       scenario,
@@ -306,6 +314,7 @@ async function runExtensionCapture(
       courseOrigin: courseServer.url.origin,
       courseRequests: courseServer.requests,
       metadata,
+      readinessStatusText,
       storedPath,
     };
   } finally {
@@ -543,6 +552,7 @@ function createCaptureArtifacts(
     backendLogPath: join(root, "backend.log"),
     eventsLogPath: join(root, "events.jsonl"),
     screenshotBeforePath: join(screenshotDir, "before.png"),
+    screenshotReadinessPath: join(screenshotDir, "readiness.png"),
     screenshotAfterPath: join(screenshotDir, "after.png"),
     tracePath: join(root, "trace.zip"),
     videoDir,
@@ -563,9 +573,10 @@ function assertEvidenceArtifacts(
 ): void {
   if (scenario === "clicked-link") {
     assertPng(artifacts.screenshotBeforePath);
-    assertPng(artifacts.screenshotAfterPath);
     assertZip(artifacts.tracePath);
   }
+  assertPng(artifacts.screenshotReadinessPath);
+  assertPng(artifacts.screenshotAfterPath);
   assertWebmVideo(artifacts.videoDir);
 
   const events = readPersistedEvents(artifacts.eventsLogPath);

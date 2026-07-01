@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
+from os import W_OK, access
 from pathlib import Path
 
 import httpx
@@ -71,6 +72,8 @@ def store_pdf(
     capture: CaptureMode,
     filename: str,
 ) -> CaptureResult:
+    assert root.is_dir(), f"MathRead storage root must exist: {root}"
+    assert access(root, W_OK), f"MathRead storage root must be writable: {root}"
     if not pdf_bytes.startswith(b"%PDF-"):
         raise InvalidPdfCaptureError from None
 
