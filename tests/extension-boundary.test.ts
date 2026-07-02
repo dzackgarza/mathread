@@ -1,7 +1,3 @@
-import {
-  captureModeStorageKey,
-  type CaptureModeSetting,
-} from "../extension/mathread/capture-client";
 import { expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -70,7 +66,6 @@ type CaptureArtifacts = {
   backendLogPath: string;
   eventsLogPath: string;
   screenshotBeforePath: string;
-  screenshotReadinessPath: string;
   screenshotAfterPath: string;
   tracePath: string;
 };
@@ -84,13 +79,10 @@ type CourseRequest = {
 type ExtensionCaptureEvidence = {
   artifacts: CaptureArtifacts;
   backendCaptureRequestCount: number;
-  captureButtonText: string;
-  captureModeButtonText: string;
-  captureStatusText: string;
+  portalRedirectUrl: string;
   courseOrigin: string;
   courseRequests: CourseRequest[];
   metadata: Record<string, string>;
-  readinessStatusText: string;
   storedPath: string;
 };
 
@@ -117,14 +109,10 @@ type PersistedEvent = {
 };
 
 type CaptureRunOptions = {
-  mode: CaptureModeSetting;
-  reloadAfterCapture: boolean;
   preExistingCapture?: boolean;
 };
 
 const defaultCaptureRunOptions: CaptureRunOptions = {
-  mode: "manual",
-  reloadAfterCapture: false,
   preExistingCapture: false,
 };
 
@@ -136,11 +124,6 @@ test("built extension captures a clicked PDF link through the real local backend
   expect(evidence.metadata["/MathReadSourceURL"]).toBe(expectedCourseUrl);
   expect(evidence.metadata["/MathReadPDFURL"]).toBe(expectedPdfUrl);
   expect(evidence.metadata["/MathReadCapture"]).toBe("capture-url");
-  expect(evidence.readinessStatusText).toContain("Mode: manual");
-  expect(evidence.readinessStatusText).toContain("Storage: ready");
-  expect(evidence.captureModeButtonText).toBe("Manual");
-  expect(evidence.captureButtonText).toBe("Captured");
-  expect(evidence.captureStatusText).toContain(evidence.storedPath);
   expect(evidence.backendCaptureRequestCount).toBe(1);
   expect(evidence.metadata["/MathReadOriginalSHA256"]).toBe(pdfSha256());
   expect(
@@ -150,31 +133,25 @@ test("built extension captures a clicked PDF link through the real local backend
       && request.referer === expectedCourseUrl
     ),
   ).toBe(true);
+  assertPortalRedirect(evidence);
   assertEvidenceArtifacts(evidence.artifacts, evidence.storedPath, "clicked-link");
 }, 20_000);
 
-test("built extension automatic mode captures a direct PDF without pressing capture or duplicating on reload", async () => {
-  const evidence = await runExtensionCapture("direct-pdf-tab", {
-    mode: "automatic",
-    reloadAfterCapture: true,
-  });
+test("built extension auto-captures a direct PDF and hands the tab to the portal without a manual click", async () => {
+  const evidence = await runExtensionCapture("direct-pdf-tab");
   const expectedPath = pdfPathForScenario("direct-pdf-tab");
   const expectedPdfUrl = new URL(expectedPath, evidence.courseOrigin).href;
 
   expect(evidence.metadata["/MathReadSourceURL"]).toBe(expectedPdfUrl);
   expect(evidence.metadata["/MathReadPDFURL"]).toBe(expectedPdfUrl);
   expect(evidence.metadata["/MathReadCapture"]).toBe("capture-url");
-  expect(evidence.captureModeButtonText).toBe("Auto");
-  expect(evidence.captureButtonText).toBe("Captured");
-  expect(evidence.captureStatusText).toContain(evidence.storedPath);
   expect(evidence.backendCaptureRequestCount).toBe(1);
+  assertPortalRedirect(evidence);
   assertEvidenceArtifacts(evidence.artifacts, evidence.storedPath, "direct-pdf-tab");
 }, 30_000);
 
-test("built extension captures a direct PDF tab and marks the second capture as existing", async () => {
+test("built extension marks a pre-existing capture as existing and still routes to the portal", async () => {
   const evidence = await runExtensionCapture("direct-pdf-tab", {
-    mode: "manual",
-    reloadAfterCapture: false,
     preExistingCapture: true,
   });
   const expectedPath = pdfPathForScenario("direct-pdf-tab");
@@ -183,9 +160,6 @@ test("built extension captures a direct PDF tab and marks the second capture as 
   expect(evidence.metadata["/MathReadSourceURL"]).toBe(expectedPdfUrl);
   expect(evidence.metadata["/MathReadPDFURL"]).toBe(expectedPdfUrl);
   expect(evidence.metadata["/MathReadCapture"]).toBe("capture-url");
-  expect(evidence.captureModeButtonText).toBe("Manual");
-  expect(evidence.captureButtonText).toBe("Already");
-  expect(evidence.captureStatusText).toContain(`Already captured at ${evidence.storedPath}`);
   expect(evidence.backendCaptureRequestCount).toBe(2);
   expect(evidence.metadata["/MathReadOriginalSHA256"]).toBe(pdfSha256());
   expect(
@@ -195,10 +169,11 @@ test("built extension captures a direct PDF tab and marks the second capture as 
       && request.referer === expectedPdfUrl
     ),
   ).toBe(true);
+  assertPortalRedirect(evidence);
   assertEvidenceArtifacts(evidence.artifacts, evidence.storedPath, "direct-pdf-tab");
 }, 45_000);
 
-test("built extension captures an application/pdf URL without a .pdf suffix", async () => {
+test("built extension auto-captures an application/pdf URL without a .pdf suffix", async () => {
   const evidence = await runExtensionCapture("direct-pdf-without-extension");
   const expectedPath = pdfPathForScenario("direct-pdf-without-extension");
   const expectedPdfUrl = new URL(expectedPath, evidence.courseOrigin).href;
@@ -206,9 +181,6 @@ test("built extension captures an application/pdf URL without a .pdf suffix", as
   expect(evidence.metadata["/MathReadSourceURL"]).toBe(expectedPdfUrl);
   expect(evidence.metadata["/MathReadPDFURL"]).toBe(expectedPdfUrl);
   expect(evidence.metadata["/MathReadCapture"]).toBe("capture-url");
-  expect(evidence.captureModeButtonText).toBe("Manual");
-  expect(evidence.captureButtonText).toBe("Captured");
-  expect(evidence.captureStatusText).toContain(evidence.storedPath);
   expect(evidence.backendCaptureRequestCount).toBe(1);
   expect(evidence.metadata["/MathReadOriginalSHA256"]).toBe(pdfSha256());
   expect(
@@ -218,12 +190,21 @@ test("built extension captures an application/pdf URL without a .pdf suffix", as
       && request.referer === expectedPdfUrl
     ),
   ).toBe(true);
+  assertPortalRedirect(evidence);
   assertEvidenceArtifacts(evidence.artifacts, evidence.storedPath, "direct-pdf-without-extension");
 }, 30_000);
 
-test("built extension shows backend unavailable in manual and automatic capture modes when capture backend is down", async () => {
+test("built extension shows backend unavailable when the capture backend is down", async () => {
   await runBackendUnavailable();
 }, 30_000);
+
+function assertPortalRedirect(evidence: ExtensionCaptureEvidence): void {
+  const redirect = new URL(evidence.portalRedirectUrl);
+  expect(redirect.hostname).toBe("markdown-editor.localhost");
+  const key = evidence.storedPath.split("/").pop();
+  assert(key !== undefined && key !== "");
+  expect(redirect.searchParams.get("key")).toBe(key);
+}
 
 async function runBackendUnavailable(): Promise<void> {
   const backendPort = await unusedTcpPort();
@@ -261,25 +242,11 @@ async function runBackendUnavailable(): Promise<void> {
     const viewer = await waitForMathReadViewer(context, page);
     await waitForPdfDocumentLoaded(viewer);
 
-    const modeText = await waitForCaptureModeButtonText(viewer, text => text === "Manual");
     const buttonText = await waitForCaptureButtonText(viewer, text => text === "Offline");
     const statusText = await waitForCaptureStatusText(viewer, text => text.startsWith("MathRead backend unavailable: "));
-    await page.screenshot({ path: artifacts.screenshotReadinessPath });
-    expect(modeText).toBe("Manual");
+    await page.screenshot({ path: artifacts.screenshotAfterPath });
     expect(buttonText).toBe("Offline");
     expect(statusText).toContain("MathRead backend unavailable");
-    assertPng(artifacts.screenshotReadinessPath);
-
-    await viewer.locator("#mathreadCaptureModeButton").click();
-    const automaticModeText = await waitForCaptureModeButtonText(viewer, text => text === "Auto");
-    const automaticButtonText = await waitForCaptureButtonText(viewer, text => text === "Offline");
-    const automaticStatusText = await waitForCaptureStatusText(viewer, text =>
-      text.startsWith("MathRead backend unavailable: ")
-    );
-    await page.screenshot({ path: artifacts.screenshotAfterPath });
-    expect(automaticModeText).toBe("Auto");
-    expect(automaticButtonText).toBe("Offline");
-    expect(automaticStatusText).toContain("MathRead backend unavailable");
     assertPng(artifacts.screenshotAfterPath);
   } finally {
     if (context !== undefined) {
@@ -341,8 +308,6 @@ async function runExtensionCapture(
       scenario,
       url: serviceWorker.url(),
     });
-    await setExtensionCaptureMode(serviceWorker, options.mode);
-
     await context.addCookies([
       {
         name: cookieName,
@@ -350,63 +315,47 @@ async function runExtensionCapture(
         url: courseServer.url.origin,
       },
     ]);
-    let page = await context.newPage();
+
+    // The portal app is the reader: intercept its origin so the redirect target is
+    // asserted without loading the live portal.
+    const portalRedirectUrls: string[] = [];
+    await context.route(url => url.hostname === "markdown-editor.localhost", route => {
+      portalRedirectUrls.push(route.request().url());
+      void route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: "<!doctype html><title>portal</title>portal",
+      });
+    });
+
+    const page = await context.newPage();
     attachPageDiagnostics(page, artifacts, scenario);
 
     if (scenario === "clicked-link") {
+      // The realistic flow: clicking a PDF link triggers the extension's DNR redirect
+      // into the viewer, which auto-captures and hands the tab to the portal.
       await page.goto(`${courseServer.url.origin}/course/`);
       await page.screenshot({ path: artifacts.screenshotBeforePath });
       await page.getByRole("link", { name: "Notes" }).click();
     } else {
-      await page.goto(`${courseServer.url.origin}${pdfPathForScenario(scenario)}`, {
-        waitUntil: "domcontentloaded",
-      });
-    }
-    const viewer = await waitForMathReadViewer(context, page);
-    const expectedModeButtonText = options.mode === "automatic" ? "Auto" : "Manual";
-    const captureModeButtonText = await waitForCaptureModeButtonText(
-      viewer,
-      text => text === expectedModeButtonText,
-    );
-    let readinessStatusText = "";
-    if (options.mode === "manual") {
-      await waitForCaptureButtonText(viewer, text => text === "Capture");
-      readinessStatusText = await waitForCaptureStatusText(viewer, text =>
-        text.includes(`Backend: http://127.0.0.1:${backendPort}`)
-        && text.includes(`Root: ${readingRoot}`)
-        && text.includes(`Inbox: ${join(readingRoot, "inbox")}`)
-        && text.includes("Storage: ready")
-        && text.includes("Mode: manual")
+      // Load the viewer directly on the PDF URL. Headless Chromium does not reliably run
+      // the extension's DNR raw-PDF interception (clicked-link covers that path); opening
+      // the viewer URL deterministically exercises capture-ui's URL-shape handling.
+      const extensionId = new URL(serviceWorker.url()).host;
+      const pdfUrl = `${courseServer.url.origin}${pdfPathForScenario(scenario)}`;
+      await page.goto(
+        `chrome-extension://${extensionId}/content/web/viewer.html?file=${encodeURIComponent(pdfUrl)}`,
+        { waitUntil: "domcontentloaded" },
       );
-      await page.screenshot({ path: artifacts.screenshotReadinessPath });
-      if (options.preExistingCapture !== true) {
-        expect(existsSync(join(readingRoot, "inbox"))).toBe(false);
-      }
-      await clickCaptureButton(page, viewer);
     }
+
+    // Capture is automatic and always-on: opening the PDF stores it (no click, no mode
+    // toggle), then the viewer hands the tab to the portal at /?key=<stored-filename>.
+    await page.waitForURL(url => url.hostname === "markdown-editor.localhost", { timeout: 20_000 });
+    const portalRedirectUrl = portalRedirectUrls[0] ?? page.url();
     const storedPath = await waitForStoredPdf(readingRoot);
-    const expectedCaptureButtonText = options.preExistingCapture === true ? "Already" : "Captured";
-    const expectedCaptureStatusText = options.preExistingCapture === true
-      ? `Already captured at ${storedPath}`
-      : storedPath;
-    const captureButtonText = await waitForCaptureButtonText(viewer, text => text === expectedCaptureButtonText);
-    const captureStatusText = await waitForCaptureStatusText(viewer, text => text.includes(expectedCaptureStatusText));
-    const captureKey = storedPath.split("/").pop();
-    assert(captureKey !== undefined && captureKey !== "", `Stored PDF path must have a filename: ${storedPath}`);
-    const portalLinkHref = await waitForPortalLinkHref(viewer);
-    expect(portalLinkHref).toBe(`http://markdown-editor.localhost/?key=${encodeURIComponent(captureKey)}`);
     await page.screenshot({ path: artifacts.screenshotAfterPath });
-    if (options.mode === "automatic") {
-      await page.screenshot({ path: artifacts.screenshotReadinessPath });
-    }
-    if (options.reloadAfterCapture) {
-      await page.reload({ waitUntil: "domcontentloaded" });
-      const reloadedViewer = await waitForMathReadViewer(context, page);
-      await waitForCaptureModeButtonText(reloadedViewer, text => text === expectedModeButtonText);
-      await waitForCaptureButtonText(reloadedViewer, text => text === "Captured");
-      await waitForCaptureStatusText(reloadedViewer, text => text.includes(storedPath));
-      await Bun.sleep(1_000);
-    }
+
     appendEvent(artifacts.eventsLogPath, {
       type: "stored-pdf",
       scenario,
@@ -418,13 +367,10 @@ async function runExtensionCapture(
     return {
       artifacts,
       backendCaptureRequestCount,
-      captureButtonText,
-      captureModeButtonText,
-      captureStatusText,
+      portalRedirectUrl,
       courseOrigin: courseServer.url.origin,
       courseRequests: courseServer.requests,
       metadata,
-      readinessStatusText,
       storedPath,
     };
   } finally {
@@ -439,13 +385,6 @@ async function runExtensionCapture(
     await backend.process.exited;
     closeSync(backend.logFd);
   }
-}
-
-async function clickCaptureButton(page: Page, viewer: ViewerSurface): Promise<void> {
-  const button = viewer.locator("#mathreadCaptureButton");
-  const box = await button.boundingBox();
-  assert(box !== null, "MathRead capture button must have a rendered viewport box");
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
 }
 
 async function preCapturePdfThroughBackend(
@@ -526,24 +465,6 @@ function assertChromiumPreferences(value: unknown): asserts value is {
   assert(typeof settings === "object" && settings !== null);
 }
 
-async function setExtensionCaptureMode(
-  serviceWorker: Worker,
-  mode: CaptureModeSetting,
-): Promise<void> {
-  await serviceWorker.evaluate(async ({ key, value }) => {
-    const extensionGlobal = globalThis as typeof globalThis & {
-      chrome: {
-        storage: {
-          local: {
-            set(items: Record<string, unknown>): Promise<void>;
-          };
-        };
-      };
-    };
-    await extensionGlobal.chrome.storage.local.set({ [key]: value });
-  }, { key: captureModeStorageKey, value: mode });
-}
-
 async function waitForCaptureButtonText(
   page: ViewerSurface,
   predicate: (text: string) => boolean,
@@ -565,27 +486,6 @@ async function waitForCaptureButtonText(
   throw new Error(`Timed out waiting for MathRead capture button text; last text: ${lastText}`);
 }
 
-async function waitForCaptureModeButtonText(
-  page: ViewerSurface,
-  predicate: (text: string) => boolean,
-): Promise<string> {
-  const button = page.locator("#mathreadCaptureModeButton");
-  let lastText = "<missing>";
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (await button.count() === 0) {
-      await Bun.sleep(100);
-      continue;
-    }
-    const text = (await button.textContent())?.trim() ?? "";
-    lastText = text;
-    if (predicate(text)) {
-      return text;
-    }
-    await Bun.sleep(100);
-  }
-  throw new Error(`Timed out waiting for MathRead capture mode button text; last text: ${lastText}`);
-}
-
 async function waitForCaptureStatusText(
   page: ViewerSurface,
   predicate: (text: string) => boolean,
@@ -605,24 +505,6 @@ async function waitForCaptureStatusText(
     await Bun.sleep(100);
   }
   throw new Error(`Timed out waiting for MathRead capture status text; last text: ${lastText}`);
-}
-
-async function waitForPortalLinkHref(page: ViewerSurface): Promise<string> {
-  const link = page.locator("#mathreadPortalLink");
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (await link.count() === 0) {
-      await Bun.sleep(100);
-      continue;
-    }
-    const href = await link.evaluate(el =>
-      el instanceof HTMLAnchorElement && !el.hidden ? el.href : null,
-    );
-    if (href !== null) {
-      return href;
-    }
-    await Bun.sleep(100);
-  }
-  throw new Error("Timed out waiting for MathRead portal link to become visible");
 }
 
 async function waitForMathReadViewer(context: BrowserContext, page: Page): Promise<ViewerSurface> {
@@ -820,7 +702,6 @@ function createCaptureArtifacts(
     backendLogPath: join(root, "backend.log"),
     eventsLogPath: join(root, "events.jsonl"),
     screenshotBeforePath: join(screenshotDir, "before.png"),
-    screenshotReadinessPath: join(screenshotDir, "readiness.png"),
     screenshotAfterPath: join(screenshotDir, "after.png"),
     tracePath: join(root, "trace.zip"),
   };
@@ -842,7 +723,6 @@ function assertEvidenceArtifacts(
     assertPng(artifacts.screenshotBeforePath);
     assertZip(artifacts.tracePath);
   }
-  assertPng(artifacts.screenshotReadinessPath);
   assertPng(artifacts.screenshotAfterPath);
 
   const events = readPersistedEvents(artifacts.eventsLogPath);

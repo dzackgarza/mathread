@@ -1,10 +1,9 @@
 import {
   captureRequestForClickedPdfLink,
-  type CaptureModeStorage,
+  type ExtensionLocalStorage,
   isLikelyPdfUrl,
   rememberPdfLinkOrigin,
   runtimeCaptureMessage,
-  storedCaptureMode,
 } from "./capture-client";
 
 type ChromeRuntime = {
@@ -12,7 +11,7 @@ type ChromeRuntime = {
     sendMessage(message: unknown): Promise<unknown>;
   };
   storage: {
-    local: CaptureModeStorage;
+    local: ExtensionLocalStorage;
   };
 };
 
@@ -55,18 +54,15 @@ async function captureClickedPdfLink(target: Element): Promise<void> {
     return;
   }
 
+  // Capture with the click origin as the source immediately. This capture is dispatched
+  // at click time — long before the viewer exists — so it wins the pdf_url-keyed dedup
+  // against the viewer's own auto-capture, which cannot resolve the true source. Persist
+  // the origin afterward as a backup for viewers opened later on the same PDF.
+  void chrome.runtime.sendMessage(runtimeCaptureMessage(request));
   await rememberPdfLinkOrigin(chrome.storage.local, request);
-  if (await storedCaptureMode(chrome.storage.local) === "automatic") {
-    void chrome.runtime.sendMessage(runtimeCaptureMessage(request));
-    return;
-  }
 }
 
 async function capturePdfFromCurrentDocument(): Promise<void> {
-  if (await storedCaptureMode(chrome.storage.local) !== "automatic") {
-    return;
-  }
-
   if (document.contentType.toLowerCase() !== "application/pdf") {
     return;
   }

@@ -1,8 +1,5 @@
 import {
-  type CaptureModeSetting,
-  type CaptureModeStorage,
-  setStoredCaptureMode,
-  storedCaptureMode,
+  type ExtensionLocalStorage,
   storedPdfLinkOrigin,
 } from "./capture-client";
 
@@ -23,7 +20,7 @@ type ChromeRuntime = {
     sendMessage(message: unknown): Promise<unknown>;
   };
   storage: {
-    local: CaptureModeStorage;
+    local: ExtensionLocalStorage;
   };
 };
 
@@ -93,7 +90,6 @@ const captureUiConfig: CaptureUiConfig = {
 let installedCaptureUi = false;
 let backendState: BackendState = { kind: "checking" };
 let captureState: CaptureState = { kind: "idle" };
-let captureMode: CaptureModeSetting | undefined = undefined;
 const automaticCapturePdfUrls = new Set<string>();
 
 void initCaptureUi();
@@ -230,7 +226,6 @@ function wait(ms: number): Promise<void> {
 async function initializeCaptureButton(): Promise<void> {
   for (let attempt = 0; attempt < captureUiConfig.urlResolutionMaxRetries; attempt += 1) {
     if (synchronizeCaptureButton()) {
-      await initializeCaptureMode();
       await refreshBackendStatus();
       const captureBtn = currentCaptureButton();
       if (captureBtn !== undefined) {
@@ -240,11 +235,6 @@ async function initializeCaptureButton(): Promise<void> {
     }
     await wait(captureUiConfig.initializationRetryMs);
   }
-}
-
-async function initializeCaptureMode(): Promise<void> {
-  captureMode = await storedCaptureMode(chrome.storage.local);
-  synchronizeCaptureButton();
 }
 
 async function triggerCapture(captureBtn: HTMLButtonElement): Promise<void> {
@@ -258,9 +248,6 @@ async function triggerCapture(captureBtn: HTMLButtonElement): Promise<void> {
 }
 
 async function triggerAutomaticCapture(captureBtn: HTMLButtonElement): Promise<void> {
-  if (captureMode !== "automatic") {
-    return;
-  }
   if (backendState.kind !== "ready" || !backendState.status.capabilities.capture) {
     return;
   }
@@ -298,6 +285,11 @@ async function captureResolvedPdf(
   if (captureResponse.ok) {
     captureState = { kind: "success", result: captureResponse.result };
     renderCaptureButton(captureBtn);
+    // The portal app is the reader: hand the just-captured PDF straight to it.
+    const target = portalDeepLink(captureResponse.result);
+    if (target !== undefined) {
+      window.location.href = target;
+    }
     return;
   }
   captureState = { kind: "failure", error: captureResponse.error };
@@ -318,7 +310,6 @@ function synchronizeCaptureButton(): boolean {
     return false;
   }
   captureBtn.classList.add("mathreadToolbarTextButton");
-  synchronizeCaptureModeButton(captureBtn);
   if (captureBtn.dataset.mathreadCaptureBound !== "true") {
     captureBtn.dataset.mathreadCaptureBound = "true";
     captureBtn.addEventListener("click", event => {
@@ -331,43 +322,6 @@ function synchronizeCaptureButton(): boolean {
   }
   renderCaptureButton(captureBtn);
   return true;
-}
-
-function synchronizeCaptureModeButton(captureBtn: HTMLButtonElement): void {
-  const modeBtn = captureModeButton(captureBtn);
-  if (modeBtn.dataset.mathreadCaptureModeBound !== "true") {
-    modeBtn.dataset.mathreadCaptureModeBound = "true";
-    modeBtn.addEventListener("click", event => {
-      event.preventDefault();
-      void toggleCaptureMode(captureBtn);
-    });
-  }
-  renderCaptureModeButton(modeBtn);
-}
-
-function captureModeButton(captureBtn: HTMLButtonElement): HTMLButtonElement {
-  const existing = document.getElementById("mathreadCaptureModeButton");
-  if (existing instanceof HTMLButtonElement) {
-    return existing;
-  }
-
-  const modeBtn = document.createElement("button");
-  modeBtn.id = "mathreadCaptureModeButton";
-  modeBtn.className = "toolbarButton mathreadToolbarTextButton";
-  modeBtn.type = "button";
-  modeBtn.tabIndex = 0;
-  captureBtn.insertAdjacentElement("afterend", modeBtn);
-  return modeBtn;
-}
-
-async function toggleCaptureMode(captureBtn: HTMLButtonElement): Promise<void> {
-  const nextMode: CaptureModeSetting = captureMode === "automatic" ? "manual" : "automatic";
-  await setStoredCaptureMode(chrome.storage.local, nextMode);
-  captureMode = nextMode;
-  synchronizeCaptureButton();
-  if (nextMode === "automatic") {
-    await triggerAutomaticCapture(captureBtn);
-  }
 }
 
 async function refreshBackendStatus(): Promise<void> {
@@ -453,7 +407,6 @@ function renderCaptureFailure(captureBtn: HTMLButtonElement, error: string): voi
 }
 
 function renderCaptureButton(captureBtn: HTMLButtonElement): void {
-  renderPortalLink(captureState.kind === "success" ? captureState.result : undefined);
   if (captureState.kind === "in-flight") {
     renderCaptureInFlight(captureBtn);
     return;
@@ -579,30 +532,10 @@ function setButtonPresentation(
   }
 }
 
-function renderCaptureModeButton(modeBtn: HTMLButtonElement): void {
-  const mode = captureMode;
-  if (mode === undefined) {
-    setButtonPresentation(modeBtn, {
-      disabled: true,
-      text: "Mode",
-      title: "Loading MathRead capture mode",
-    });
-    return;
-  }
-
-  setButtonPresentation(modeBtn, {
-    disabled: false,
-    text: mode === "automatic" ? "Auto" : "Manual",
-    title: `MathRead capture mode: ${mode}`,
-  });
-}
-
 function backendReadinessText(status: BackendStatus): string {
   const storageState = status.ready ? "ready" : "not ready";
-  const modeState = captureMode === undefined ? "loading" : captureMode;
   return [
     status.ready ? "MathRead backend ready" : "MathRead backend storage not ready",
-    `Mode: ${modeState}`,
     `Backend: ${status.backend_url}`,
     `Root: ${status.root}`,
     `Inbox: ${status.inbox}`,
@@ -622,36 +555,13 @@ function renderCaptureStatus(text: string): void {
   }
 }
 
-function renderPortalLink(result: CaptureResult | undefined): void {
-  const link = portalLinkAnchor();
-  if (
-    result === undefined ||
-    backendState.kind !== "ready" ||
-    !backendState.status.capabilities.open_file
-  ) {
-    link.hidden = true;
-    return;
+function portalDeepLink(result: CaptureResult): string | undefined {
+  if (backendState.kind !== "ready" || !backendState.status.capabilities.open_file) {
+    return undefined;
   }
   const key = result.stored_path.split("/").pop();
   invariant(key !== undefined && key !== "", `MathRead stored_path has no filename: ${result.stored_path}`);
-  link.href = `${backendState.status.portal_url}/?key=${encodeURIComponent(key)}`;
-  link.hidden = false;
-}
-
-function portalLinkAnchor(): HTMLAnchorElement {
-  const existing = document.getElementById("mathreadPortalLink");
-  if (existing instanceof HTMLAnchorElement) {
-    return existing;
-  }
-
-  const link = document.createElement("a");
-  link.id = "mathreadPortalLink";
-  link.target = "_blank";
-  link.rel = "noopener";
-  link.innerText = "Open in portal";
-  link.hidden = true;
-  document.body.append(link);
-  return link;
+  return `${backendState.status.portal_url}/?key=${encodeURIComponent(key)}`;
 }
 
 function captureStatusPanel(): HTMLDivElement {

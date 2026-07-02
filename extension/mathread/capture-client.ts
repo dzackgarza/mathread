@@ -20,9 +20,7 @@ export type CaptureResult = {
   existing: boolean;
 };
 
-export type CaptureModeSetting = "manual" | "automatic";
-
-export type CaptureModeStorage = {
+export type ExtensionLocalStorage = {
   get(keys: string[]): Promise<Record<string, unknown>>;
   set(items: Record<string, unknown>): Promise<void>;
 };
@@ -41,7 +39,6 @@ export type RuntimeCaptureMessage = {
   request: CaptureUrlRequest;
 };
 
-export const captureModeStorageKey = "mathread.captureMode";
 export const pdfLinkOriginsStorageKey = "mathread.pdfLinkOrigins";
 
 export function isLikelyPdfUrl(rawUrl: string): boolean {
@@ -85,27 +82,8 @@ export async function postCaptureUrl(
   return parseCaptureResult(await response.json());
 }
 
-export async function storedCaptureMode(
-  storage: CaptureModeStorage,
-): Promise<CaptureModeSetting> {
-  const values = await storage.get([captureModeStorageKey]);
-  const value = values[captureModeStorageKey];
-  if (value === undefined) {
-    await storage.set({ [captureModeStorageKey]: "manual" });
-    return "manual";
-  }
-  return parseCaptureModeSetting(value);
-}
-
-export async function setStoredCaptureMode(
-  storage: CaptureModeStorage,
-  mode: CaptureModeSetting,
-): Promise<void> {
-  await storage.set({ [captureModeStorageKey]: mode });
-}
-
 export async function rememberPdfLinkOrigin(
-  storage: CaptureModeStorage,
+  storage: ExtensionLocalStorage,
   request: CaptureUrlRequest,
 ): Promise<void> {
   const values = await storage.get([pdfLinkOriginsStorageKey]);
@@ -117,7 +95,7 @@ export async function rememberPdfLinkOrigin(
 }
 
 export async function storedPdfLinkOrigin(
-  storage: CaptureModeStorage,
+  storage: ExtensionLocalStorage,
   pdfUrl: string,
 ): Promise<PdfLinkOrigin | undefined> {
   const values = await storage.get([pdfLinkOriginsStorageKey]);
@@ -145,14 +123,6 @@ export function captureUrlEndpointFromManifest(manifest: {
     `extension backend permission must end with /*: ${backendPermission}`,
   );
   return `${backendPermission.slice(0, -2)}/capture-url`;
-}
-
-function parseCaptureModeSetting(value: unknown): CaptureModeSetting {
-  invariant(
-    value === "manual" || value === "automatic",
-    "MathRead capture mode must be manual or automatic",
-  );
-  return value;
 }
 
 function parsePdfLinkOrigins(value: unknown): Record<string, PdfLinkOrigin> {

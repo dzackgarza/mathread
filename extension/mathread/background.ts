@@ -1,13 +1,11 @@
 import {
   type CaptureResult,
   type CaptureHeaders,
-  type CaptureModeStorage,
   type RuntimeCaptureResponse,
   type RuntimeCaptureMessage,
   type CaptureUrlRequest,
   captureUrlEndpointFromManifest,
   postCaptureUrl,
-  storedCaptureMode,
 } from "./capture-client";
 
 type ChromeCookie = {
@@ -18,7 +16,6 @@ type ChromeCookie = {
 type ChromeApi = {
   runtime: {
     getManifest(): { host_permissions?: string[] };
-    getURL(path: string): string;
     onMessage: {
       addListener(
         listener: (
@@ -29,22 +26,8 @@ type ChromeApi = {
       ): void;
     };
   };
-  tabs: {
-    onUpdated: {
-      addListener(
-        listener: (
-          tabId: number,
-          changeInfo: { status?: string },
-          tab: { url?: string; title?: string },
-        ) => void,
-      ): void;
-    };
-  };
   cookies: {
     getAll(details: { url: string }): Promise<ChromeCookie[]>;
-  };
-  storage: {
-    local: CaptureModeStorage;
   };
 };
 
@@ -69,36 +52,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     });
   return true;
 });
-
-chrome.tabs.onUpdated.addListener((_, changeInfo, tab) => {
-  void captureUpdatedPdfTab(changeInfo, tab);
-});
-
-async function captureUpdatedPdfTab(
-  changeInfo: { status?: string },
-  tab: { url?: string; title?: string },
-): Promise<void> {
-  if (await storedCaptureMode(chrome.storage.local) !== "automatic") {
-    return;
-  }
-
-  if (changeInfo.status !== "complete" || tab.url === undefined) {
-    return;
-  }
-
-  const captureUrl = capturePdfUrlFromTab(tab.url);
-  if (captureUrl === undefined) {
-    return;
-  }
-
-  await capturePdfUrl({
-    pdf_url: captureUrl,
-    source_url: captureUrl,
-    ...(tab.title === undefined ? {} : { title_hint: tab.title }),
-  });
-}
-
-
 
 async function capturePdfUrl(request: CaptureUrlRequest): Promise<CaptureResult> {
   const now = Date.now();
@@ -180,75 +133,3 @@ async function requestHeaders(
   };
 }
 
-function capturePdfUrlFromTab(tabUrl: string): string | undefined {
-  const viewerUrl = chrome.runtime.getURL("content/web/viewer.html");
-  if (!tabUrl.startsWith(viewerUrl)) {
-    return captureUrlFromExtensionChromeScheme(tabUrl) ?? captureUrlFromTopLevelPdfUrl(tabUrl);
-  }
-
-  const queryString = new URL(tabUrl).search.slice(1);
-  const fileMatch = /(?:^|&)file=([^&]*)/.exec(queryString);
-  const fileMatchValue = fileMatch?.[1];
-  if (fileMatchValue !== undefined && fileMatchValue.length > 0) {
-    const candidate = decodeCandidate(fileMatchValue);
-    return parsePdfUrl(candidate);
-  }
-
-  if (!queryString.startsWith("DNR:")) {
-    return undefined;
-  }
-
-  const candidate = decodeCandidate(queryString.slice(4));
-  return parsePdfUrl(candidate);
-}
-
-function decodeCandidate(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-function isLikelyPdfUrl(rawUrl: string): boolean {
-  try {
-    const parsedUrl = new URL(rawUrl);
-    return (parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:")
-      && parsedUrl.pathname.toLowerCase().endsWith(".pdf");
-  } catch {
-    return false;
-  }
-}
-
-function parsePdfUrl(rawUrl: string): string | undefined {
-  try {
-    const parsedUrl = new URL(rawUrl);
-    return parsedUrl.href;
-  } catch {
-    return undefined;
-  }
-}
-
-function captureUrlFromExtensionChromeScheme(tabUrl: string): string | undefined {
-  try {
-    const parsedUrl = new URL(tabUrl);
-    if (parsedUrl.protocol !== "chrome-extension:") {
-      return undefined;
-    }
-
-    const candidate = decodeCandidate(parsedUrl.pathname.replace(/^\//, ""));
-    if (!/^(?:https?|file):\/\//i.test(candidate)) {
-      return undefined;
-    }
-    return parsePdfUrl(candidate);
-  } catch {
-    return undefined;
-  }
-}
-
-function captureUrlFromTopLevelPdfUrl(tabUrl: string): string | undefined {
-  if (!isLikelyPdfUrl(tabUrl)) {
-    return undefined;
-  }
-  return tabUrl;
-}
