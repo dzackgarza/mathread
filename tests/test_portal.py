@@ -139,6 +139,35 @@ def test_read_event_sets_first_read_once_and_updates_last_position(
     assert after_second["last_position"] == 0.9
 
 
+def test_delete_removes_pdf_sidecar_assets_and_history(
+    client: TestClient,
+    sample_pdf_bytes: bytes,
+    tmp_path: Path,
+) -> None:
+    key = capture(client, sample_pdf_bytes)
+    inbox = tmp_path / "reading-root" / "inbox"
+    client.put(f"/notes/{key}", json={"key": key, "text": "notes"})
+    client.post(f"/notes/{key}/image", files={"image": ("clip.png", PNG_PIXEL, "image/png")})
+    client.post("/read-event", json={"key": key, "position": 0.4})
+    assert (inbox / "notes.pdf").is_file()
+    assert (inbox / "notes.md").is_file()
+    assert (inbox / "notes.assets" / "clip-01.png").is_file()
+    assert key in (tmp_path / "reading-root" / "library.json").read_text(encoding="utf-8")
+
+    response = client.delete(f"/library/{key}")
+
+    assert response.status_code == 204
+    assert not (inbox / "notes.pdf").exists()
+    assert not (inbox / "notes.md").exists()
+    assert not (inbox / "notes.assets").exists()
+    assert key not in (tmp_path / "reading-root" / "library.json").read_text(encoding="utf-8")
+    assert client.get("/library").json() == []
+
+
+def test_delete_unknown_key_is_404(client: TestClient) -> None:
+    assert client.delete("/library/ghost.pdf").status_code == 404
+
+
 def test_unknown_key_is_404_across_note_image_and_read_event(client: TestClient) -> None:
     assert client.get("/notes/ghost.pdf").status_code == 404
     assert client.put("/notes/ghost.pdf", json={"key": "ghost.pdf", "text": "x"}).status_code == 404

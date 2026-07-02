@@ -16,6 +16,7 @@ stays authoritative inside each PDF and is read live.
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypedDict, cast
@@ -128,6 +129,20 @@ def write_note_image(root: Path, key: str, png_bytes: bytes) -> str:
     image_path = assets_dir / f"clip-{index:02d}.png"
     image_path.write_bytes(png_bytes)
     return f"{assets_dir.name}/{image_path.name}"
+
+
+def delete_library_entry(root: Path, key: str) -> None:
+    """Remove a stored PDF together with its sidecar note, assets dir, and read-history."""
+    pdf = resolve_pdf(root, key)
+    note_path, assets_dir = sidecar_paths(pdf)
+    pdf.unlink()
+    note_path.unlink(missing_ok=True)
+    if assets_dir.is_dir():
+        shutil.rmtree(assets_dir)
+    history = _load_history(root)
+    if key in history:
+        del history[key]
+        _save_history(root, history)
 
 
 def record_read_event(root: Path, key: str, position: float | None) -> None:

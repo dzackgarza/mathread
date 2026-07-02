@@ -50,4 +50,9 @@ def create_portal_router(root: Path) -> APIRouter:
         library.record_read_event(root, event.key, event.position)
         return Response(status_code=204)
 
+    @router.delete("/library/{key}")
+    def delete_entry(key: str) -> Response:
+        library.delete_library_entry(root, key)
+        return Response(status_code=204)
+
     return router
