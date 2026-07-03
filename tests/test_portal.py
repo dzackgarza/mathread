@@ -67,6 +67,28 @@ def test_library_lists_captured_pdf_with_provenance_and_capture_time_read_baseli
     assert entry["last_position"] == 0.0
 
 
+def test_library_title_falls_back_to_stem_when_title_hint_is_blank(
+    client: TestClient,
+    sample_pdf_bytes: bytes,
+) -> None:
+    # A direct PDF navigation captures before the browser sets document.title, so the
+    # extension can legitimately send an empty hint; a blank hint is not a title.
+    response = client.post(
+        "/capture-bytes",
+        data={
+            "source_url": "https://arxiv.org/pdf/1703.05882",
+            "pdf_url": "https://arxiv.org/pdf/1703.05882",
+            "title_hint": "  ",
+        },
+        files={"pdf": ("1703.05882.pdf", sample_pdf_bytes, "application/pdf")},
+    )
+    assert response.status_code == 200
+
+    entries = client.get("/library").json()
+    assert len(entries) == 1
+    assert entries[0]["title"] == "1703.05882"
+
+
 def test_note_round_trip_writes_sidecar_next_to_pdf(
     client: TestClient,
     sample_pdf_bytes: bytes,
