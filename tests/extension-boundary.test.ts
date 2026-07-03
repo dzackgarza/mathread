@@ -139,13 +139,14 @@ test("reader Library panel lists, opens, and trashes captured items against the 
     await expectElementText(firstEntry.locator(".library-entry-meta"), text => text.includes("📝"));
     await expectElementText(firstEntry.locator(".library-entry-meta"), text => text.includes("just now"));
 
-    // Selecting another entry re-enters the reader through the backend copy: the tab
-    // navigates to GET /pdf/{key} and the content script swaps the reader in for that key.
+    // The library is URL-first: selecting an entry navigates the tab back to the item's
+    // source URL (never GET /pdf/{key} — the local copy is provenance backup only), and
+    // the interception path recognizes the already-captured PDF and mounts the reader.
     await page.locator('[data-testid="library-entry"]', { hasText: "AST_1992" })
       .locator('[data-testid="library-entry-open"]')
       .click();
     await waitForReaderFrame(page, secondKey);
-    expect(new URL(page.url()).pathname).toBe(`/pdf/${secondKey}`);
+    expect(new URL(page.url()).pathname).toBe(pdfPathForScenario("large-numdam-pdf"));
 
     const reader = await waitForReaderFrame(page, secondKey);
     // Let the reader finish its synchronous page-render pass before interacting —

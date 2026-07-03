@@ -830,9 +830,10 @@ function renderLibraryEntries(entries) {
       if (entry.key === libraryKey) {
         return;
       }
-      // Navigating the top window to the backend copy re-enters the reader through the
-      // same interception path as a fresh capture (reader-swap.ts recognizes the key).
-      window.top.location.href = backendPdfUrl(entry.key);
+      // The library is URL-first: opening an item navigates back to its source URL, and
+      // the interception path (reader-swap.ts) captures/recognizes it from there. The
+      // locally stored copy is provenance backup only, never the serving source.
+      window.top.location.href = entry.pdf_url;
     });
 
     const trash = document.createElement("button");
