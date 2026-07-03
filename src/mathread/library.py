@@ -88,7 +88,9 @@ def list_library(root: Path) -> list[LibraryEntry]:
                 source_url=provenance.source_url,
                 capture=provenance.capture,
                 original_sha256=provenance.original_sha256,
-                title=provenance.title_hint if provenance.title_hint is not None else pdf.stem,
+                # A blank hint is not a title: direct PDF navigations capture before the
+                # browser sets document.title, so hints can arrive empty.
+                title=_entry_title(provenance.title_hint, pdf),
                 has_note=note_path.is_file(),
                 first_read=read_state["first_read"],
                 last_read=read_state["last_read"],
@@ -96,6 +98,12 @@ def list_library(root: Path) -> list[LibraryEntry]:
             )
         )
     return entries
+
+
+def _entry_title(title_hint: str | None, pdf: Path) -> str:
+    if title_hint is not None and title_hint.strip():
+        return title_hint.strip()
+    return pdf.stem
 
 
 def _read_state(pdf: Path, history: History) -> HistoryRecord:

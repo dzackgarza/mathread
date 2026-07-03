@@ -58,11 +58,14 @@ async function interceptPdfDocument(): Promise<void> {
 
 async function captureRequest(pdfUrl: string): Promise<CaptureUrlRequest> {
   const storedOrigin = await storedPdfLinkOrigin(chrome.storage.local, pdfUrl);
-  return {
+  const request: CaptureUrlRequest = {
     pdf_url: pdfUrl,
     source_url: storedOrigin?.source_url ?? referrerSourceUrl(pdfUrl),
-    title_hint: storedOrigin?.title_hint ?? document.title,
   };
+  // Direct PDF navigations run before the browser sets document.title — a blank
+  // hint is no hint.
+  const titleHint = (storedOrigin?.title_hint ?? document.title).trim();
+  return titleHint.length > 0 ? { ...request, title_hint: titleHint } : request;
 }
 
 /** Prefer the referring page as provenance, unless it is just the PDF itself or a site root. */
