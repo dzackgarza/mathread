@@ -1,6 +1,7 @@
 import {
   captureRequestForClickedPdfLink,
   type ExtensionLocalStorage,
+  isBackendServedPdfUrl,
   isLikelyPdfUrl,
   rememberPdfLinkOrigin,
   runtimeCaptureMessage,
@@ -8,6 +9,7 @@ import {
 
 type ChromeRuntime = {
   runtime: {
+    getManifest(): { host_permissions?: string[] };
     sendMessage(message: unknown): Promise<unknown>;
   };
   storage: {
@@ -64,6 +66,11 @@ async function captureClickedPdfLink(target: Element): Promise<void> {
 
 async function capturePdfFromCurrentDocument(): Promise<void> {
   if (document.contentType.toLowerCase() !== "application/pdf") {
+    return;
+  }
+  // A PDF served from the backend's own /pdf/{key} route (library reopen) is already
+  // captured — capturing it again would store the backend's copy as a new item.
+  if (isBackendServedPdfUrl(document.location.href, chrome.runtime.getManifest())) {
     return;
   }
 

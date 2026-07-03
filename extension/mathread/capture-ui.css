@@ -1,5 +1,7 @@
 #mathreadCaptureButton.mathreadToolbarTextButton,
-#mathreadCaptureModeButton.mathreadToolbarTextButton {
+#mathreadCaptureModeButton.mathreadToolbarTextButton,
+#mathreadCopyPlainLinkButton.mathreadToolbarTextButton,
+#mathreadCopyCurrentViewLinkButton.mathreadToolbarTextButton {
   width: auto;
   min-width: 58px;
   padding-inline: 8px;
@@ -7,7 +9,9 @@
 }
 
 #mathreadCaptureButton.mathreadToolbarTextButton::before,
-#mathreadCaptureModeButton.mathreadToolbarTextButton::before {
+#mathreadCaptureModeButton.mathreadToolbarTextButton::before,
+#mathreadCopyPlainLinkButton.mathreadToolbarTextButton::before,
+#mathreadCopyCurrentViewLinkButton.mathreadToolbarTextButton::before {
   content: none;
   display: none;
 }

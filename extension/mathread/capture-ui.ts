@@ -1,11 +1,23 @@
 import {
+  backendOriginFromManifest,
   type ExtensionLocalStorage,
+  isBackendServedPdfUrl,
+  isLikelyOriginalPdfUrl,
+  pdfUrlFromLocation,
   storedPdfLinkOrigin,
 } from "./capture-client";
 
 type MathReadPdfViewerApplication = {
   url: string;
   initializedPromise: Promise<unknown>;
+  page: number;
+  eventBus?: {
+    on(eventName: "pagechanging", listener: (event: { pageNumber: number }) => void): void;
+  };
+  pdfViewer: {
+    currentPageNumber: number;
+    currentScaleValue: string | null;
+  };
 };
 
 declare global {
@@ -17,6 +29,7 @@ declare global {
 type ChromeRuntime = {
   runtime: {
     getManifest(): { host_permissions?: string[] };
+    getURL(path: string): string;
     sendMessage(message: unknown): Promise<unknown>;
   };
   storage: {
@@ -88,44 +101,31 @@ const captureUiConfig: CaptureUiConfig = {
 };
 
 let installedCaptureUi = false;
+let installedViewerHistoryNavigation = false;
 let backendState: BackendState = { kind: "checking" };
 let captureState: CaptureState = { kind: "idle" };
+let libraryReopenPage = false;
 const automaticCapturePdfUrls = new Set<string>();
+const viewerPageHistory = {
+  backStack: [] as number[],
+  forwardStack: [] as number[],
+  currentPage: undefined as number | undefined,
+  navigating: false,
+};
 
+// PDF-document interception lives in reader-swap.ts; this script only serves the
+// (retired) vendored-viewer capture UI surface.
 void initCaptureUi();
 
-function isLikelyOriginalPdfUrl(value: string): boolean {
-  return /^[-a-zA-Z0-9+.]+:\/\//.test(value) || value.startsWith("file://");
-}
-
 function getPdfUrlFromPage(): string | undefined {
-  const queryString = window.location.search.slice(1);
-  const fileMatch = /(?:^|&)file=([^&]*)/.exec(queryString);
-  const fileParam = fileMatch?.[1];
-  if (fileParam !== undefined && fileParam.length > 0) {
-    const decodedFile = safeDecode(fileParam);
-    if (isLikelyOriginalPdfUrl(decodedFile)) {
-      return decodedFile;
-    }
-  }
-  if (queryString.startsWith("DNR:")) {
-    const dnrFile = safeDecode(queryString.slice(4));
-    if (isLikelyOriginalPdfUrl(dnrFile)) {
-      return dnrFile;
-    }
-  }
-
-  const dnrPath = window.location.pathname;
-  if (dnrPath.startsWith("/")) {
-    const candidate = safeDecode(dnrPath.slice(1));
-    if (isLikelyOriginalPdfUrl(candidate)) {
-      return candidate;
-    }
+  const fromLocation = pdfUrlFromLocation(window.location.search, window.location.pathname);
+  if (fromLocation !== undefined) {
+    return isBackendServedPdfUrl(fromLocation, chrome.runtime.getManifest()) ? undefined : fromLocation;
   }
 
   const app = window.PDFViewerApplication;
   if (app !== undefined && isLikelyOriginalPdfUrl(app.url)) {
-    return app.url;
+    return isBackendServedPdfUrl(app.url, chrome.runtime.getManifest()) ? undefined : app.url;
   }
 
   return undefined;
@@ -176,10 +176,12 @@ function installCaptureUi(): void {
 
   const observer = new MutationObserver(() => {
     synchronizeCaptureButton();
+    synchronizeCopyLinkButtons();
   });
   observer.observe(document.body, { childList: true, subtree: true });
   window.setInterval(() => {
     synchronizeCaptureButton();
+    synchronizeCopyLinkButtons();
   }, captureUiConfig.initializationRetryMs);
   void initializeCaptureButton();
 }
@@ -195,6 +197,8 @@ async function initCaptureUi(): Promise<void> {
   }
 
   await app.initializedPromise;
+  installViewerHistoryNavigation(app);
+  synchronizeCopyLinkButtons();
 }
 
 async function resolveCaptureUrlsWithRetries(): Promise<{
@@ -211,14 +215,6 @@ async function resolveCaptureUrlsWithRetries(): Promise<{
   return undefined;
 }
 
-function safeDecode(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
 function wait(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -226,6 +222,10 @@ function wait(ms: number): Promise<void> {
 async function initializeCaptureButton(): Promise<void> {
   for (let attempt = 0; attempt < captureUiConfig.urlResolutionMaxRetries; attempt += 1) {
     if (synchronizeCaptureButton()) {
+      if (isCurrentPageBackendServedPdf()) {
+        renderLibraryReopenState();
+        return;
+      }
       await refreshBackendStatus();
       const captureBtn = currentCaptureButton();
       if (captureBtn !== undefined) {
@@ -235,6 +235,31 @@ async function initializeCaptureButton(): Promise<void> {
     }
     await wait(captureUiConfig.initializationRetryMs);
   }
+}
+
+function isCurrentPageBackendServedPdf(): boolean {
+  const raw = pdfUrlFromLocation(window.location.search, window.location.pathname)
+    ?? rawViewerApplicationUrl();
+  return raw !== undefined && isBackendServedPdfUrl(raw, chrome.runtime.getManifest());
+}
+
+function rawViewerApplicationUrl(): string | undefined {
+  const app = window.PDFViewerApplication;
+  return app !== undefined && isLikelyOriginalPdfUrl(app.url) ? app.url : undefined;
+}
+
+function renderLibraryReopenState(): void {
+  libraryReopenPage = true;
+  const captureBtn = currentCaptureButton();
+  if (captureBtn === undefined) {
+    return;
+  }
+  setButtonPresentation(captureBtn, {
+    disabled: true,
+    text: "Library",
+    title: "Opened from the MathRead library",
+  });
+  renderCaptureStatus("Opened from MathRead library");
 }
 
 async function triggerCapture(captureBtn: HTMLButtonElement): Promise<void> {
@@ -285,11 +310,6 @@ async function captureResolvedPdf(
   if (captureResponse.ok) {
     captureState = { kind: "success", result: captureResponse.result };
     renderCaptureButton(captureBtn);
-    // The portal app is the reader: hand the just-captured PDF straight to it.
-    const target = portalDeepLink(captureResponse.result);
-    if (target !== undefined) {
-      window.location.href = target;
-    }
     return;
   }
   captureState = { kind: "failure", error: captureResponse.error };
@@ -324,6 +344,141 @@ function synchronizeCaptureButton(): boolean {
   return true;
 }
 
+function synchronizeCopyLinkButtons(): void {
+  const plainLinkButton = document.getElementById("mathreadCopyPlainLinkButton");
+  if (plainLinkButton instanceof HTMLButtonElement) {
+    synchronizeCopyLinkButton(plainLinkButton, "plain");
+  }
+
+  const currentViewButton = document.getElementById("mathreadCopyCurrentViewLinkButton");
+  if (currentViewButton instanceof HTMLButtonElement) {
+    synchronizeCopyLinkButton(currentViewButton, "current-view");
+  }
+}
+
+function synchronizeCopyLinkButton(
+  button: HTMLButtonElement,
+  mode: "plain" | "current-view",
+): void {
+  button.classList.add("mathreadToolbarTextButton");
+  button.disabled = getPdfUrlFromPage() === undefined;
+  if (button.dataset.mathreadCopyLinkBound === "true") {
+    return;
+  }
+  button.dataset.mathreadCopyLinkBound = "true";
+  button.addEventListener("click", event => {
+    event.preventDefault();
+    void copyPdfLink(mode, button).catch(error => {
+      renderCaptureStatus(`Copy link failed: ${String(error)}`);
+    });
+  });
+}
+
+async function copyPdfLink(
+  mode: "plain" | "current-view",
+  button: HTMLButtonElement,
+): Promise<void> {
+  const pdfUrl = getPdfUrlFromPage();
+  if (pdfUrl === undefined) {
+    throw new Error("PDF URL unavailable");
+  }
+  const link = mode === "plain" ? pdfUrl : currentViewUrl(pdfUrl);
+  await navigator.clipboard.writeText(link);
+  button.disabled = false;
+  renderCaptureStatus(mode === "plain" ? "Copied original PDF link" : "Copied current PDF view link");
+}
+
+function currentViewUrl(pdfUrl: string): string {
+  const url = new URL(pdfUrl);
+  const app = window.PDFViewerApplication;
+  const pageNumber = app === undefined ? undefined : currentViewerPage(app);
+  if (pageNumber !== undefined) {
+    url.searchParams.set("page", String(pageNumber));
+  }
+  const scale = app?.pdfViewer.currentScaleValue;
+  if (typeof scale === "string" && scale.length > 0) {
+    url.searchParams.set("zoom", scale);
+  }
+  return url.href;
+}
+
+function installViewerHistoryNavigation(app: MathReadPdfViewerApplication): void {
+  if (installedViewerHistoryNavigation) {
+    return;
+  }
+  installedViewerHistoryNavigation = true;
+  viewerPageHistory.currentPage = currentViewerPage(app);
+  app.eventBus?.on("pagechanging", event => {
+    recordViewerPage(event.pageNumber);
+  });
+  window.addEventListener(
+    "keydown",
+    event => {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+        return;
+      }
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      navigateViewerHistory(event.key === "ArrowLeft" ? "back" : "forward");
+    },
+    true,
+  );
+}
+
+function recordViewerPage(pageNumber: number): void {
+  if (!Number.isFinite(pageNumber) || pageNumber < 1) {
+    return;
+  }
+  if (viewerPageHistory.navigating) {
+    viewerPageHistory.currentPage = pageNumber;
+    return;
+  }
+  if (viewerPageHistory.currentPage === undefined) {
+    viewerPageHistory.currentPage = pageNumber;
+    return;
+  }
+  if (viewerPageHistory.currentPage === pageNumber) {
+    return;
+  }
+  viewerPageHistory.backStack.push(viewerPageHistory.currentPage);
+  viewerPageHistory.forwardStack = [];
+  viewerPageHistory.currentPage = pageNumber;
+}
+
+function navigateViewerHistory(direction: "back" | "forward"): void {
+  const app = window.PDFViewerApplication;
+  if (app === undefined) {
+    return;
+  }
+  const sourceStack = direction === "back" ? viewerPageHistory.backStack : viewerPageHistory.forwardStack;
+  const targetPage = sourceStack.pop();
+  if (targetPage === undefined) {
+    return;
+  }
+  const currentPage = viewerPageHistory.currentPage ?? currentViewerPage(app);
+  if (currentPage !== undefined) {
+    const destinationStack = direction === "back" ? viewerPageHistory.forwardStack : viewerPageHistory.backStack;
+    destinationStack.push(currentPage);
+  }
+  viewerPageHistory.navigating = true;
+  viewerPageHistory.currentPage = targetPage;
+  app.page = targetPage;
+  window.setTimeout(() => {
+    viewerPageHistory.navigating = false;
+  }, 0);
+}
+
+function currentViewerPage(app: MathReadPdfViewerApplication): number | undefined {
+  const pageNumber = app.pdfViewer.currentPageNumber || app.page;
+  if (!Number.isFinite(pageNumber) || pageNumber < 1) {
+    return undefined;
+  }
+  return pageNumber;
+}
+
 async function refreshBackendStatus(): Promise<void> {
   try {
     const response = await fetch(captureStatusEndpointFromManifest(chrome.runtime.getManifest()));
@@ -342,12 +497,7 @@ async function refreshBackendStatus(): Promise<void> {
 }
 
 function captureStatusEndpointFromManifest(manifest: { host_permissions?: string[] }): string {
-  const hostPermissions = manifest.host_permissions;
-  invariant(hostPermissions !== undefined, "extension manifest must declare localhost backend host_permissions");
-  const backendPermission = hostPermissions.find(permission => permission.startsWith("http://127.0.0.1:"));
-  invariant(backendPermission !== undefined, "extension manifest must declare http://127.0.0.1 backend permission");
-  invariant(backendPermission.endsWith("/*"), `extension backend permission must end with /*: ${backendPermission}`);
-  return `${backendPermission.slice(0, -2)}/status`;
+  return `${backendOriginFromManifest(manifest)}/status`;
 }
 
 function renderBackendChecking(captureBtn: HTMLButtonElement): void {
@@ -407,6 +557,10 @@ function renderCaptureFailure(captureBtn: HTMLButtonElement, error: string): voi
 }
 
 function renderCaptureButton(captureBtn: HTMLButtonElement): void {
+  if (libraryReopenPage) {
+    renderLibraryReopenState();
+    return;
+  }
   if (captureState.kind === "in-flight") {
     renderCaptureInFlight(captureBtn);
     return;
@@ -553,15 +707,6 @@ function renderCaptureStatus(text: string): void {
   if (panel.innerText !== text) {
     panel.innerText = text;
   }
-}
-
-function portalDeepLink(result: CaptureResult): string | undefined {
-  if (backendState.kind !== "ready" || !backendState.status.capabilities.open_file) {
-    return undefined;
-  }
-  const key = result.stored_path.split("/").pop();
-  invariant(key !== undefined && key !== "", `MathRead stored_path has no filename: ${result.stored_path}`);
-  return `${backendState.status.portal_url}/?key=${encodeURIComponent(key)}`;
 }
 
 function captureStatusPanel(): HTMLDivElement {

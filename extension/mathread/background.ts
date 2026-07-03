@@ -16,6 +16,7 @@ type ChromeCookie = {
 type ChromeApi = {
   runtime: {
     getManifest(): { host_permissions?: string[] };
+    getURL(path: string): string;
     onMessage: {
       addListener(
         listener: (
@@ -29,6 +30,14 @@ type ChromeApi = {
   cookies: {
     getAll(details: { url: string }): Promise<ChromeCookie[]>;
   };
+  action: {
+    onClicked: {
+      addListener(listener: () => void): void;
+    };
+  };
+  tabs: {
+    create(properties: { url: string }): Promise<unknown>;
+  };
 };
 
 type UnknownRecord = Record<string, unknown>;
@@ -38,6 +47,10 @@ const inFlightCaptures = new Map<string, Promise<CaptureResult>>();
 const recentSuccessfulCaptures = new Map<string, { capturedAtMs: number; result: CaptureResult }>();
 
 declare const chrome: ChromeApi;
+
+chrome.action.onClicked.addListener(() => {
+  void chrome.tabs.create({ url: chrome.runtime.getURL("poc/reader.html") });
+});
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!isCaptureMessage(message)) {

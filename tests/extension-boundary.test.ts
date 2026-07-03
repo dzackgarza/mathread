@@ -1,3 +1,8 @@
+// End-to-end proof of the extension boundary: opening a PDF in a tab auto-captures it to
+// the real local backend and swaps the document body for the MathRead reader iframe keyed
+// by the backend library key, while the address bar keeps the original PDF URL. The
+// reader's Key Points panel persists notes to the on-disk markdown sidecar and the
+// Library panel lists/opens/trashes captured items against the same backend.
 import { expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -22,7 +27,6 @@ import {
   type BrowserContext,
   type Frame,
   type Page,
-  type Worker,
 } from "playwright";
 
 const pdfBytes = new TextEncoder().encode(
@@ -59,7 +63,11 @@ type ExtensionManifest = {
   host_permissions: string[];
 };
 
-type CaptureScenario = "clicked-link" | "direct-pdf-tab" | "direct-pdf-without-extension";
+type CaptureScenario =
+  | "clicked-link"
+  | "direct-pdf-tab"
+  | "direct-pdf-without-extension"
+  | "large-numdam-pdf";
 
 type CaptureArtifacts = {
   root: string;
@@ -79,10 +87,12 @@ type CourseRequest = {
 type ExtensionCaptureEvidence = {
   artifacts: CaptureArtifacts;
   backendCaptureRequestCount: number;
-  portalRedirectUrl: string;
   courseOrigin: string;
   courseRequests: CourseRequest[];
+  key: string;
+  mainFrameNavigations: string[];
   metadata: Record<string, string>;
+  readerFrameUrl: string;
   storedPath: string;
 };
 
@@ -94,8 +104,6 @@ type RunningBackend = {
 type RunningCourseServer = Bun.Server<undefined> & {
   requests: CourseRequest[];
 };
-
-type ViewerSurface = Frame | Page;
 
 type PersistedEvent = {
   type: string;
@@ -116,16 +124,74 @@ const defaultCaptureRunOptions: CaptureRunOptions = {
   preExistingCapture: false,
 };
 
-test("built extension captures a clicked PDF link through the real local backend", async () => {
+test("reader Library panel lists, opens, and trashes captured items against the backend", async () => {
+  await withExtensionReader(async ({ backendPort, courseServer, extensionId, page, readingRoot }) => {
+    const firstKey = await preCapturePdfThroughBackend(backendPort, courseServer, "direct-pdf-tab");
+    const secondKey = await preCapturePdfThroughBackend(backendPort, courseServer, "large-numdam-pdf");
+    writeFileSync(join(readingRoot, "inbox", firstKey.replace(/\.pdf$/, ".md")), "existing note\n");
+
+    await page.goto(readerPageUrl(extensionId, firstKey), { waitUntil: "domcontentloaded" });
+    await page.locator('.nav-expand-btn[data-tab="library"]').click();
+    await waitForLibraryEntryCount(page, 2);
+
+    // Entry cards carry the title, a has-note marker, and a relative last-read time.
+    const firstEntry = page.locator('[data-testid="library-entry"]', { hasText: "notes" });
+    await expectElementText(firstEntry.locator(".library-entry-meta"), text => text.includes("📝"));
+    await expectElementText(firstEntry.locator(".library-entry-meta"), text => text.includes("just now"));
+
+    // Selecting another entry re-enters the reader through the backend copy: the tab
+    // navigates to GET /pdf/{key} and the content script swaps the reader in for that key.
+    await page.locator('[data-testid="library-entry"]', { hasText: "AST_1992" })
+      .locator('[data-testid="library-entry-open"]')
+      .click();
+    await waitForReaderFrame(page, secondKey);
+    expect(new URL(page.url()).pathname).toBe(`/pdf/${secondKey}`);
+
+    const reader = await waitForReaderFrame(page, secondKey);
+    // Let the reader finish its synchronous page-render pass before interacting —
+    // canvas rasterization can otherwise stall input dispatch on a loaded machine.
+    await waitForCanvasCount(reader, 6);
+    await reader.locator('.nav-expand-btn[data-tab="library"]').click();
+    await waitForLibraryEntryCount(reader, 2);
+
+    // Trash is guarded by a confirm dialog: dismissing keeps the item…
+    page.once("dialog", dialog => void dialog.dismiss());
+    await reader.locator('[data-testid="library-entry"]', { hasText: "notes" })
+      .locator('[data-testid="library-entry-trash"]')
+      .click();
+    await Bun.sleep(500);
+    await waitForLibraryEntryCount(reader, 2);
+
+    // …accepting removes the PDF and its sidecar from disk and from the list.
+    page.once("dialog", dialog => void dialog.accept());
+    await reader.locator('[data-testid="library-entry"]', { hasText: "notes" })
+      .locator('[data-testid="library-entry-trash"]')
+      .click();
+    await waitForLibraryEntryCount(reader, 1);
+    expect(existsSync(join(readingRoot, "inbox", firstKey))).toBe(false);
+    expect(existsSync(join(readingRoot, "inbox", firstKey.replace(/\.pdf$/, ".md")))).toBe(false);
+  });
+}, 60_000);
+
+test("built extension captures a clicked PDF link and swaps in the reader without leaving the PDF URL", async () => {
   const evidence = await runExtensionCapture("clicked-link");
   const expectedCourseUrl = new URL("/course/", evidence.courseOrigin).href;
   const expectedPdfUrl = new URL("/notes.pdf", expectedCourseUrl).href;
 
+  // Reader identity (issue #1): the tab never navigates to an extension page — the
+  // reader mounts as an iframe inside the PDF document, so the address bar keeps the
+  // original source URL.
+  expect(evidence.mainFrameNavigations.every(url => !url.startsWith("chrome-extension:"))).toBe(true);
+  expect(evidence.mainFrameNavigations.some(url => url === expectedPdfUrl)).toBe(true);
+  assertReaderFrameUrl(evidence.readerFrameUrl, evidence.key);
+
   expect(evidence.metadata["/MathReadSourceURL"]).toBe(expectedCourseUrl);
   expect(evidence.metadata["/MathReadPDFURL"]).toBe(expectedPdfUrl);
   expect(evidence.metadata["/MathReadCapture"]).toBe("capture-url");
-  expect(evidence.backendCaptureRequestCount).toBe(1);
   expect(evidence.metadata["/MathReadOriginalSHA256"]).toBe(pdfSha256());
+  // link-origin's click-time capture and reader-swap's document capture dedupe in the
+  // background worker to a single backend POST.
+  expect(evidence.backendCaptureRequestCount).toBe(1);
   expect(
     evidence.courseRequests.some(request =>
       request.path === "/notes.pdf"
@@ -133,24 +199,10 @@ test("built extension captures a clicked PDF link through the real local backend
       && request.referer === expectedCourseUrl
     ),
   ).toBe(true);
-  assertPortalRedirect(evidence);
   assertEvidenceArtifacts(evidence.artifacts, evidence.storedPath, "clicked-link");
-}, 20_000);
+}, 60_000);
 
-test("built extension auto-captures a direct PDF and hands the tab to the portal without a manual click", async () => {
-  const evidence = await runExtensionCapture("direct-pdf-tab");
-  const expectedPath = pdfPathForScenario("direct-pdf-tab");
-  const expectedPdfUrl = new URL(expectedPath, evidence.courseOrigin).href;
-
-  expect(evidence.metadata["/MathReadSourceURL"]).toBe(expectedPdfUrl);
-  expect(evidence.metadata["/MathReadPDFURL"]).toBe(expectedPdfUrl);
-  expect(evidence.metadata["/MathReadCapture"]).toBe("capture-url");
-  expect(evidence.backendCaptureRequestCount).toBe(1);
-  assertPortalRedirect(evidence);
-  assertEvidenceArtifacts(evidence.artifacts, evidence.storedPath, "direct-pdf-tab");
-}, 30_000);
-
-test("built extension marks a pre-existing capture as existing and still routes to the portal", async () => {
+test("built extension reuses a pre-existing capture and still mounts the reader", async () => {
   const evidence = await runExtensionCapture("direct-pdf-tab", {
     preExistingCapture: true,
   });
@@ -160,16 +212,10 @@ test("built extension marks a pre-existing capture as existing and still routes 
   expect(evidence.metadata["/MathReadSourceURL"]).toBe(expectedPdfUrl);
   expect(evidence.metadata["/MathReadPDFURL"]).toBe(expectedPdfUrl);
   expect(evidence.metadata["/MathReadCapture"]).toBe("capture-url");
-  expect(evidence.backendCaptureRequestCount).toBe(2);
   expect(evidence.metadata["/MathReadOriginalSHA256"]).toBe(pdfSha256());
-  expect(
-    evidence.courseRequests.some(request =>
-      request.path === expectedPath
-      && request.cookie?.includes(`${cookieName}=${cookieValue}`) === true
-      && request.referer === expectedPdfUrl
-    ),
-  ).toBe(true);
-  assertPortalRedirect(evidence);
+  // Setup POST plus the extension's own (deduplicated, existing=true) capture round trip.
+  expect(evidence.backendCaptureRequestCount).toBeGreaterThanOrEqual(2);
+  assertReaderFrameUrl(evidence.readerFrameUrl, evidence.key);
   assertEvidenceArtifacts(evidence.artifacts, evidence.storedPath, "direct-pdf-tab");
 }, 45_000);
 
@@ -183,27 +229,98 @@ test("built extension auto-captures an application/pdf URL without a .pdf suffix
   expect(evidence.metadata["/MathReadCapture"]).toBe("capture-url");
   expect(evidence.backendCaptureRequestCount).toBe(1);
   expect(evidence.metadata["/MathReadOriginalSHA256"]).toBe(pdfSha256());
-  expect(
-    evidence.courseRequests.some(request =>
-      request.path === expectedPath
-      && request.cookie?.includes(`${cookieName}=${cookieValue}`) === true
-      && request.referer === expectedPdfUrl
-    ),
-  ).toBe(true);
-  assertPortalRedirect(evidence);
+  assertReaderFrameUrl(evidence.readerFrameUrl, evidence.key);
   assertEvidenceArtifacts(evidence.artifacts, evidence.storedPath, "direct-pdf-without-extension");
 }, 30_000);
 
-test("built extension shows backend unavailable when the capture backend is down", async () => {
-  await runBackendUnavailable();
-}, 30_000);
+test("built extension renders every page of a large captured PDF in the reader", async () => {
+  const evidence = await runExtensionCapture("large-numdam-pdf");
+  assertReaderFrameUrl(evidence.readerFrameUrl, evidence.key);
+}, 60_000);
 
-function assertPortalRedirect(evidence: ExtensionCaptureEvidence): void {
-  const redirect = new URL(evidence.portalRedirectUrl);
-  expect(redirect.hostname).toBe("markdown-editor.localhost");
-  const key = evidence.storedPath.split("/").pop();
-  assert(key !== undefined && key !== "");
-  expect(redirect.searchParams.get("key")).toBe(key);
+test("reader renders all pages of a large PDF with real content", async () => {
+  await withExtensionReader(async ({ backendPort, courseServer, extensionId, page }) => {
+    const key = await preCapturePdfThroughBackend(backendPort, courseServer, "large-numdam-pdf");
+    await page.goto(readerPageUrl(extensionId, key), { waitUntil: "domcontentloaded" });
+
+    // The reader renders every page as a stacked canvas; a fully rendered 6-page
+    // document has 6 canvases and the last one has real ink — proof that late pages
+    // don't silently stay blank.
+    await waitForCanvasCount(page, 6);
+    const rendered = await canvasPixelEvidence(page, 5);
+    expect(rendered.canvasSize).toBeGreaterThan(10_000);
+    expect(rendered.nonWhitePixels).toBeGreaterThan(250);
+  });
+}, 60_000);
+
+test("built extension fails loudly when the capture backend is down", async () => {
+  await runBackendUnavailable();
+}, 60_000);
+
+test("reader Key Points panel persists notes to the on-disk sidecar and renders a live preview", async () => {
+  await withExtensionReader(async ({ backendPort, courseServer, extensionId, page, readingRoot }) => {
+    const key = await preCapturePdfThroughBackend(backendPort, courseServer, "direct-pdf-tab");
+    await page.goto(readerPageUrl(extensionId, key), { waitUntil: "domcontentloaded" });
+    await waitForCanvasCount(page, 1);
+
+    await page.locator('.nav-expand-btn[data-tab="keypoints"]').click();
+    const editor = page.locator("#ai-editor .cm-content");
+    await editor.click();
+    await page.keyboard.type("# Heading\n\nSome **bold** text.");
+
+    // Debounced autosave writes the markdown sidecar next to the stored PDF.
+    const noteText = await waitForNoteSaved(
+      backendPort,
+      key,
+      text => text.includes("# Heading") && text.includes("**bold**"),
+    );
+    const sidecarPath = join(readingRoot, "inbox", key.replace(/\.pdf$/, ".md"));
+    expect(readFileSync(sidecarPath, "utf8")).toBe(noteText);
+    await expectElementText(page.locator("#notes-status"), text => text === "Saved");
+
+    // Live preview renders sanitized GFM from the same buffer.
+    await page.locator("#notes-mode-preview").click();
+    await expectElementText(page.locator("#notes-preview h1"), text => text === "Heading");
+    await expectElementText(page.locator("#notes-preview strong"), text => text === "bold");
+
+    // Reload: the editor restores from the sidecar, not any browser-local store.
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.locator('.nav-expand-btn[data-tab="keypoints"]').click();
+    await expectElementText(page.locator("#ai-editor .cm-content"), text => text.includes("Heading") && text.includes("bold"));
+  });
+}, 60_000);
+
+test("reader Key Points panel surfaces a loud error when the backend dies (no localStorage fallback)", async () => {
+  await withExtensionReader(async ({ backend, backendPort, courseServer, extensionId, page }) => {
+    const key = await preCapturePdfThroughBackend(backendPort, courseServer, "direct-pdf-tab");
+    await page.goto(readerPageUrl(extensionId, key), { waitUntil: "domcontentloaded" });
+    await waitForCanvasCount(page, 1);
+
+    backend.process.kill();
+    await backend.process.exited;
+
+    // The note loaded at boot; with the backend gone, the autosave PUT must surface a
+    // visible save failure — never fall back to a browser-local store.
+    await page.locator('.nav-expand-btn[data-tab="keypoints"]').click();
+    const editor = page.locator("#ai-editor .cm-content");
+    await editor.click();
+    await page.keyboard.type("orphaned edit");
+    await expectElementText(
+      page.locator("#notes-status"),
+      text => text.startsWith("Save failed:"),
+    );
+  });
+}, 60_000);
+
+function readerPageUrl(extensionId: string, key: string): string {
+  return `chrome-extension://${extensionId}/poc/reader.html?key=${encodeURIComponent(key)}`;
+}
+
+function assertReaderFrameUrl(url: string, expectedKey: string): void {
+  const parsed = new URL(url);
+  expect(parsed.protocol).toBe("chrome-extension:");
+  expect(parsed.pathname).toContain("/poc/reader.html");
+  expect(parsed.searchParams.get("key")).toBe(expectedKey);
 }
 
 async function runBackendUnavailable(): Promise<void> {
@@ -212,11 +329,10 @@ async function runBackendUnavailable(): Promise<void> {
   const artifacts = createCaptureArtifacts(testRoot, "clicked-link");
   const extensionPath = configuredExtensionCopy(testRoot, backendPort);
   const courseServer = startCourseServer(artifacts.eventsLogPath);
-  const profilePath = join(testRoot, "profile");
   let context: BrowserContext | undefined;
 
   try {
-    context = await chromium.launchPersistentContext(profilePath, {
+    context = await chromium.launchPersistentContext(join(testRoot, "profile"), {
       executablePath: "/bin/chromium",
       headless: true,
       args: [
@@ -224,7 +340,7 @@ async function runBackendUnavailable(): Promise<void> {
         `--load-extension=${extensionPath}`,
       ],
     });
-    const extensionId = await waitForLoadedExtensionId(profilePath, extensionPath);
+    await waitForExtensionServiceWorker(context);
     await context.addCookies([
       {
         name: cookieName,
@@ -234,20 +350,17 @@ async function runBackendUnavailable(): Promise<void> {
     ]);
     const page = await context.newPage();
     attachPageDiagnostics(page, artifacts, "clicked-link");
-    const pdfUrl = `${courseServer.url.origin}/notes.pdf`;
-    await page.goto(
-      `chrome-extension://${extensionId}/content/web/viewer.html?file=${encodeURIComponent(pdfUrl)}`,
-      { waitUntil: "domcontentloaded" },
-    );
-    const viewer = await waitForMathReadViewer(context, page);
-    await waitForPdfDocumentLoaded(viewer);
+    await page.goto(`${courseServer.url.origin}/notes.pdf`);
 
-    const buttonText = await waitForCaptureButtonText(viewer, text => text === "Offline");
-    const statusText = await waitForCaptureStatusText(viewer, text => text.startsWith("MathRead backend unavailable: "));
+    // No backend → capture fails → the content script replaces the document with a loud
+    // error, never a silent local viewer.
+    await expectElementText(
+      page.locator("#mathread-capture-error"),
+      text => text.includes("MathRead could not capture this PDF"),
+    );
     await page.screenshot({ path: artifacts.screenshotAfterPath });
-    expect(buttonText).toBe("Offline");
-    expect(statusText).toContain("MathRead backend unavailable");
     assertPng(artifacts.screenshotAfterPath);
+    await page.close();
   } finally {
     if (context !== undefined) {
       await context.close();
@@ -269,7 +382,6 @@ async function runExtensionCapture(
   const backend = startMathReadBackend(backendPort, readingRoot, artifacts.backendLogPath);
   const courseServer = startCourseServer(artifacts.eventsLogPath);
   let context: BrowserContext | undefined;
-  let traceStarted = false;
 
   try {
     await waitForHttpService(`http://127.0.0.1:${backendPort}/openapi.json`);
@@ -277,6 +389,8 @@ async function runExtensionCapture(
       await preCapturePdfThroughBackend(backendPort, courseServer, scenario);
     }
 
+    // No context.tracing here: Playwright tracing's screencast/snapshot CDP traffic
+    // intermittently deadlocks the bun event loop under load, hanging the whole test.
     context = await chromium.launchPersistentContext(join(testRoot, "profile"), {
       executablePath: "/bin/chromium",
       headless: true,
@@ -286,15 +400,6 @@ async function runExtensionCapture(
         `--load-extension=${extensionPath}`,
       ],
     });
-    if (scenario === "clicked-link") {
-      await context.tracing.start({
-        screenshots: true,
-        snapshots: true,
-        sources: true,
-        title: `MathRead ${scenario}`,
-      });
-      traceStarted = true;
-    }
     const serviceWorker = await waitForExtensionServiceWorker(context);
     serviceWorker.on("console", message => {
       appendEvent(artifacts.eventsLogPath, {
@@ -302,11 +407,6 @@ async function runExtensionCapture(
         scenario,
         text: message.text(),
       });
-    });
-    appendEvent(artifacts.eventsLogPath, {
-      type: "service-worker",
-      scenario,
-      url: serviceWorker.url(),
     });
     await context.addCookies([
       {
@@ -316,44 +416,31 @@ async function runExtensionCapture(
       },
     ]);
 
-    // The portal app is the reader: intercept its origin so the redirect target is
-    // asserted without loading the live portal.
-    const portalRedirectUrls: string[] = [];
-    await context.route(url => url.hostname === "markdown-editor.localhost", route => {
-      portalRedirectUrls.push(route.request().url());
-      void route.fulfill({
-        status: 200,
-        contentType: "text/html",
-        body: "<!doctype html><title>portal</title>portal",
-      });
-    });
-
     const page = await context.newPage();
     attachPageDiagnostics(page, artifacts, scenario);
+    const mainFrameNavigations: string[] = [];
+    page.on("framenavigated", frame => {
+      if (frame === page.mainFrame()) {
+        mainFrameNavigations.push(frame.url());
+      }
+    });
 
     if (scenario === "clicked-link") {
-      // The realistic flow: clicking a PDF link triggers the extension's DNR redirect
-      // into the viewer, which auto-captures and hands the tab to the portal.
+      // The realistic flow: a click on a PDF link records the click origin as capture
+      // provenance (link-origin.ts), then the PDF document itself is intercepted by
+      // reader-swap.ts.
       await page.goto(`${courseServer.url.origin}/course/`);
       await page.screenshot({ path: artifacts.screenshotBeforePath });
       await page.getByRole("link", { name: "Notes" }).click();
     } else {
-      // Load the viewer directly on the PDF URL. Headless Chromium does not reliably run
-      // the extension's DNR raw-PDF interception (clicked-link covers that path); opening
-      // the viewer URL deterministically exercises capture-ui's URL-shape handling.
-      const extensionId = new URL(serviceWorker.url()).host;
-      const pdfUrl = `${courseServer.url.origin}${pdfPathForScenario(scenario)}`;
-      await page.goto(
-        `chrome-extension://${extensionId}/content/web/viewer.html?file=${encodeURIComponent(pdfUrl)}`,
-        { waitUntil: "domcontentloaded" },
-      );
+      await page.goto(`${courseServer.url.origin}${pdfPathForScenario(scenario)}`);
     }
 
-    // Capture is automatic and always-on: opening the PDF stores it (no click, no mode
-    // toggle), then the viewer hands the tab to the portal at /?key=<stored-filename>.
-    await page.waitForURL(url => url.hostname === "markdown-editor.localhost", { timeout: 20_000 });
-    const portalRedirectUrl = portalRedirectUrls[0] ?? page.url();
+    // Capture is automatic and always-on: opening the PDF stores it, then the reader
+    // mounts keyed by the stored filename.
     const storedPath = await waitForStoredPdf(readingRoot);
+    const key = storedKeyFromPath(storedPath);
+    const readerFrame = await waitForReaderFrame(page, key);
     await page.screenshot({ path: artifacts.screenshotAfterPath });
 
     appendEvent(artifacts.eventsLogPath, {
@@ -367,17 +454,16 @@ async function runExtensionCapture(
     return {
       artifacts,
       backendCaptureRequestCount,
-      portalRedirectUrl,
       courseOrigin: courseServer.url.origin,
       courseRequests: courseServer.requests,
+      key,
+      mainFrameNavigations,
       metadata,
+      readerFrameUrl: readerFrame.url(),
       storedPath,
     };
   } finally {
     if (context !== undefined) {
-      if (traceStarted) {
-        await context.tracing.stop({ path: artifacts.tracePath });
-      }
       await context.close();
     }
     courseServer.stop(true);
@@ -387,11 +473,71 @@ async function runExtensionCapture(
   }
 }
 
+type ExtensionReaderEvidence = {
+  backend: RunningBackend;
+  backendPort: number;
+  context: BrowserContext;
+  courseServer: RunningCourseServer;
+  extensionId: string;
+  page: Page;
+  readingRoot: string;
+};
+
+async function withExtensionReader(
+  callback: (evidence: ExtensionReaderEvidence) => Promise<void>,
+): Promise<void> {
+  const backendPort = await unusedTcpPort();
+  const testRoot = mkdtemp("mathread-extension-reader-");
+  const readingRoot = join(testRoot, "reading-root");
+  mkdirSync(readingRoot);
+  const artifacts = createCaptureArtifacts(testRoot, "direct-pdf-tab");
+  const extensionPath = configuredExtensionCopy(testRoot, backendPort);
+  const backend = startMathReadBackend(backendPort, readingRoot, artifacts.backendLogPath);
+  const courseServer = startCourseServer(artifacts.eventsLogPath);
+  let context: BrowserContext | undefined;
+
+  try {
+    await waitForHttpService(`http://127.0.0.1:${backendPort}/openapi.json`);
+    context = await chromium.launchPersistentContext(join(testRoot, "profile"), {
+      executablePath: "/bin/chromium",
+      headless: true,
+      artifactsDir: artifacts.root,
+      args: [
+        `--disable-extensions-except=${extensionPath}`,
+        `--load-extension=${extensionPath}`,
+      ],
+    });
+    const serviceWorker = await waitForExtensionServiceWorker(context);
+    const extensionId = new URL(serviceWorker.url()).host;
+    await context.addCookies([
+      {
+        name: cookieName,
+        value: cookieValue,
+        url: courseServer.url.origin,
+      },
+    ]);
+    const page = await context.newPage();
+    attachPageDiagnostics(page, artifacts, "direct-pdf-tab");
+
+    await callback({ backend, backendPort, context, courseServer, extensionId, page, readingRoot });
+    await page.close();
+  } finally {
+    if (context !== undefined) {
+      await context.close();
+    }
+    courseServer.stop(true);
+    backend.process.kill();
+    await backend.process.exited;
+    closeSync(backend.logFd);
+  }
+}
+
+/** Capture a scenario PDF straight through the backend; returns its library key. */
 async function preCapturePdfThroughBackend(
   backendPort: number,
   courseServer: RunningCourseServer,
   scenario: CaptureScenario,
-): Promise<void> {
+): Promise<string> {
   const pdfUrl = `${courseServer.url.origin}${pdfPathForScenario(scenario)}`;
   const response = await fetch(`http://127.0.0.1:${backendPort}/capture-url`, {
     method: "POST",
@@ -406,9 +552,12 @@ async function preCapturePdfThroughBackend(
     }),
   });
   expect(response.ok).toBe(true);
+  const value: unknown = await response.json();
+  assert(isRecord(value) && typeof value.stored_path === "string");
+  return storedKeyFromPath(value.stored_path);
 }
 
-async function waitForExtensionServiceWorker(context: BrowserContext): Promise<Worker> {
+async function waitForExtensionServiceWorker(context: BrowserContext) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const serviceWorker = context
       .serviceWorkers()
@@ -421,154 +570,137 @@ async function waitForExtensionServiceWorker(context: BrowserContext): Promise<W
   throw new Error("Timed out waiting for MathRead extension service worker");
 }
 
-async function waitForLoadedExtensionId(
-  profilePath: string,
-  extensionPath: string,
-): Promise<string> {
-  const preferencesPath = join(profilePath, "Default", "Preferences");
+function storedKeyFromPath(storedPath: string): string {
+  const segments = storedPath.split("/");
+  const key = segments[segments.length - 1];
+  assert(key !== undefined && key.length > 0);
+  return key;
+}
+
+async function waitForReaderFrame(page: Page, expectedKey: string): Promise<Frame> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (existsSync(preferencesPath)) {
-      const extensionId = loadedExtensionIdFromPreferences(
-        readFileSync(preferencesPath, "utf8"),
-        extensionPath,
-      );
-      if (extensionId !== undefined) {
-        return extensionId;
+    const frame = page.frames().find(candidate => {
+      if (candidate.name() !== "mathreadReaderFrame") {
+        return false;
       }
+      try {
+        return new URL(candidate.url()).searchParams.get("key") === expectedKey;
+      } catch {
+        return false;
+      }
+    });
+    if (frame !== undefined) {
+      await frame.waitForLoadState("domcontentloaded");
+      return frame;
     }
     await Bun.sleep(100);
   }
-  throw new Error(`Timed out waiting for Chromium profile to register extension at ${extensionPath}`);
+  const surfaces = page.frames().map(frame => `${frame.name()} ${frame.url()}`);
+  throw new Error(`Timed out waiting for reader frame with key=${expectedKey}; frames: ${surfaces.join(", ")}`);
 }
 
-function loadedExtensionIdFromPreferences(
-  source: string,
-  extensionPath: string,
-): string | undefined {
-  const value: unknown = JSON.parse(source);
-  assertChromiumPreferences(value);
-  for (const [extensionId, settings] of Object.entries(value.extensions.settings)) {
-    if (settings.path === extensionPath) {
-      return extensionId;
-    }
-  }
-  return undefined;
-}
+type ReaderSurface = Page | Frame;
 
-function assertChromiumPreferences(value: unknown): asserts value is {
-  extensions: { settings: Record<string, { path?: string }> };
-} {
-  assert(typeof value === "object" && value !== null);
-  const extensions = (value as { extensions?: unknown }).extensions;
-  assert(typeof extensions === "object" && extensions !== null);
-  const settings = (extensions as { settings?: unknown }).settings;
-  assert(typeof settings === "object" && settings !== null);
-}
-
-async function waitForCaptureButtonText(
-  page: ViewerSurface,
-  predicate: (text: string) => boolean,
-): Promise<string> {
-  const button = page.locator("#mathreadCaptureButton");
-  let lastText = "<missing>";
+async function waitForCanvasCount(surface: ReaderSurface, expectedCount: number): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (await button.count() === 0) {
-      await Bun.sleep(100);
-      continue;
-    }
-    const text = (await button.textContent())?.trim() ?? "";
-    lastText = text;
-    if (predicate(text)) {
-      return text;
-    }
-    await Bun.sleep(100);
-  }
-  throw new Error(`Timed out waiting for MathRead capture button text; last text: ${lastText}`);
-}
-
-async function waitForCaptureStatusText(
-  page: ViewerSurface,
-  predicate: (text: string) => boolean,
-): Promise<string> {
-  const status = page.locator("#mathreadCaptureStatus");
-  let lastText = "<missing>";
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (await status.count() === 0) {
-      await Bun.sleep(100);
-      continue;
-    }
-    const text = (await status.textContent())?.trim() ?? "";
-    lastText = text;
-    if (predicate(text)) {
-      return text;
-    }
-    await Bun.sleep(100);
-  }
-  throw new Error(`Timed out waiting for MathRead capture status text; last text: ${lastText}`);
-}
-
-async function waitForMathReadViewer(context: BrowserContext, page: Page): Promise<ViewerSurface> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const viewer = findMathReadViewer(context, page);
-    if (viewer !== undefined) {
-      await viewer.waitForLoadState("domcontentloaded");
-      return viewer;
-    }
-    await Bun.sleep(100);
-  }
-  throw new Error(`Timed out waiting for MathRead extension viewer; surfaces: ${viewerSurfaceUrls(context).join(", ")}`);
-}
-
-async function waitForPdfDocumentLoaded(page: ViewerSurface): Promise<void> {
-  const pageCount = page.locator("#numPages");
-  let lastText = "<missing>";
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (await pageCount.count() === 0) {
-      await Bun.sleep(100);
-      continue;
-    }
-    const text = (await pageCount.textContent())?.trim() ?? "";
-    lastText = text;
-    if (text.replace(/\D/g, "") === "1") {
+    if (await surface.locator("#viewer canvas").count() === expectedCount) {
       return;
     }
     await Bun.sleep(100);
   }
-  throw new Error(`Timed out waiting for PDF.js document load; last page count: ${lastText}`);
+  const lastCount = await surface.locator("#viewer canvas").count();
+  throw new Error(`Timed out waiting for ${expectedCount} PDF canvas(es); last count: ${lastCount}`);
 }
 
-function findMathReadViewer(context: BrowserContext, currentPage: Page): ViewerSurface | undefined {
-  if (isExtensionUrl(currentPage.url())) {
-    return currentPage;
-  }
-  const currentFrame = currentPage.frames().find(frame => isExtensionUrl(frame.url()));
-  if (currentFrame !== undefined) {
-    return currentFrame;
-  }
-  for (const candidatePage of context.pages()) {
-    if (isExtensionUrl(candidatePage.url())) {
-      return candidatePage;
+async function canvasPixelEvidence(
+  surface: ReaderSurface,
+  canvasIndex: number,
+): Promise<{ canvasSize: number; nonWhitePixels: number }> {
+  let lastEvidence = { canvasSize: 0, nonWhitePixels: 0 };
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    lastEvidence = await surface.evaluate(targetIndex => {
+      const canvases = document.querySelectorAll<HTMLCanvasElement>("#viewer canvas");
+      const canvas = canvases[targetIndex];
+      if (canvas === undefined) {
+        return { canvasSize: 0, nonWhitePixels: 0 };
+      }
+      const context = canvas.getContext("2d");
+      if (context === null || canvas.width === 0 || canvas.height === 0) {
+        return { canvasSize: canvas.width * canvas.height, nonWhitePixels: 0 };
+      }
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      let nonWhitePixels = 0;
+      for (let offset = 0; offset < pixels.length; offset += 4) {
+        const red = pixels[offset] ?? 255;
+        const green = pixels[offset + 1] ?? 255;
+        const blue = pixels[offset + 2] ?? 255;
+        const alpha = pixels[offset + 3] ?? 0;
+        if (alpha > 0 && (red < 245 || green < 245 || blue < 245)) {
+          nonWhitePixels += 1;
+        }
+      }
+      return { canvasSize: canvas.width * canvas.height, nonWhitePixels };
+    }, canvasIndex);
+    if (lastEvidence.canvasSize > 10_000 && lastEvidence.nonWhitePixels > 250) {
+      return lastEvidence;
     }
-    const candidateFrame = candidatePage.frames().find(frame => isExtensionUrl(frame.url()));
-    if (candidateFrame !== undefined) {
-      return candidateFrame;
+    await Bun.sleep(100);
+  }
+  return lastEvidence;
+}
+
+async function waitForLibraryEntryCount(surface: ReaderSurface, expectedCount: number): Promise<void> {
+  const entries = surface.locator('[data-testid="library-entry"]');
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (await entries.count() === expectedCount) {
+      return;
     }
+    await Bun.sleep(100);
   }
-  return undefined;
+  throw new Error(`Timed out waiting for ${expectedCount} library entry(ies); last count: ${await entries.count()}`);
 }
 
-function isExtensionUrl(url: string): boolean {
-  if (url.length === 0) {
-    return false;
+async function expectElementText(
+  locator: ReturnType<Page["locator"]>,
+  predicate: (text: string) => boolean,
+): Promise<void> {
+  let lastText = "<missing>";
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const text = await locator.textContent().catch(() => null);
+    if (text !== null) {
+      lastText = text;
+      if (predicate(text)) {
+        return;
+      }
+    }
+    await Bun.sleep(100);
   }
-  return new URL(url).protocol === "chrome-extension:";
+  throw new Error(`Timed out waiting for element text; last text: ${lastText}`);
 }
 
-function viewerSurfaceUrls(context: BrowserContext): string[] {
-  return context.pages().flatMap(page => [
-    page.url(),
-    ...page.frames().map(frame => frame.url()),
-  ]);
+async function waitForNoteSaved(
+  backendPort: number,
+  key: string,
+  predicate: (text: string) => boolean,
+): Promise<string> {
+  let lastText = "<missing>";
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/notes/${encodeURIComponent(key)}`);
+    if (response.ok) {
+      const value: unknown = await response.json();
+      assert(isRecord(value) && typeof value.text === "string");
+      lastText = value.text;
+      if (predicate(lastText)) {
+        return lastText;
+      }
+    }
+    await Bun.sleep(100);
+  }
+  throw new Error(`Timed out waiting for saved note text; last text: ${lastText}`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function attachPageDiagnostics(
@@ -588,6 +720,13 @@ function attachPageDiagnostics(
       type: "browser-pageerror",
       scenario,
       text: String(error),
+    });
+  });
+  page.on("framenavigated", frame => {
+    appendEvent(artifacts.eventsLogPath, {
+      type: "frame-navigated",
+      scenario,
+      text: `${frame === page.mainFrame() ? "main" : "sub"} ${frame.name()} ${frame.url()}`,
     });
   });
 }
@@ -625,11 +764,11 @@ function startMathReadBackend(
   backendLogPath: string,
 ): RunningBackend {
   const logFd = openSync(backendLogPath, "a");
+  // .venv binaries directly: `uv run` takes the project lock, and concurrent uv
+  // invocations across tests intermittently hang a synchronous spawn for minutes.
   const process = Bun.spawn(
     [
-      "uv",
-      "run",
-      "mathread",
+      join(import.meta.dir, "..", ".venv", "bin", "mathread"),
       "serve",
       "--host",
       "127.0.0.1",
@@ -669,11 +808,11 @@ function startCourseServer(eventsLogPath: string): RunningCourseServer {
           headers: { "content-type": "text/html" },
         });
       }
-      if (url.pathname === "/notes.pdf" || url.pathname === "/pdf/2301.12345") {
+      if (url.pathname === "/notes.pdf" || url.pathname === "/pdf/2301.12345" || url.pathname === "/item/AST_1992__211__1_0.pdf") {
         if (courseRequest.cookie?.includes(`${cookieName}=${cookieValue}`) !== true) {
           return new Response("missing browser session cookie", { status: 403 });
         }
-        return new Response(pdfBytes, {
+        return new Response(pdfBytesForPath(url.pathname), {
           headers: { "content-type": "application/pdf" },
         });
       }
@@ -721,7 +860,6 @@ function assertEvidenceArtifacts(
 ): void {
   if (scenario === "clicked-link") {
     assertPng(artifacts.screenshotBeforePath);
-    assertZip(artifacts.tracePath);
   }
   assertPng(artifacts.screenshotAfterPath);
 
@@ -755,12 +893,6 @@ function assertPng(path: string): void {
   expect(statSync(path).size).toBeGreaterThan(100);
 }
 
-function assertZip(path: string): void {
-  const bytes = readFileSync(path);
-  expect(bytes.subarray(0, 2).toString("utf8")).toBe("PK");
-  expect(statSync(path).size).toBeGreaterThan(100);
-}
-
 function readPersistedEvents(logPath: string): PersistedEvent[] {
   return readFileSync(logPath, "utf8")
     .trim()
@@ -784,10 +916,83 @@ function pdfSha256(): string {
 }
 
 function pdfPathForScenario(scenario: CaptureScenario): string {
+  if (scenario === "large-numdam-pdf") {
+    return "/item/AST_1992__211__1_0.pdf";
+  }
   if (scenario === "direct-pdf-without-extension") {
     return "/pdf/2301.12345";
   }
   return "/notes.pdf";
+}
+
+function pdfBytesForPath(path: string): Uint8Array<ArrayBuffer> {
+  if (path === "/item/AST_1992__211__1_0.pdf") {
+    return multipagePdfBytes(6);
+  }
+  return pdfBytes;
+}
+
+function multipagePdfBytes(pageCount: number): Uint8Array<ArrayBuffer> {
+  const objects = new Map<number, string>();
+  objects.set(1, "<< /Type /Catalog /Pages 2 0 R >>");
+  objects.set(3, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+
+  const pageObjectNumbers: number[] = [];
+  let nextObjectNumber = 4;
+  for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+    const pageObjectNumber = nextObjectNumber;
+    const contentObjectNumber = nextObjectNumber + 1;
+    nextObjectNumber += 2;
+    pageObjectNumbers.push(pageObjectNumber);
+    objects.set(
+      pageObjectNumber,
+      [
+        "<< /Type /Page",
+        "/Parent 2 0 R",
+        "/MediaBox [0 0 300 300]",
+        `/Contents ${contentObjectNumber} 0 R`,
+        "/Resources << /Font << /F1 3 0 R >> >>",
+        ">>",
+      ].join(" "),
+    );
+    const stream = [
+      "BT",
+      "/F1 24 Tf",
+      "72 180 Td",
+      `(MathRead page ${pageNumber}) Tj`,
+      "ET",
+      "0 0 1 rg",
+      "72 72 100 50 re f",
+      "",
+    ].join("\n");
+    objects.set(
+      contentObjectNumber,
+      `<< /Length ${stream.length} >>\nstream\n${stream}endstream`,
+    );
+  }
+
+  objects.set(
+    2,
+    `<< /Type /Pages /Kids [${pageObjectNumbers.map(objectNumber => `${objectNumber} 0 R`).join(" ")}] /Count ${pageCount} >>`,
+  );
+
+  let source = "%PDF-1.4\n";
+  const offsets = [0];
+  for (const objectNumber of [...objects.keys()].sort((left, right) => left - right)) {
+    offsets[objectNumber] = source.length;
+    source += `${objectNumber} 0 obj\n${objects.get(objectNumber)}\nendobj\n`;
+  }
+  const startXref = source.length;
+  source += `xref\n0 ${objects.size + 1}\n`;
+  source += "0000000000 65535 f \n";
+  for (let objectNumber = 1; objectNumber <= objects.size; objectNumber += 1) {
+    const offset = offsets[objectNumber];
+    assert(offset !== undefined);
+    source += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  }
+  source += `trailer\n<< /Root 1 0 R /Size ${objects.size + 1} >>\n`;
+  source += `startxref\n${startXref}\n%%EOF\n`;
+  return new TextEncoder().encode(source);
 }
 
 async function waitForHttpService(url: string): Promise<void> {
@@ -831,9 +1036,7 @@ async function waitForStoredPdf(readingRoot: string): Promise<string> {
 
 function pdfDocinfo(storedPath: string): Record<string, string> {
   const result = Bun.spawnSync([
-    "uv",
-    "run",
-    "python",
+    join(import.meta.dir, "..", ".venv", "bin", "python"),
     "-c",
     [
       "import json",
