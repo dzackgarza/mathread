@@ -118,7 +118,7 @@ function mountReader(key: string): void {
   newBody.style.cssText = "margin:0; padding:0; height:100vh; overflow:hidden;";
 
   const reader = document.createElement("iframe");
-  reader.src = `${chrome.runtime.getURL("poc/reader.html")}?key=${encodeURIComponent(key)}`
+  reader.src = `${chrome.runtime.getURL("reader/reader.html")}?key=${encodeURIComponent(key)}`
     + viewRestoreParams(window.location.href);
   reader.name = "mathreadReaderFrame";
   // Cross-origin iframes only get async-clipboard access when the embedder delegates it.

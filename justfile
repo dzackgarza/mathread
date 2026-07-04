@@ -7,9 +7,13 @@
 default:
     @just --list
 
-# Build the browser extension shim
+# Build the unpacked browser extension
 build:
     @bun run build
+
+# Build the Chrome Web Store ZIP package
+package:
+    @bun run package
 
 # Run the full local QC contract
 test:

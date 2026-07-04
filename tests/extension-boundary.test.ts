@@ -389,7 +389,7 @@ test("legacy highlight migration rejects incomplete records instead of fabricati
 
 test("reader disables document-only toolbar actions when no document key is open", async () => {
   await withExtensionReader(async ({ extensionId, page }) => {
-    await page.goto(`chrome-extension://${extensionId}/poc/reader.html`, { waitUntil: "domcontentloaded" });
+    await page.goto(`chrome-extension://${extensionId}/reader/reader.html`, { waitUntil: "domcontentloaded" });
     const state = await waitForNoDocumentReaderState(page);
     expect(state.docTitle).toBe("MathRead Library");
     expect(state.viewerText).toContain("No document open");
@@ -420,13 +420,13 @@ test("reader keeps exactly one coherent page set after rapid toolbar rerenders",
 }, 120_000);
 
 function readerPageUrl(extensionId: string, key: string): string {
-  return `chrome-extension://${extensionId}/poc/reader.html?key=${encodeURIComponent(key)}`;
+  return `chrome-extension://${extensionId}/reader/reader.html?key=${encodeURIComponent(key)}`;
 }
 
 function assertReaderFrameUrl(url: string, expectedKey: string): void {
   const parsed = new URL(url);
   expect(parsed.protocol).toBe("chrome-extension:");
-  expect(parsed.pathname).toContain("/poc/reader.html");
+  expect(parsed.pathname).toContain("/reader/reader.html");
   expect(parsed.searchParams.get("key")).toBe(expectedKey);
 }
 
@@ -985,10 +985,10 @@ async function seedLegacyReaderState(
   highlights: LegacyHighlight[],
   autosaveMs: number,
 ): Promise<void> {
-  await page.goto(`chrome-extension://${extensionId}/poc/reader.css`, { waitUntil: "domcontentloaded" });
+  await page.goto(`chrome-extension://${extensionId}/reader/reader.css`, { waitUntil: "domcontentloaded" });
   await page.evaluate(
     ({ key, highlights }) => {
-      localStorage.setItem(`mathread-poc-highlights:${key}`, JSON.stringify(highlights));
+      localStorage.setItem(`mathread-legacy-highlights:${key}`, JSON.stringify(highlights));
     },
     { key, highlights },
   );
@@ -1018,7 +1018,7 @@ async function seedLegacyReaderState(
 }
 
 async function legacyHighlightsRaw(page: Page, key: string): Promise<string | null> {
-  return page.evaluate(key => localStorage.getItem(`mathread-poc-highlights:${key}`), key);
+  return page.evaluate(key => localStorage.getItem(`mathread-legacy-highlights:${key}`), key);
 }
 
 async function waitForStablePageDom(page: Page): Promise<{ canvasCount: number; pageNumbers: string[] }> {

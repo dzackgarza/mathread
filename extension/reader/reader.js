@@ -31,7 +31,7 @@ import {
   defaultHighlightStyle,
 } from "./vendor/codemirror.mjs";
 
-GlobalWorkerOptions.workerSrc = chrome.runtime.getURL("poc/vendor/pdfjs/pdf.worker.min.mjs");
+GlobalWorkerOptions.workerSrc = chrome.runtime.getURL("reader/vendor/pdfjs/pdf.worker.min.mjs");
 
 // The reader is keyed by the backend library key (the stored PDF filename). The PDF
 // bytes come from GET /pdf/{key}; provenance (original pdf_url, title) comes from the
@@ -42,7 +42,7 @@ const libraryKey = bootParams.get("key");
 const initialPage = Number(bootParams.get("page"));
 const initialZoom = Number(bootParams.get("zoom"));
 // Legacy localStorage highlight store; read once to migrate into the notes sidecar.
-const legacyStorageKey = `mathread-poc-highlights:${libraryKey}`;
+const legacyStorageKey = `mathread-legacy-highlights:${libraryKey}`;
 
 const $ = id => document.getElementById(id);
 
@@ -327,7 +327,7 @@ async function main() {
   await loadNoteText();
   renderSidebarList();
   renderOutline().catch(error => {
-    throw readerError("MATHREAD-POC-OUTLINE-ERROR", error);
+    throw readerError("MATHREAD-READER-OUTLINE-ERROR", error);
   });
   await renderAllPages();
   watchCurrentPage();
@@ -1114,9 +1114,9 @@ function handleMenuAction(action) {
       flashTitle(typeof metaTitle === "string" && metaTitle.length > 0 ? metaTitle : paperTitle);
     });
   } else if (action === "report") {
-    flashTitle("Report an issue - not wired in the POC");
+    flashTitle("Report an issue - not wired in this build");
   } else {
-    flashTitle(`"${action}" - not wired in the POC`);
+    flashTitle(`"${action}" - not wired in this build`);
   }
 }
 
@@ -1190,7 +1190,7 @@ async function loadCitation() {
       "cite-status",
       "Citation lookup failed. Google Scholar may require you to be signed in, or may be rate-limiting requests.",
     );
-    throw readerError("MATHREAD-POC-CITE-ERROR", error);
+    throw readerError("MATHREAD-READER-CITE-ERROR", error);
   }
 }
 
@@ -1286,7 +1286,7 @@ async function populateScholarMenu() {
     }
   } catch (error) {
     setStatusMessage(scholarMenuEl, "scholar-menu-status", "Lookup failed. Sign in to Google Scholar, or try again later.");
-    throw readerError("MATHREAD-POC-SCHOLAR-ERROR", error);
+    throw readerError("MATHREAD-READER-SCHOLAR-ERROR", error);
   }
 }
 

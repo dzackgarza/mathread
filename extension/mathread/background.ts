@@ -49,7 +49,7 @@ const recentSuccessfulCaptures = new Map<string, { capturedAtMs: number; result:
 declare const chrome: ChromeApi;
 
 chrome.action.onClicked.addListener(() => {
-  void chrome.tabs.create({ url: chrome.runtime.getURL("poc/reader.html") });
+  void chrome.tabs.create({ url: chrome.runtime.getURL("reader/reader.html") });
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

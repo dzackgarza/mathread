@@ -8,26 +8,33 @@ import { join } from "path";
 const distExt = "dist/extension";
 
 copyFileSync(join("extension", "manifest.json"), join(distExt, "manifest.json"));
+mkdirSync(join(distExt, "icons"), { recursive: true });
+for (const size of [16, 32, 48, 128]) {
+  copyFileSync(
+    join("extension", "assets", "icons", `icon${size}.png`),
+    join(distExt, "icons", `icon${size}.png`),
+  );
+}
 copyFileSync(
   join("extension", "mathread", "options.html"),
   join(distExt, "mathread", "options.html"),
 );
 
 // reader.js and its pre-minified vendor ESM ship verbatim: re-bundling minified ESM
-// through bun corrupts identifiers. Only backend.ts (already built to poc/vendor/backend.js
+// through bun corrupts identifiers. Only backend.ts (already built to reader/vendor/backend.js
 // by the bun build step) goes through the bundler.
-mkdirSync(join(distExt, "poc", "vendor", "pdfjs"), { recursive: true });
+mkdirSync(join(distExt, "reader", "vendor", "pdfjs"), { recursive: true });
 for (const asset of ["reader.html", "reader.css", "reader.js"]) {
-  copyFileSync(join("extension", "poc", asset), join(distExt, "poc", asset));
+  copyFileSync(join("extension", "reader", asset), join(distExt, "reader", asset));
 }
 copyFileSync(
-  join("extension", "poc", "vendor", "codemirror.mjs"),
-  join(distExt, "poc", "vendor", "codemirror.mjs"),
+  join("extension", "reader", "vendor", "codemirror.mjs"),
+  join(distExt, "reader", "vendor", "codemirror.mjs"),
 );
 for (const asset of ["pdf.min.mjs", "pdf.worker.min.mjs", "LICENSE"]) {
   copyFileSync(
-    join("extension", "poc", "vendor", "pdfjs", asset),
-    join(distExt, "poc", "vendor", "pdfjs", asset),
+    join("extension", "reader", "vendor", "pdfjs", asset),
+    join(distExt, "reader", "vendor", "pdfjs", asset),
   );
 }
 

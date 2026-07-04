@@ -1,5 +1,5 @@
 // Extension options page: backend health surface + reader settings persisted to
-// chrome.storage.local under "mathread.settings" (read by poc/reader.js at boot).
+// chrome.storage.local under "mathread.settings" (read by reader.js at boot).
 import { backendHealth } from "./portal/api";
 import { backendOriginFromManifest } from "./capture-client";
 

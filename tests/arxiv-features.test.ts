@@ -22,7 +22,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
-import { parseAnnotations, serializeAnnotation } from "../extension/poc/annotations.ts";
+import { parseAnnotations, serializeAnnotation } from "../extension/reader/annotations.ts";
 
 const ARXIV_IDS = ["1612.09116", "2312.13488"];
 const FIXTURE_DIR = join(import.meta.dir, "fixtures", "arxiv");
@@ -126,7 +126,7 @@ async function withArxivReader(arxivId: string, run: (h: Harness) => Promise<voi
         pageFailures.push(`READER-CONSOLE-ERROR: ${message.text()}`);
       }
     });
-    await page.goto(`chrome-extension://${extensionId}/poc/reader.html?key=${encodeURIComponent(key)}`);
+    await page.goto(`chrome-extension://${extensionId}/reader/reader.html?key=${encodeURIComponent(key)}`);
 
     await run({ page, backendPort, readingRoot, key, sidecarPath });
     expect(pageFailures).toEqual([]);

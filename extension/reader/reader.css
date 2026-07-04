@@ -1,10 +1,8 @@
 /*
- * Colors, panel treatment, and the floating tab-rail are matched to Google
- * Scholar Reader's actual chrome as read out of real screenshots
- * (~/Pictures/Screenshots/screenshot_260703_0758*, light theme): dark #222
- * toolbar, #444 side panels with white text, medium-gray page "desk", and a
- * left rail that collapses to floating dark icon chips. No selectors were
- * copied from Scholar's stylesheet except the cited .textLayer block below.
+ * Colors, panel treatment, and the floating tab-rail define the reader chrome:
+ * dark #222 toolbar, #444 side panels with white text, medium-gray page "desk",
+ * and a left rail that collapses to floating dark icon chips. No selectors were
+ * copied from external stylesheets except the cited .textLayer block below.
  */
 :root {
   --toolbar-bg: #222;

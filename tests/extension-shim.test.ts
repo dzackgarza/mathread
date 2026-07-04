@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import {
   type CaptureResult,
@@ -73,8 +73,38 @@ test("built extension manifest declares the MathRead backend permission explicit
   expect(parseBuiltManifest().host_permissions).toContain("http://127.0.0.1:8765/*");
 });
 
+test("built extension manifest declares packaged Web Store icons", () => {
+  const manifest = parseBuiltManifest();
+  const icons = manifest.icons;
+  const action = manifest.action as { default_icon?: Record<string, string>; default_title?: string } | undefined;
+  expect(icons).toEqual({
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png",
+  });
+  expect(action?.default_title).toBe("Open MathRead library");
+  expect(action?.default_icon).toEqual(icons);
+  for (const iconPath of Object.values(icons ?? {})) {
+    expect(existsSync(join("dist", "extension", iconPath))).toBe(true);
+  }
+});
+
+test("built extension distribution exposes reader assets without POC paths", () => {
+  const manifestText = readFileSync(join("dist", "extension", "manifest.json"), "utf-8");
+  const readerText = readFileSync(join("dist", "extension", "reader", "reader.js"), "utf-8");
+  expect(manifestText.includes("poc")).toBe(false);
+  expect(readerText.includes("POC")).toBe(false);
+  expect(readerText.includes("mathread-poc")).toBe(false);
+  expect(manifestText.includes("reader/*")).toBe(true);
+  expect(existsSync(join("dist", "extension", "reader", "reader.html"))).toBe(true);
+  expect(existsSync(join("dist", "extension", "poc"))).toBe(false);
+});
+
 function parseBuiltManifest(): {
   host_permissions?: string[];
+  icons?: Record<string, string>;
+  action?: unknown;
   [key: string]: unknown;
 } {
   return JSON.parse(readFileSync(join("dist", "extension", "manifest.json"), "utf-8"));

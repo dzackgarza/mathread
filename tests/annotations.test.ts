@@ -16,7 +16,7 @@ import {
   removeAnnotation,
   serializeAnnotation,
   upsertAnnotation,
-} from "../extension/poc/annotations.ts";
+} from "../extension/reader/annotations.ts";
 
 const rect = { xPct: 0.1204, yPct: 0.3311, wPct: 0.521, hPct: 0.0182 };
 const rect2 = { xPct: 0.1204, yPct: 0.352, wPct: 0.3, hPct: 0.0182 };
