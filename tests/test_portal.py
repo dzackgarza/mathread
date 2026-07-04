@@ -142,6 +142,23 @@ def test_note_image_written_relative_to_note_and_png_validated(
     assert not_png.status_code == 400
 
 
+def test_note_asset_served_back_for_preview_and_traversal_rejected(
+    client: TestClient,
+    sample_pdf_bytes: bytes,
+) -> None:
+    key = capture(client, sample_pdf_bytes)
+    uploaded = client.post(f"/notes/{key}/image", files={"image": ("clip.png", PNG_PIXEL, "image/png")})
+    assert uploaded.status_code == 200
+
+    served = client.get(f"/notes/{key}/assets/clip-01.png")
+    assert served.status_code == 200
+    assert served.content == PNG_PIXEL
+    assert served.headers["content-type"] == "image/png"
+
+    assert client.get(f"/notes/{key}/assets/missing.png").status_code == 404
+    assert client.get(f"/notes/{key}/assets/..%2Fnotes.pdf").status_code == 404
+
+
 def test_read_event_sets_first_read_once_and_updates_last_position(
     client: TestClient,
     sample_pdf_bytes: bytes,
