@@ -1196,7 +1196,13 @@ async function copyViewLink() {
     flashTitle("No document open to link");
     return;
   }
-  await navigator.clipboard.writeText(viewUrl);
+  try {
+    await navigator.clipboard.writeText(viewUrl);
+  } catch (error) {
+    console.error("MATHREAD-COPY-LINK-ERROR", error);
+    flashTitle(`Copy failed: ${error}`);
+    return;
+  }
   flashTitle("Copied view link");
 }
 

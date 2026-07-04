@@ -152,6 +152,17 @@ test("reader Library panel lists, opens, and trashes captured items against the 
     // Let the reader finish its synchronous page-render pass before interacting —
     // canvas rasterization can otherwise stall input dispatch on a loaded machine.
     await waitForCanvasCount(reader, 6);
+
+    // Copy view link must work from the cross-origin reader iframe (requires the
+    // iframe's clipboard-write permissions-policy delegation) and carry mrpage/mrzoom
+    // on the source URL.
+    await reader.locator("#toggle-more").click();
+    await reader.locator('.menu-item[data-action="copy-view-link"]').click();
+    const expectedViewUrl = new URL(page.url());
+    expectedViewUrl.searchParams.set("mrpage", "1");
+    expectedViewUrl.searchParams.set("mrzoom", "1.25");
+    await waitForClipboardText(page, text => text === expectedViewUrl.href);
+
     await reader.locator('.nav-expand-btn[data-tab="library"]').click();
     await waitForLibraryEntryCount(reader, 2);
 
@@ -517,6 +528,7 @@ async function withExtensionReader(
     });
     const serviceWorker = await waitForExtensionServiceWorker(context);
     const extensionId = new URL(serviceWorker.url()).host;
+    await context.grantPermissions(["clipboard-read"]);
     await context.addCookies([
       {
         name: cookieName,
@@ -684,6 +696,24 @@ async function expectElementText(
     await Bun.sleep(100);
   }
   throw new Error(`Timed out waiting for element text; last text: ${lastText}`);
+}
+
+async function waitForClipboardText(
+  page: Page,
+  predicate: (text: string) => boolean,
+): Promise<void> {
+  let lastText = "<unread>";
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const text = await page.evaluate(() => navigator.clipboard.readText()).catch(() => null);
+    if (text !== null) {
+      lastText = text;
+      if (predicate(text)) {
+        return;
+      }
+    }
+    await Bun.sleep(100);
+  }
+  throw new Error(`Timed out waiting for clipboard text; last: ${lastText}`);
 }
 
 async function waitForHasNoteMarker(surface: ReaderSurface): Promise<void> {
