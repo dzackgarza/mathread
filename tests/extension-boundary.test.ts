@@ -150,7 +150,7 @@ test("reader Library panel lists, opens, and trashes captured items against the 
     await expectElementText(firstEntry.locator(".library-entry-meta"), text => text.includes("just now"));
 
     // The library is URL-first: selecting an entry navigates the tab back to the item's
-    // source URL (never GET /pdf/{key} — the local copy is provenance backup only), and
+    // source URL (never GET /pdf/{key} - the local copy is provenance backup only), and
     // the interception path recognizes the already-captured PDF and mounts the reader.
     await page.locator('[data-testid="library-entry"]', { hasText: "AST_1992" })
       .locator('[data-testid="library-entry-open"]')
@@ -159,7 +159,7 @@ test("reader Library panel lists, opens, and trashes captured items against the 
     expect(new URL(page.url()).pathname).toBe(pdfPathForScenario("large-numdam-pdf"));
 
     const reader = await waitForReaderFrame(page, secondKey);
-    // Let the reader finish its synchronous page-render pass before interacting —
+    // Let the reader finish its synchronous page-render pass before interacting -
     // canvas rasterization can otherwise stall input dispatch on a loaded machine.
     await waitForCanvasCount(reader, 6);
 
@@ -176,7 +176,7 @@ test("reader Library panel lists, opens, and trashes captured items against the 
     await reader.locator('.nav-expand-btn[data-tab="library"]').click();
     await waitForLibraryEntryCount(reader, 2);
 
-    // Trash is guarded by a confirm dialog: dismissing keeps the item…
+    // Trash is guarded by a confirm dialog: dismissing keeps the item...
     page.once("dialog", dialog => void dialog.dismiss());
     await reader.locator('[data-testid="library-entry"]', { hasText: "notes" })
       .locator('[data-testid="library-entry-trash"]')
@@ -184,7 +184,7 @@ test("reader Library panel lists, opens, and trashes captured items against the 
     await Bun.sleep(500);
     await waitForLibraryEntryCount(reader, 2);
 
-    // …accepting removes the PDF and its sidecar from disk and from the list.
+    // ...accepting removes the PDF and its sidecar from disk and from the list.
     page.once("dialog", dialog => void dialog.accept());
     await reader.locator('[data-testid="library-entry"]', { hasText: "notes" })
       .locator('[data-testid="library-entry-trash"]')
@@ -200,7 +200,7 @@ test("built extension captures a clicked PDF link and swaps in the reader withou
   const expectedCourseUrl = new URL("/course/", evidence.courseOrigin).href;
   const expectedPdfUrl = new URL("/notes.pdf", expectedCourseUrl).href;
 
-  // Reader identity (issue #1): the tab never navigates to an extension page — the
+  // Reader identity (issue #1): the tab never navigates to an extension page - the
   // reader mounts as an iframe inside the PDF document, so the address bar keeps the
   // original source URL.
   expect(evidence.mainFrameNavigations.every(url => !url.startsWith("chrome-extension:"))).toBe(true);
@@ -268,7 +268,7 @@ test("reader renders all pages of a large PDF with real content", async () => {
     await page.goto(`${readerPageUrl(extensionId, key)}&page=3&zoom=0.9`, { waitUntil: "domcontentloaded" });
 
     // The reader renders every page as a stacked canvas; a fully rendered 6-page
-    // document has 6 canvases and the last one has real ink — proof that late pages
+    // document has 6 canvases and the last one has real ink - proof that late pages
     // don't silently stay blank.
     await waitForCanvasCount(page, 6);
     const rendered = await canvasPixelEvidence(page, 5);
@@ -329,7 +329,7 @@ test("reader Key Points panel surfaces a loud error when the backend dies (no lo
     await backend.process.exited;
 
     // The note loaded at boot; with the backend gone, the autosave PUT must surface a
-    // visible save failure — never fall back to a browser-local store.
+    // visible save failure - never fall back to a browser-local store.
     await page.locator('.nav-expand-btn[data-tab="keypoints"]').click();
     const editor = page.locator("#ai-editor .cm-content");
     await editor.click();
@@ -459,7 +459,7 @@ async function runBackendUnavailable(): Promise<void> {
     attachPageDiagnostics(page, artifacts, "clicked-link");
     await page.goto(`${courseServer.url.origin}/notes.pdf`);
 
-    // No backend → capture fails → the content script replaces the document with a loud
+    // No backend means capture fails, and the content script replaces the document with a loud
     // error, never a silent local viewer.
     await expectElementText(
       page.locator("#mathread-capture-error"),
@@ -688,6 +688,7 @@ function storedKeyFromPath(storedPath: string): string {
 }
 
 async function waitForReaderFrame(page: Page, expectedKey: string): Promise<Frame> {
+  let lastUrlError: unknown = undefined;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const frame = page.frames().find(candidate => {
       if (candidate.name() !== "mathreadReaderFrame") {
@@ -695,7 +696,8 @@ async function waitForReaderFrame(page: Page, expectedKey: string): Promise<Fram
       }
       try {
         return new URL(candidate.url()).searchParams.get("key") === expectedKey;
-      } catch {
+      } catch (error) {
+        lastUrlError = error;
         return false;
       }
     });
@@ -706,7 +708,9 @@ async function waitForReaderFrame(page: Page, expectedKey: string): Promise<Fram
     await Bun.sleep(100);
   }
   const surfaces = page.frames().map(frame => `${frame.name()} ${frame.url()}`);
-  throw new Error(`Timed out waiting for reader frame with key=${expectedKey}; frames: ${surfaces.join(", ")}`);
+  throw new Error(
+    `Timed out waiting for reader frame with key=${expectedKey}; frames: ${surfaces.join(", ")}; last URL error: ${String(lastUrlError)}`,
+  );
 }
 
 type ReaderSurface = Page | Frame;
@@ -753,6 +757,23 @@ async function canvasPixelEvidence(
   let lastEvidence = { canvasSize: 0, nonWhitePixels: 0 };
   for (let attempt = 0; attempt < 100; attempt += 1) {
     lastEvidence = await surface.evaluate(targetIndex => {
+      const channel = (value: number | undefined, fallback: number): number => {
+        if (value === undefined) return fallback;
+        return value;
+      };
+      const pixelAlpha = (pixels: Uint8ClampedArray, offset: number): number => {
+        return channel(pixels[offset + 3], 0);
+      };
+      const pixelMinimumColor = (pixels: Uint8ClampedArray, offset: number): number => {
+        return Math.min(
+          channel(pixels[offset], 255),
+          channel(pixels[offset + 1], 255),
+          channel(pixels[offset + 2], 255),
+        );
+      };
+      const isNonWhitePixel = (pixels: Uint8ClampedArray, offset: number): boolean => {
+        return pixelAlpha(pixels, offset) > 0 && pixelMinimumColor(pixels, offset) < 245;
+      };
       const canvases = document.querySelectorAll<HTMLCanvasElement>("#viewer canvas");
       const canvas = canvases[targetIndex];
       if (canvas === undefined) {
@@ -765,11 +786,7 @@ async function canvasPixelEvidence(
       const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
       let nonWhitePixels = 0;
       for (let offset = 0; offset < pixels.length; offset += 4) {
-        const red = pixels[offset] ?? 255;
-        const green = pixels[offset + 1] ?? 255;
-        const blue = pixels[offset + 2] ?? 255;
-        const alpha = pixels[offset + 3] ?? 0;
-        if (alpha > 0 && (red < 245 || green < 245 || blue < 245)) {
+        if (isNonWhitePixel(pixels, offset)) {
           nonWhitePixels += 1;
         }
       }
@@ -799,8 +816,14 @@ async function expectElementText(
   predicate: (text: string) => boolean,
 ): Promise<void> {
   let lastText = "<missing>";
+  let lastError: unknown = undefined;
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    const text = await locator.textContent().catch(() => null);
+    let text: string | null = null;
+    try {
+      text = await locator.textContent();
+    } catch (error) {
+      lastError = error;
+    }
     if (text !== null) {
       lastText = text;
       if (predicate(text)) {
@@ -809,7 +832,7 @@ async function expectElementText(
     }
     await Bun.sleep(100);
   }
-  throw new Error(`Timed out waiting for element text; last text: ${lastText}`);
+  throw new Error(`Timed out waiting for element text; last text: ${lastText}; last error: ${String(lastError)}`);
 }
 
 async function waitForClipboardText(
@@ -817,8 +840,14 @@ async function waitForClipboardText(
   predicate: (text: string) => boolean,
 ): Promise<void> {
   let lastText = "<unread>";
+  let lastError: unknown = undefined;
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    const text = await page.evaluate(() => navigator.clipboard.readText()).catch(() => null);
+    let text: string | null = null;
+    try {
+      text = await page.evaluate(() => navigator.clipboard.readText());
+    } catch (error) {
+      lastError = error;
+    }
     if (text !== null) {
       lastText = text;
       if (predicate(text)) {
@@ -827,7 +856,7 @@ async function waitForClipboardText(
     }
     await Bun.sleep(100);
   }
-  throw new Error(`Timed out waiting for clipboard text; last: ${lastText}`);
+  throw new Error(`Timed out waiting for clipboard text; last: ${lastText}; last error: ${String(lastError)}`);
 }
 
 async function waitForHasNoteMarker(surface: ReaderSurface): Promise<void> {
@@ -846,8 +875,14 @@ async function expectInputValue(
   predicate: (value: string) => boolean,
 ): Promise<void> {
   let lastValue = "<missing>";
+  let lastError: unknown = undefined;
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    const value = await locator.inputValue().catch(() => null);
+    let value: string | null = null;
+    try {
+      value = await locator.inputValue();
+    } catch (error) {
+      lastError = error;
+    }
     if (value !== null) {
       lastValue = value;
       if (predicate(value)) {
@@ -856,7 +891,7 @@ async function expectInputValue(
     }
     await Bun.sleep(100);
   }
-  throw new Error(`Timed out waiting for input value; last value: ${lastValue}`);
+  throw new Error(`Timed out waiting for input value; last value: ${lastValue}; last error: ${String(lastError)}`);
 }
 
 async function waitForNoteSaved(
@@ -889,13 +924,17 @@ async function waitForNoDocumentReaderState(
       const disabledCapable = (element: HTMLElement): element is HTMLButtonElement | HTMLInputElement => {
         return element instanceof HTMLButtonElement || element instanceof HTMLInputElement;
       };
-      const enabledDocumentControls: string[] = [];
-      for (const id of ids) {
+      const enabledDocumentControlSelector = (id: string): string | undefined => {
         const element = document.getElementById(id);
         if (element === null || !disabledCapable(element) || !element.disabled) {
-          enabledDocumentControls.push(`#${id}`);
+          return `#${id}`;
         }
-      }
+        return undefined;
+      };
+      const enabledDocumentControls = ids.flatMap(id => {
+        const selector = enabledDocumentControlSelector(id);
+        return selector === undefined ? [] : [selector];
+      });
       return {
         docTitle: document.getElementById("doc-title")?.textContent ?? "",
         enabledDocumentControls,
@@ -979,7 +1018,7 @@ async function seedLegacyReaderState(
 }
 
 async function legacyHighlightsRaw(page: Page, key: string): Promise<string | null> {
-  return await page.evaluate(key => localStorage.getItem(`mathread-poc-highlights:${key}`), key);
+  return page.evaluate(key => localStorage.getItem(`mathread-poc-highlights:${key}`), key);
 }
 
 async function waitForStablePageDom(page: Page): Promise<{ canvasCount: number; pageNumbers: string[] }> {

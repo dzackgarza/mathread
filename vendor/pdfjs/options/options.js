@@ -36,7 +36,7 @@ Promise.all([
     });
   }),
   new Promise(function getStorageSchema(resolve) {
-    // Get the storage schema - a dictionary of preferences.
+    // Storage schema dictionary of preferences.
     var x = new XMLHttpRequest();
     var schema_location = chrome.runtime.getManifest().storage.managed_schema;
     x.open("get", chrome.runtime.getURL(schema_location));

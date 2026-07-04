@@ -210,7 +210,7 @@ function createFullSizeIframe() {
   return iframe;
 }
 
-// Get the viewer URL, provided that the path is a valid URL.
+// Viewer URL when path parses as a valid URL.
 function getEmbeddedViewerURL(path) {
   var fragment = /^([^#]*)(#.*)?$/.exec(path);
   path = fragment[1];

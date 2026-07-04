@@ -1,6 +1,6 @@
 // ponytail: all pages render upfront, one full re-render per zoom/rotate step.
 // Highlights/comments live in the markdown notes sidecar as pandoc fenced divs
-// (see annotations.ts) — the note doc is the single durable annotation store.
+// (see annotations.ts) - the note doc is the single durable annotation store.
 import { getDocument, GlobalWorkerOptions, TextLayer } from "./vendor/pdfjs/pdf.min.mjs";
 import { parseAnnotations, previewMarkdown, removeAnnotation, upsertAnnotation } from "./annotations.js";
 import {
@@ -45,6 +45,14 @@ const initialZoom = Number(bootParams.get("zoom"));
 const legacyStorageKey = `mathread-poc-highlights:${libraryKey}`;
 
 const $ = id => document.getElementById(id);
+
+function setStatusMessage(target, className, message) {
+  const status = document.createElement("div");
+  status.className = className;
+  status.textContent = message;
+  target.replaceChildren(status);
+}
+
 const viewerEl = $("viewer");
 const sidebarEl = $("sidebar");
 const sidebarListEl = $("highlight-list");
@@ -87,7 +95,7 @@ let pdfDoc = null;
 let pdfData = null;
 let libraryEntry = null;
 let pdfUrl = null; // original provenance URL (Scholar lookup, document properties)
-// Editor state machine: loading → clean ⇄ dirty → saving → clean | error.
+// Editor state machine: loading -> clean <-> dirty -> saving -> clean | error.
 let noteState = { kind: "loading" };
 // The note sidecar text, loaded once at boot before page render so highlights are
 // known when the pages first draw (see loadNoteText). The editor, once mounted,
@@ -252,6 +260,10 @@ for (const button of popupEl.querySelectorAll("[data-color]")) {
   button.addEventListener("click", () => commitPendingHighlight(button.dataset.color, button === $("popup-comment")));
 }
 
+function readerError(context, error) {
+  return new Error(`${context}: ${error instanceof Error ? error.message : String(error)}`);
+}
+
 document.addEventListener("mousedown", event => {
   if (!popupEl.contains(event.target)) {
     popupEl.classList.remove("visible");
@@ -269,7 +281,6 @@ document.addEventListener("mousedown", event => {
 });
 
 main().catch(error => {
-  console.error("MATHREAD-READER-ERROR", error);
   viewerEl.innerHTML = "";
   const panel = document.createElement("div");
   panel.className = "loading";
@@ -277,6 +288,7 @@ main().catch(error => {
   panel.setAttribute("role", "alert");
   panel.textContent = `MathRead failed to load this document: ${error}`;
   viewerEl.append(panel);
+  throw readerError("MATHREAD-READER-ERROR", error);
 });
 
 async function main() {
@@ -287,7 +299,7 @@ async function main() {
   if (!libraryKey) {
     docTitleEl.textContent = "MathRead Library";
     document.title = "MathRead Library";
-    viewerEl.innerHTML = `<div class="loading">No document open — pick one from the Library.</div>`;
+    setStatusMessage(viewerEl, "loading", "No document open - pick one from the Library.");
     setDocumentControlsEnabled(false);
     activateTab("library");
     return;
@@ -314,7 +326,9 @@ async function main() {
   // before the smooth scrollToPage below), not during the scroll settle.
   await loadNoteText();
   renderSidebarList();
-  renderOutline().catch(error => console.error("MATHREAD-POC-OUTLINE-ERROR", error));
+  renderOutline().catch(error => {
+    throw readerError("MATHREAD-POC-OUTLINE-ERROR", error);
+  });
   await renderAllPages();
   watchCurrentPage();
   if (Number.isFinite(initialPage) && initialPage >= 1) {
@@ -324,7 +338,9 @@ async function main() {
   }
   pageInputEl.value = String(currentPageNumber);
   void initNotes();
-  postReadEvent(libraryKey, null).catch(error => console.error("MATHREAD-READ-EVENT-ERROR", error));
+  postReadEvent(libraryKey, null).catch(error => {
+    throw readerError("MATHREAD-READ-EVENT-ERROR", error);
+  });
 }
 
 async function setDocTitle() {
@@ -339,8 +355,8 @@ async function setDocTitle() {
       if (typeof metaTitle === "string" && metaTitle.trim().length > 0) {
         title = metaTitle.trim();
       }
-    } catch {
-      title = "";
+    } catch (error) {
+      throw readerError("MATHREAD-PDF-METADATA-ERROR", error);
     }
   }
   if (title.length === 0) {
@@ -348,14 +364,14 @@ async function setDocTitle() {
   }
   paperTitle = title;
   docTitleEl.textContent = title;
-  document.title = `${title} — MathRead`;
+  document.title = `${title} - MathRead`;
 }
 
 // ---------- Outline ----------
 async function renderOutline() {
   const outline = await pdfDoc.getOutline();
   if (!outline || outline.length === 0) {
-    outlineListEl.innerHTML = `<div class="empty">No outline in this PDF.</div>`;
+    setStatusMessage(outlineListEl, "empty", "No outline in this PDF.");
     return;
   }
   outlineListEl.innerHTML = "";
@@ -558,7 +574,7 @@ function drawStoredHighlights() {
 function renderSidebarList() {
   sidebarListEl.innerHTML = "";
   if (highlights.length === 0) {
-    sidebarListEl.innerHTML = emptyHighlightsMarkup();
+    appendEmptyHighlights(sidebarListEl);
     return;
   }
   let lastPageNumber = null;
@@ -611,22 +627,50 @@ function renderSidebarList() {
   }
 }
 
-function emptyHighlightsMarkup() {
-  return `
-    <div class="empty">
-      <svg class="hl-empty-art" width="150" height="120" viewBox="0 0 150 120" fill="none">
-        <rect x="20" y="12" width="110" height="34" rx="5" fill="#5a5a5a"/>
-        <rect x="30" y="22" width="90" height="6" rx="3" fill="#8a8a8a"/>
-        <rect x="30" y="32" width="60" height="6" rx="3" fill="#ffe09d"/>
-        <path d="M75 52 l0 16 m-6 -6 l6 6 l6 -6" stroke="#9a9a9a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-        <rect x="20" y="74" width="110" height="34" rx="5" fill="#5a5a5a"/>
-        <rect x="30" y="84" width="90" height="6" rx="3" fill="#8a8a8a"/>
-        <rect x="30" y="94" width="70" height="6" rx="3" fill="#91edd0"/>
-      </svg>
-      Select text to highlight or comment.
-      <br /><br />
-      Highlights are stored as annotation blocks in this PDF's markdown notes.
-    </div>`;
+function appendEmptyHighlights(target) {
+  const empty = document.createElement("div");
+  empty.className = "empty";
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.classList.add("hl-empty-art");
+  svg.setAttribute("width", "150");
+  svg.setAttribute("height", "120");
+  svg.setAttribute("viewBox", "0 0 150 120");
+  svg.setAttribute("fill", "none");
+
+  const addRect = (x, y, width, height, rx, fill) => {
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", x);
+    rect.setAttribute("y", y);
+    rect.setAttribute("width", width);
+    rect.setAttribute("height", height);
+    rect.setAttribute("rx", rx);
+    rect.setAttribute("fill", fill);
+    svg.append(rect);
+  };
+
+  addRect("20", "12", "110", "34", "5", "#5a5a5a");
+  addRect("30", "22", "90", "6", "3", "#8a8a8a");
+  addRect("30", "32", "60", "6", "3", "#ffe09d");
+  const arrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  arrow.setAttribute("d", "M75 52 l0 16 m-6 -6 l6 6 l6 -6");
+  arrow.setAttribute("stroke", "#9a9a9a");
+  arrow.setAttribute("stroke-width", "3");
+  arrow.setAttribute("stroke-linecap", "round");
+  arrow.setAttribute("stroke-linejoin", "round");
+  svg.append(arrow);
+  addRect("20", "74", "110", "34", "5", "#5a5a5a");
+  addRect("30", "84", "90", "6", "3", "#8a8a8a");
+  addRect("30", "94", "70", "6", "3", "#91edd0");
+
+  empty.append(
+    svg,
+    document.createTextNode("Select text to highlight or comment."),
+    document.createElement("br"),
+    document.createElement("br"),
+    document.createTextNode("Highlights are stored as annotation blocks in this PDF's markdown notes."),
+  );
+  target.append(empty);
 }
 
 // ---------- Search ----------
@@ -750,7 +794,7 @@ async function initNotes() {
   notesInitialized = true;
 
   if (!libraryKey) {
-    showNotesError("Open a PDF to take notes — notes live in the PDF's markdown sidecar.");
+    showNotesError("Open a PDF to take notes - notes live in the PDF's markdown sidecar.");
     return;
   }
 
@@ -776,7 +820,7 @@ async function initNotes() {
         keymap.of([...defaultKeymap, ...historyKeymap]),
         markdown(),
         syntaxHighlighting(defaultHighlightStyle),
-        placeholder("Write notes… (saved to the PDF's markdown sidecar)"),
+        placeholder("Write notes... (saved to the PDF's markdown sidecar)"),
         EditorView.lineWrapping,
         EditorView.updateListener.of(update => {
           if (update.docChanged) {
@@ -857,10 +901,10 @@ async function saveNote() {
 
 function renderNoteStatus() {
   const label = {
-    loading: () => "Loading…",
+    loading: () => "Loading...",
     clean: () => "Saved",
     dirty: () => "Unsaved changes",
-    saving: () => "Saving…",
+    saving: () => "Saving...",
     error: () => `Save failed: ${noteState.message}`,
   }[noteState.kind]();
   notesStatusEl.textContent = label;
@@ -886,7 +930,9 @@ function renderNotesPreview() {
   const text = aiView ? aiView.state.doc.toString() : "";
   // Annotation fenced divs are rewritten to plain markdown so the preview shows
   // the quoted passage + comment instead of raw ::: fences.
-  notesPreviewEl.innerHTML = DOMPurify.sanitize(marked.parse(previewMarkdown(text), { gfm: true, async: false }));
+  const rendered = marked.parse(previewMarkdown(text), { gfm: true, async: false });
+  const fragment = DOMPurify.sanitize(rendered, { RETURN_DOM_FRAGMENT: true });
+  notesPreviewEl.replaceChildren(fragment);
   // Clip images are note-relative ("<stem>.assets/clip-01.png") so the sidecar renders in
   // any markdown tool on disk; in the reader they resolve through the backend asset route.
   for (const img of notesPreviewEl.querySelectorAll("img")) {
@@ -961,7 +1007,7 @@ function renderLibraryEntries(entries) {
     const trash = document.createElement("button");
     trash.className = "library-entry-trash";
     trash.dataset.testid = "library-entry-trash";
-    trash.title = "Trash — deletes the PDF and its notes";
+    trash.title = "Trash - deletes the PDF and its notes";
     trash.textContent = "🗑";
     trash.addEventListener("click", () => {
       if (!confirm(`Trash "${entry.title}"?\n\nThis deletes the stored PDF, its notes, and its assets.`)) {
@@ -1068,9 +1114,9 @@ function handleMenuAction(action) {
       flashTitle(typeof metaTitle === "string" && metaTitle.length > 0 ? metaTitle : paperTitle);
     });
   } else if (action === "report") {
-    flashTitle("Report an issue — not wired in the POC");
+    flashTitle("Report an issue - not wired in the POC");
   } else {
-    flashTitle(`"${action}" — not wired in the POC`);
+    flashTitle(`"${action}" - not wired in the POC`);
   }
 }
 
@@ -1126,11 +1172,11 @@ async function toggleCiteDialog() {
 }
 
 async function loadCitation() {
-  citeBodyEl.innerHTML = `<div class="cite-status">Looking up citation…</div>`;
+  setStatusMessage(citeBodyEl, "cite-status", "Looking up citation...");
   try {
     const record = await resolveScholarRecord();
     if (!record) {
-      citeBodyEl.innerHTML = `<div class="cite-status">Article not found in Scholar.</div>`;
+      setStatusMessage(citeBodyEl, "cite-status", "Article not found in Scholar.");
       return;
     }
     const url = `https://scholar.google.com/scholar?q=info:${encodeURIComponent(record.infoId)}`
@@ -1139,8 +1185,12 @@ async function loadCitation() {
     renderCitation(data);
     citeLoaded = true;
   } catch (error) {
-    console.error("MATHREAD-POC-CITE-ERROR", error);
-    citeBodyEl.innerHTML = `<div class="cite-status">Citation lookup failed. Google Scholar may require you to be signed in, or may be rate-limiting requests.</div>`;
+    setStatusMessage(
+      citeBodyEl,
+      "cite-status",
+      "Citation lookup failed. Google Scholar may require you to be signed in, or may be rate-limiting requests.",
+    );
+    throw readerError("MATHREAD-POC-CITE-ERROR", error);
   }
 }
 
@@ -1202,7 +1252,7 @@ function renderCitation(data) {
     citeBodyEl.append(linksEl);
   }
   if (citeBodyEl.children.length === 0) {
-    citeBodyEl.innerHTML = `<div class="cite-status">Google Scholar returned no citation for this document.</div>`;
+    setStatusMessage(citeBodyEl, "cite-status", "Google Scholar returned no citation for this document.");
   }
 }
 
@@ -1217,11 +1267,11 @@ async function toggleScholarMenu() {
 }
 
 async function populateScholarMenu() {
-  scholarMenuEl.innerHTML = `<div class="scholar-menu-status">Looking up…</div>`;
+  setStatusMessage(scholarMenuEl, "scholar-menu-status", "Looking up...");
   try {
     const record = await resolveScholarRecord();
     if (!record || record.links.length === 0) {
-      scholarMenuEl.innerHTML = `<div class="scholar-menu-status">Article not found in Scholar.</div>`;
+      setStatusMessage(scholarMenuEl, "scholar-menu-status", "Article not found in Scholar.");
       return;
     }
     scholarMenuEl.innerHTML = "";
@@ -1235,8 +1285,8 @@ async function populateScholarMenu() {
       scholarMenuEl.append(anchor);
     }
   } catch (error) {
-    console.error("MATHREAD-POC-SCHOLAR-ERROR", error);
-    scholarMenuEl.innerHTML = `<div class="scholar-menu-status">Lookup failed. Sign in to Google Scholar, or try again later.</div>`;
+    setStatusMessage(scholarMenuEl, "scholar-menu-status", "Lookup failed. Sign in to Google Scholar, or try again later.");
+    throw readerError("MATHREAD-POC-SCHOLAR-ERROR", error);
   }
 }
 
@@ -1260,9 +1310,8 @@ async function copyViewLink() {
   try {
     await navigator.clipboard.writeText(viewUrl);
   } catch (error) {
-    console.error("MATHREAD-COPY-LINK-ERROR", error);
     flashTitle(`Copy failed: ${error}`);
-    return;
+    throw readerError("MATHREAD-COPY-LINK-ERROR", error);
   }
   flashTitle("Copied view link");
 }
@@ -1322,8 +1371,8 @@ clipOverlayEl.addEventListener("mouseup", event => {
     return;
   }
   void captureClip(region).catch(error => {
-    console.error("MATHREAD-CLIP-ERROR", error);
     flashTitle(`Clip failed: ${error}`);
+    throw readerError("MATHREAD-CLIP-ERROR", error);
   });
 });
 
@@ -1460,7 +1509,9 @@ function scheduleReadEvent() {
   clearTimeout(readEventTimer);
   readEventTimer = setTimeout(() => {
     const position = pdfDoc.numPages > 0 ? (currentPageNumber - 1) / pdfDoc.numPages : 0;
-    postReadEvent(libraryKey, position).catch(error => console.error("MATHREAD-READ-EVENT-ERROR", error));
+    postReadEvent(libraryKey, position).catch(error => {
+      throw readerError("MATHREAD-READ-EVENT-ERROR", error);
+    });
   }, 2000);
 }
 
@@ -1490,11 +1541,11 @@ function flashTitle(message) {
 
 // Every annotation mutation routes through the notes editor doc, so the existing
 // autosave state machine owns persistence and the sidecar stays the single store.
-// Full-doc replace resets the editor cursor; acceptable — mutations originate from
+// Full-doc replace resets the editor cursor; acceptable - mutations originate from
 // the PDF pane, not mid-typing.
 function mutateNote(transform) {
   if (!aiView) {
-    flashTitle("Notes unavailable — annotation not saved");
+    flashTitle("Notes unavailable - annotation not saved");
     return;
   }
   const doc = aiView.state.doc.toString();

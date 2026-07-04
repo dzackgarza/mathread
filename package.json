@@ -18,7 +18,7 @@
   "keywords": [],
   "license": "MIT",
   "scripts": {
-    "test": "bun run build && bun test tests/annotations.test.ts tests/extension-shim.test.ts && bun test --max-concurrency=1 tests/arxiv-features.test.ts && bun test --max-concurrency=1 tests/extension-boundary.test.ts",
+    "test": "bun run build && bun test tests/annotations.test.ts tests/extension-shim.test.ts && bun test --max-concurrency=1 tests/arxiv-features.test.ts && bun test --max-concurrency=1 tests/extension-boundary.test.ts && bun test --coverage --coverage-reporter=lcov tests/annotations.test.ts tests/extension-shim.test.ts && cp coverage/lcov.info lcov.info",
     "typecheck": "tsc --noEmit",
     "build": "rm -rf dist/extension && bun build ./extension/mathread/background.ts ./extension/mathread/link-origin.ts ./extension/mathread/reader-swap.ts ./extension/mathread/options.ts --outdir dist/extension/mathread --target browser && bun build ./extension/poc/backend.ts --outdir dist/extension/poc/vendor --target browser && bun build ./extension/poc/annotations.ts --outdir dist/extension/poc --target browser && bun run extension/build.ts",
     "dev": "bun run build && bun build --watch ./extension/mathread/background.ts ./extension/mathread/link-origin.ts ./extension/mathread/reader-swap.ts --outdir dist/extension/mathread --target browser"
@@ -47,5 +47,51 @@
     "react-syntax-highlighter": "^16.1.1",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.6.0"
+  },
+  "knip": {
+    "entry": [
+      "extension/mathread/background.ts",
+      "extension/mathread/link-origin.ts",
+      "extension/mathread/options.ts",
+      "extension/mathread/reader-swap.ts",
+      "extension/mathread/portal/main.tsx",
+      "extension/poc/annotations.ts",
+      "extension/poc/backend.ts",
+      "extension/poc/reader.js",
+      "tests/**/*.test.ts",
+      "vendor/pdfjs/*.js",
+      "vendor/pdfjs/options/*.js"
+    ],
+    "project": [
+      "extension/**/*.{js,ts,tsx}",
+      "tests/**/*.ts",
+      "vendor/pdfjs/**/*.js"
+    ],
+    "ignoreDependencies": [
+      "@tailwindcss/cli",
+      "@tailwindcss/typography",
+      "pdfjs-dist",
+      "tailwindcss",
+      "tw-animate-css"
+    ],
+    "ignoreFiles": [
+      "extension/mathread/capture-ui.ts",
+      "extension/mathread/portal/components/PdfPane.tsx",
+      "vendor/pdfjs/content/web/wasm/*.js"
+    ],
+    "ignoreUnresolved": [
+      "./vendor/backend.js"
+    ],
+    "ignoreIssues": {
+      "extension/mathread/capture-client.ts": [
+        "exports"
+      ],
+      "extension/mathread/portal/components/ui/alert-dialog.tsx": [
+        "exports"
+      ],
+      "extension/mathread/portal/components/ui/button.tsx": [
+        "exports"
+      ]
+    }
   }
 }

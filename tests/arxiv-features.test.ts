@@ -119,15 +119,17 @@ async function withArxivReader(arxivId: string, run: (h: Harness) => Promise<voi
     const serviceWorker = await waitForExtensionServiceWorker(context);
     const extensionId = new URL(serviceWorker.url()).host;
     const page = await context.newPage();
-    page.on("pageerror", error => console.error("READER-PAGE-ERROR", error));
+    const pageFailures: string[] = [];
+    page.on("pageerror", error => pageFailures.push(`READER-PAGE-ERROR: ${error.message}`));
     page.on("console", message => {
       if (message.type() === "error") {
-        console.error("READER-CONSOLE-ERROR", message.text());
+        pageFailures.push(`READER-CONSOLE-ERROR: ${message.text()}`);
       }
     });
     await page.goto(`chrome-extension://${extensionId}/poc/reader.html?key=${encodeURIComponent(key)}`);
 
     await run({ page, backendPort, readingRoot, key, sidecarPath });
+    expect(pageFailures).toEqual([]);
     await page.close();
   } finally {
     if (context !== undefined) {
@@ -281,18 +283,20 @@ async function waitForExtensionServiceWorker(context: BrowserContext) {
 }
 
 async function waitForHttpService(url: string): Promise<void> {
+  let lastError: unknown = undefined;
   for (let attempt = 0; attempt < 600; attempt += 1) {
     try {
       const response = await fetch(url);
       if (response.ok) {
         return;
       }
-    } catch {
-      // not up yet
+      lastError = new Error(`HTTP ${response.status} ${response.statusText}`);
+    } catch (error) {
+      lastError = error;
     }
     await Bun.sleep(100);
   }
-  throw new Error(`Timed out waiting for HTTP service at ${url}`);
+  throw new Error(`Timed out waiting for HTTP service at ${url}; last error: ${String(lastError)}`);
 }
 
 async function waitFor(condition: () => boolean | Promise<boolean>, timeoutMs: number): Promise<void> {

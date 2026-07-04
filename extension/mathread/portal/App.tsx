@@ -28,6 +28,10 @@ import {
 // Persisted UI state: collapse the notes pane to read the PDF full-width.
 const EDITOR_COLLAPSED_KEY = 'mathread.portal.editorCollapsed';
 
+function failPortal(context: string, error: unknown): never {
+  throw new Error(`${context}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+}
+
 export default function App() {
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -46,26 +50,10 @@ export default function App() {
   const pendingDeleteEntry = library.find((e) => e.key === pendingDeleteKey);
 
   const refreshLibrary = useCallback(() => {
-    getLibrary().then(setLibrary).catch((err) => console.error('library load failed', err));
+    getLibrary().then(setLibrary).catch((err) => failPortal('library load failed', err));
   }, []);
 
   useEffect(refreshLibrary, [refreshLibrary]);
-
-  // Poll for capture completion when a PDF URL is being captured
-  useEffect(() => {
-    if (capturingPdfUrl === null || library.length === 0) return;
-    
-    const match = library.find((e) => e.pdf_url === capturingPdfUrl);
-    if (match) {
-      // Capture complete! Open the PDF
-      setCapturingPdfUrl(null);
-      void openEntry(match.key);
-    } else {
-      // Keep polling
-      const timer = setTimeout(refreshLibrary, 500);
-      return () => clearTimeout(timer);
-    }
-  }, [capturingPdfUrl, library, refreshLibrary]);
 
   useEffect(() => {
     localStorage.setItem(EDITOR_COLLAPSED_KEY, String(editorCollapsed));
@@ -90,7 +78,7 @@ export default function App() {
     setSaving(true);
     putNote(selectedKey, text)
       .then(() => setSavedNote(text))
-      .catch((err) => console.error('note save failed', err))
+      .catch((err) => failPortal('note save failed', err))
       .finally(() => setSaving(false));
   }, [note, selectedKey]);
 
@@ -108,8 +96,7 @@ export default function App() {
     try {
       await deleteLibraryEntry(key);
     } catch (err) {
-      console.error('delete failed', err);
-      return;
+      failPortal('delete failed', err);
     }
     if (key === selectedKey) {
       setSelectedKey(null);
@@ -135,8 +122,23 @@ export default function App() {
     const entry = library.find((e) => e.key === key);
     postReadEvent(key, entry ? entry.last_position : 0)
       .then(refreshLibrary)
-      .catch((err) => console.error('read event failed', err));
+      .catch((err) => failPortal('read event failed', err));
   }, [dirty, selectedKey, note, library, refreshLibrary]);
+
+  // Poll for capture completion when a PDF URL is being captured.
+  useEffect(() => {
+    if (capturingPdfUrl === null || library.length === 0) return;
+
+    const match = library.find((e) => e.pdf_url === capturingPdfUrl);
+    if (match) {
+      setCapturingPdfUrl(null);
+      void openEntry(match.key);
+      return;
+    }
+
+    const timer = setTimeout(refreshLibrary, 500);
+    return () => clearTimeout(timer);
+  }, [capturingPdfUrl, library, openEntry, refreshLibrary]);
 
   useEffect(() => {
     if (deepLinkOpened.current || library.length === 0) return;

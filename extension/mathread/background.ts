@@ -75,7 +75,7 @@ async function capturePdfUrl(request: CaptureUrlRequest): Promise<CaptureResult>
 
   const inFlightCapture = inFlightCaptures.get(request.pdf_url);
   if (inFlightCapture !== undefined) {
-    return await inFlightCapture;
+    return inFlightCapture;
   }
 
   const capture = capturePdfUrlOnce(request);
@@ -90,7 +90,7 @@ async function capturePdfUrl(request: CaptureUrlRequest): Promise<CaptureResult>
 }
 
 async function capturePdfUrlOnce(request: CaptureUrlRequest): Promise<CaptureResult> {
-  return await postCaptureUrl({
+  return postCaptureUrl({
     ...request,
     headers: await requestHeaders(request.pdf_url, request.source_url),
   }, captureUrlEndpointFromManifest(chrome.runtime.getManifest()));
@@ -145,4 +145,3 @@ async function requestHeaders(
     cookie: cookies.map(cookie => `${cookie.name}=${cookie.value}`).join("; "),
   };
 }
-

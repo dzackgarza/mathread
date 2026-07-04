@@ -8,7 +8,7 @@
 //
 // The div attributes carry everything needed to re-render the highlight on the
 // PDF at any zoom (rects are page-fraction coordinates), so the sidecar is the
-// single durable store — nothing in localStorage, nothing embedded in the PDF.
+// single durable store - nothing in localStorage, nothing embedded in the PDF.
 import { expect, test } from "bun:test";
 import {
   parseAnnotations,
@@ -31,7 +31,7 @@ const base = {
   comment: "",
 };
 
-test("serialize → parse round-trips a bare highlight", () => {
+test("serialize then parse round-trips a bare highlight", () => {
   const block = serializeAnnotation(base);
   expect(block.startsWith("::: {.annotation ")).toBe(true);
   expect(block.trimEnd().endsWith(":::")).toBe(true);

@@ -60,7 +60,7 @@ async function captureClickedPdfLink(target: Element): Promise<void> {
   // at click time — long before the viewer exists — so it wins the pdf_url-keyed dedup
   // against the viewer's own auto-capture, which cannot resolve the true source. Persist
   // the origin afterward as a backup for viewers opened later on the same PDF.
-  void chrome.runtime.sendMessage(runtimeCaptureMessage(request));
+  await chrome.runtime.sendMessage(runtimeCaptureMessage(request));
   await rememberPdfLinkOrigin(chrome.storage.local, request);
 }
 
@@ -84,14 +84,9 @@ async function capturePdfFromCurrentDocument(): Promise<void> {
     return;
   }
 
-  void chrome.runtime.sendMessage(runtimeCaptureMessage(request));
+  await chrome.runtime.sendMessage(runtimeCaptureMessage(request));
 }
 
 function isLikelyPdfUrlForCurrentDocument(value: string): boolean {
-  try {
-    new URL(value);
-    return true;
-  } catch {
-    return false;
-  }
+  return URL.canParse(value);
 }

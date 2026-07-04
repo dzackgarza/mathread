@@ -3,7 +3,7 @@
 // there is no vite-dev-proxy/nginx /api rewrite to rely on: the backend origin is read
 // straight from the extension manifest's host_permissions, same as capture-client.ts.
 //
-// Types mirror the Pydantic models in mathread's src/mathread/models.py by hand — there is
+// Types mirror the Pydantic models in mathread's src/mathread/models.py by hand - there is
 // no schema codegen, so new backend fields must be added here too.
 
 import { backendOriginFromManifest } from '../capture-client';
@@ -148,7 +148,7 @@ export async function backendHealth(): Promise<BackendHealth> {
   invariant(typeof value.ready === 'boolean', 'MathRead backend status must declare ready');
   invariant(typeof value.root === 'string', 'MathRead backend status must declare root');
   return value.ready
-    ? { ok: true, detail: `MathRead backend ready — ${API_BASE} → ${value.root}` }
+    ? { ok: true, detail: `MathRead backend ready - ${API_BASE} -> ${value.root}` }
     : { ok: false, detail: `MathRead backend storage not ready: ${value.root}` };
 }
 
