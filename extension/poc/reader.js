@@ -103,12 +103,25 @@ let settings = settingsDefaults;
 let pageContainers = [];
 let currentPageNumber = 1;
 let intersectionObserver = null;
+let renderGeneration = 0;
 let paperTitle = "";
 let citeLoaded = false;
 let aiView = null;
 let thumbsBuilt = false;
 let searchMatches = [];
 let searchIndex = -1;
+let pendingLegacyMigrationStorageKey = null;
+
+const documentControlIds = [
+  "prev-page",
+  "next-page",
+  "page-input",
+  "zoom-out",
+  "zoom-in",
+  "fit-width",
+  "rotate",
+  "download",
+];
 
 // ---------- Backend status light ----------
 backendLightEl.addEventListener("click", () => chrome.runtime.openOptionsPage());
@@ -133,12 +146,18 @@ async function loadSettings() {
 // ---------- Toolbar wiring ----------
 $("prev-page").addEventListener("click", () => jumpPage(-1));
 $("next-page").addEventListener("click", () => jumpPage(1));
-$("zoom-in").addEventListener("click", () => rerender(scale + 0.15));
-$("zoom-out").addEventListener("click", () => rerender(Math.max(0.4, scale - 0.15)));
-$("fit-width").addEventListener("click", fitWidth);
+$("zoom-in").addEventListener("click", () => {
+  void rerender(scale + 0.15);
+});
+$("zoom-out").addEventListener("click", () => {
+  void rerender(Math.max(0.4, scale - 0.15));
+});
+$("fit-width").addEventListener("click", () => {
+  void fitWidth();
+});
 $("rotate").addEventListener("click", () => {
   rotation = (rotation + 90) % 360;
-  rerender(scale);
+  void rerender(scale);
 });
 $("toggle-sidebar").addEventListener("click", () => toggleSidebar());
 $("close-sidebar").addEventListener("click", () => toggleSidebar(false));
@@ -269,6 +288,7 @@ async function main() {
     docTitleEl.textContent = "MathRead Library";
     document.title = "MathRead Library";
     viewerEl.innerHTML = `<div class="loading">No document open — pick one from the Library.</div>`;
+    setDocumentControlsEnabled(false);
     activateTab("library");
     return;
   }
@@ -288,6 +308,7 @@ async function main() {
   // getDocument transfers the ArrayBuffer, so hand it a copy and keep pdfData for download.
   pdfDoc = await getDocument({ data: pdfData.slice(0) }).promise;
   pageTotalEl.textContent = String(pdfDoc.numPages);
+  setDocumentControlsEnabled(true);
   setDocTitle();
   // Load annotations before rendering so highlights draw with the pages (and thus
   // before the smooth scrollToPage below), not during the scroll settle.
@@ -380,6 +401,7 @@ async function outlineDestPageNumber(dest) {
 
 // ---------- Page rendering ----------
 async function renderAllPages() {
+  const generation = ++renderGeneration;
   viewerEl.innerHTML = "";
   pageContainers = [];
   for (let pageNumber = 1; pageNumber <= pdfDoc.numPages; pageNumber++) {
@@ -396,6 +418,9 @@ async function renderAllPages() {
     canvas.width = viewport.width;
     canvas.height = viewport.height;
     await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+    if (generation !== renderGeneration) {
+      return generation;
+    }
 
     const textLayerDiv = document.createElement("div");
     textLayerDiv.className = "textLayer";
@@ -405,6 +430,9 @@ async function renderAllPages() {
       viewport,
     });
     await textLayer.render();
+    if (generation !== renderGeneration) {
+      return generation;
+    }
 
     const highlightLayerDiv = document.createElement("div");
     highlightLayerDiv.className = "highlightLayer";
@@ -423,20 +451,28 @@ async function renderAllPages() {
   if (searchInputEl.value.trim()) {
     runSearch(searchInputEl.value);
   }
+  return generation;
 }
 
 async function rerender(newScale) {
   scale = newScale;
-  await renderAllPages();
+  const targetPageNumber = currentPageNumber;
+  const generation = await renderAllPages();
+  if (generation !== renderGeneration) {
+    return;
+  }
   watchCurrentPage();
-  scrollToPage(currentPageNumber);
+  scrollToPage(targetPageNumber);
 }
 
 async function fitWidth() {
+  if (pdfDoc === null) {
+    return;
+  }
   const page = await pdfDoc.getPage(currentPageNumber);
   const base = page.getViewport({ scale: 1, rotation });
   const available = viewerEl.clientWidth - 40;
-  rerender(Math.max(0.4, available / base.width));
+  await rerender(Math.max(0.4, available / base.width));
 }
 
 function updateZoomLabel() {
@@ -802,6 +838,10 @@ async function saveNote() {
   const text = aiView.state.doc.toString();
   try {
     await putNote(libraryKey, text);
+    if (pendingLegacyMigrationStorageKey !== null) {
+      localStorage.removeItem(pendingLegacyMigrationStorageKey);
+      pendingLegacyMigrationStorageKey = null;
+    }
     // Edits made while the PUT was in flight stay dirty and re-schedule.
     noteState = aiView.state.doc.toString() === text ? { kind: "clean" } : { kind: "dirty" };
     if (noteState.kind === "dirty") {
@@ -1378,15 +1418,10 @@ function jumpPage(delta) {
 function watchCurrentPage() {
   intersectionObserver?.disconnect();
   intersectionObserver = new IntersectionObserver(
-    entries => {
-      // Ties (several fully visible pages at low zoom) resolve to the topmost page.
-      const mostVisible = entries
-        .filter(e => e.isIntersecting)
-        .sort((a, b) =>
-          b.intersectionRatio - a.intersectionRatio
-          || a.boundingClientRect.top - b.boundingClientRect.top)[0];
-      if (mostVisible) {
-        currentPageNumber = Number(mostVisible.target.dataset.pageNumber);
+    () => {
+      const visiblePage = currentVisiblePage();
+      if (visiblePage !== null) {
+        currentPageNumber = visiblePage;
         pageInputEl.value = String(currentPageNumber);
         scheduleReadEvent();
       }
@@ -1396,6 +1431,26 @@ function watchCurrentPage() {
   for (const entry of pageContainers) {
     intersectionObserver.observe(entry.pageDiv);
   }
+}
+
+function currentVisiblePage() {
+  const viewerRect = viewerEl.getBoundingClientRect();
+  const visiblePages = pageContainers
+    .map(entry => {
+      const rect = entry.pageDiv.getBoundingClientRect();
+      const visibleHeight = Math.min(rect.bottom, viewerRect.bottom) - Math.max(rect.top, viewerRect.top);
+      return {
+        pageNumber: entry.pageNumber,
+        visibleHeight,
+        topDistance: Math.abs(rect.top - viewerRect.top),
+      };
+    })
+    .filter(page => page.visibleHeight > 0)
+    .sort((a, b) => a.topDistance - b.topDistance || a.pageNumber - b.pageNumber);
+  if (visiblePages.length === 0) {
+    return null;
+  }
+  return visiblePages[0].pageNumber;
 }
 
 function scheduleReadEvent() {
@@ -1410,6 +1465,10 @@ function scheduleReadEvent() {
 }
 
 async function downloadPdf() {
+  if (pdfData === null || libraryKey === null) {
+    flashTitle("No document open to download");
+    return;
+  }
   const blob = new Blob([pdfData], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -1460,20 +1519,77 @@ function migrateLegacyHighlights() {
     return;
   }
   const legacy = JSON.parse(raw);
+  if (!Array.isArray(legacy)) {
+    flashTitle("Legacy highlights were not migrated");
+    return;
+  }
+  const annotations = legacy.map(parseLegacyHighlight);
+  if (annotations.some(annotation => annotation === null)) {
+    flashTitle("Legacy highlights were not migrated");
+    return;
+  }
   mutateNote(doc =>
-    legacy.reduce(
-      (text, h) =>
-        upsertAnnotation(text, {
-          id: h.id,
-          pageNumber: h.pageNumber,
-          color: h.color,
-          created: new Date(h.createdAt ?? 0).toISOString(),
-          rects: h.rects,
-          text: h.text,
-          comment: h.comment ?? "",
-        }),
-      doc,
-    ),
+    annotations.reduce((text, annotation) => upsertAnnotation(text, annotation), doc),
   );
-  localStorage.removeItem(legacyStorageKey);
+  pendingLegacyMigrationStorageKey = legacyStorageKey;
+}
+
+function parseLegacyHighlight(value) {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  if (
+    typeof value.id !== "string"
+    || !Number.isInteger(value.pageNumber)
+    || value.pageNumber < 1
+    || typeof value.color !== "string"
+    || typeof value.createdAt !== "string"
+    || !Array.isArray(value.rects)
+    || typeof value.text !== "string"
+    || typeof value.comment !== "string"
+  ) {
+    return null;
+  }
+  const created = new Date(value.createdAt);
+  if (!Number.isFinite(created.getTime())) {
+    return null;
+  }
+  const rects = value.rects.map(parseLegacyRect);
+  if (rects.some(rect => rect === null)) {
+    return null;
+  }
+  return {
+    id: value.id,
+    pageNumber: value.pageNumber,
+    color: value.color,
+    created: created.toISOString(),
+    rects,
+    text: value.text,
+    comment: value.comment,
+  };
+}
+
+function parseLegacyRect(value) {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const { xPct, yPct, wPct, hPct } = value;
+  if (
+    !Number.isFinite(xPct)
+    || !Number.isFinite(yPct)
+    || !Number.isFinite(wPct)
+    || !Number.isFinite(hPct)
+  ) {
+    return null;
+  }
+  return { xPct, yPct, wPct, hPct };
+}
+
+function setDocumentControlsEnabled(enabled) {
+  for (const id of documentControlIds) {
+    const control = document.getElementById(id);
+    if (control instanceof HTMLButtonElement || control instanceof HTMLInputElement) {
+      control.disabled = !enabled;
+    }
+  }
 }

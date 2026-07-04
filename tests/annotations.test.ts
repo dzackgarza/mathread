@@ -74,6 +74,25 @@ test("text containing ::: lines cannot terminate the block early", () => {
   expect(parsed[0]!.comment.trim().endsWith(":::")).toBe(true);
 });
 
+test("a comment line indented into a ::: fence round-trips without losing its space", () => {
+  // A comment that quotes pandoc fenced-div syntax with a one-space indent. The
+  // serializer escapes fence-looking comment lines; unescape must be a true inverse
+  // and not strip a leading space the author actually wrote.
+  const a = { ...base, id: "a-esc", comment: "Block syntax:\n :::" };
+  const parsed = parseAnnotations(serializeAnnotation(a));
+  expect(parsed.length).toBe(1);
+  expect(parsed[0]!.comment).toBe(a.comment);
+});
+
+test("a comment that opens with a blank line round-trips exactly", () => {
+  // The serializer separates text from comment with one blank line; parsing must
+  // strip exactly that separator, not every leading blank, or authored blank lines vanish.
+  const a = { ...base, id: "a-blank", comment: "\nStarts after a blank line." };
+  const parsed = parseAnnotations(serializeAnnotation(a));
+  expect(parsed.length).toBe(1);
+  expect(parsed[0]!.comment).toBe(a.comment);
+});
+
 test("parses multiple annotations and ignores unrelated fenced divs", () => {
   const doc = [
     "::: {.warning}",

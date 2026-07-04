@@ -115,11 +115,11 @@ export function parseAnnotations(markdown: string): ParsedAnnotation[] {
       .slice(0, textEnd)
       .map(line => line.slice(2))
       .join("\n");
-    const comment = body
-      .slice(textEnd)
-      .join("\n")
-      .replace(/^\n+/, "")
-      .replace(/^ :::/gm, ":::"); // undo the serializer's fence escape
+    const commentLines = body.slice(textEnd);
+    if (commentLines[0] === "") {
+      commentLines.shift();
+    }
+    const comment = commentLines.join("\n");
 
     const pageNumber = Number(attrs.page);
     const rects = attrs.rects !== undefined ? parseRects(attrs.rects) : null;

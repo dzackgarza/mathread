@@ -58,6 +58,16 @@ const pdfBytes = new TextEncoder().encode(
 
 const cookieName = "mathread_session";
 const cookieValue = "extension-test";
+const documentControlIds = [
+  "prev-page",
+  "next-page",
+  "page-input",
+  "zoom-out",
+  "zoom-in",
+  "fit-width",
+  "rotate",
+  "download",
+];
 
 type ExtensionManifest = {
   host_permissions: string[];
@@ -331,6 +341,84 @@ test("reader Key Points panel surfaces a loud error when the backend dies (no lo
   });
 }, 60_000);
 
+test("reader keeps legacy highlight source until migration is durably saved", async () => {
+  await withExtensionReader(async ({ backendPort, courseServer, extensionId, page }) => {
+    const key = await preCapturePdfThroughBackend(backendPort, courseServer, "direct-pdf-tab");
+    await seedLegacyReaderState(page, extensionId, key, [legacyHighlight()], 15_000);
+
+    await page.goto(readerPageUrl(extensionId, key), { waitUntil: "domcontentloaded" });
+    await waitForCanvasCount(page, 1);
+    await page.locator('.nav-expand-btn[data-tab="keypoints"]').click();
+
+    await expectElementText(page.locator("#ai-editor .cm-content"), text => text.includes("legacy lattice quote"));
+    await expectElementText(page.locator("#notes-status"), text => text === "Unsaved changes");
+    expect(await legacyHighlightsRaw(page, key)).not.toBeNull();
+  });
+}, 120_000);
+
+test("legacy highlight migration rejects incomplete records instead of fabricating defaults", async () => {
+  await withExtensionReader(async ({ backendPort, courseServer, extensionId, page }) => {
+    const key = await preCapturePdfThroughBackend(backendPort, courseServer, "direct-pdf-tab");
+    await seedLegacyReaderState(
+      page,
+      extensionId,
+      key,
+      [
+        {
+          id: "legacy-incomplete",
+          pageNumber: 1,
+          color: "#91edd0",
+          rects: legacyRects(),
+          text: "legacy highlight missing required fields",
+        },
+      ],
+      15_000,
+    );
+
+    await page.goto(readerPageUrl(extensionId, key), { waitUntil: "domcontentloaded" });
+    await waitForCanvasCount(page, 1);
+    await page.locator('.nav-expand-btn[data-tab="keypoints"]').click();
+    await expectElementText(page.locator("#notes-status"), text => text === "Saved" || text === "Unsaved changes");
+
+    const editorText = await page.locator("#ai-editor .cm-content").innerText();
+    expect(editorText).not.toContain("1970-01-01T00:00:00.000Z");
+    expect(editorText).not.toContain("legacy highlight missing required fields");
+    expect(await legacyHighlightsRaw(page, key)).not.toBeNull();
+  });
+}, 120_000);
+
+test("reader disables document-only toolbar actions when no document key is open", async () => {
+  await withExtensionReader(async ({ extensionId, page }) => {
+    await page.goto(`chrome-extension://${extensionId}/poc/reader.html`, { waitUntil: "domcontentloaded" });
+    const state = await waitForNoDocumentReaderState(page);
+    expect(state.docTitle).toBe("MathRead Library");
+    expect(state.viewerText).toContain("No document open");
+    expect(state.enabledDocumentControls).toEqual([]);
+  });
+}, 120_000);
+
+test("reader keeps exactly one coherent page set after rapid toolbar rerenders", async () => {
+  await withExtensionReader(async ({ backendPort, courseServer, extensionId, page }) => {
+    const key = await preCapturePdfThroughBackend(backendPort, courseServer, "large-numdam-pdf");
+    await page.goto(readerPageUrl(extensionId, key), { waitUntil: "domcontentloaded" });
+    await waitForCanvasCount(page, 6);
+
+    const pageTotal = Number(await page.locator("#page-total").textContent());
+    await page.evaluate(() => {
+      const sequence = ["zoom-in", "zoom-out", "rotate", "fit-width", "zoom-in", "rotate", "zoom-out", "fit-width"];
+      for (let round = 0; round < 3; round += 1) {
+        for (const id of sequence) {
+          document.getElementById(id)?.click();
+        }
+      }
+    });
+
+    const dom = await waitForStablePageDom(page);
+    expect(dom.canvasCount).toBe(pageTotal);
+    expect(dom.pageNumbers).toEqual(Array.from({ length: pageTotal }, (_, index) => String(index + 1)));
+  });
+}, 120_000);
+
 function readerPageUrl(extensionId: string, key: string): string {
   return `chrome-extension://${extensionId}/poc/reader.html?key=${encodeURIComponent(key)}`;
 }
@@ -574,7 +662,9 @@ async function preCapturePdfThroughBackend(
   expect(response.ok).toBe(true);
   const value: unknown = await response.json();
   assert(isRecord(value) && typeof value.stored_path === "string");
-  return storedKeyFromPath(value.stored_path);
+  const key = storedKeyFromPath(value.stored_path);
+  await waitForBackendLibraryKey(backendPort, key);
+  return key;
 }
 
 async function waitForExtensionServiceWorker(context: BrowserContext) {
@@ -623,6 +713,11 @@ type ReaderSurface = Page | Frame;
 
 async function waitForCanvasCount(surface: ReaderSurface, expectedCount: number): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
+    const readerErrors = surface.locator("#reader-error");
+    if (await readerErrors.count() > 0) {
+      const text = await readerErrors.first().textContent();
+      throw new Error(`Reader failed before rendering ${expectedCount} canvas(es): ${text}`);
+    }
     if (await surface.locator("#viewer canvas").count() === expectedCount) {
       return;
     }
@@ -630,6 +725,25 @@ async function waitForCanvasCount(surface: ReaderSurface, expectedCount: number)
   }
   const lastCount = await surface.locator("#viewer canvas").count();
   throw new Error(`Timed out waiting for ${expectedCount} PDF canvas(es); last count: ${lastCount}`);
+}
+
+async function waitForBackendLibraryKey(backendPort: number, key: string): Promise<void> {
+  let lastKeys: string[] = [];
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/library`);
+    expect(response.ok).toBe(true);
+    const value: unknown = await response.json();
+    assert(Array.isArray(value));
+    lastKeys = value
+      .filter(isRecord)
+      .map(entry => entry.key)
+      .filter((entryKey): entryKey is string => typeof entryKey === "string");
+    if (lastKeys.includes(key)) {
+      return;
+    }
+    await Bun.sleep(100);
+  }
+  throw new Error(`Timed out waiting for backend library key ${key}; last keys: ${lastKeys.join(", ")}`);
 }
 
 async function canvasPixelEvidence(
@@ -764,6 +878,133 @@ async function waitForNoteSaved(
     await Bun.sleep(100);
   }
   throw new Error(`Timed out waiting for saved note text; last text: ${lastText}`);
+}
+
+async function waitForNoDocumentReaderState(
+  page: Page,
+): Promise<{ docTitle: string; enabledDocumentControls: string[]; viewerText: string }> {
+  let lastState = { docTitle: "", enabledDocumentControls: [] as string[], viewerText: "" };
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    lastState = await page.evaluate(ids => {
+      const disabledCapable = (element: HTMLElement): element is HTMLButtonElement | HTMLInputElement => {
+        return element instanceof HTMLButtonElement || element instanceof HTMLInputElement;
+      };
+      const enabledDocumentControls: string[] = [];
+      for (const id of ids) {
+        const element = document.getElementById(id);
+        if (element === null || !disabledCapable(element) || !element.disabled) {
+          enabledDocumentControls.push(`#${id}`);
+        }
+      }
+      return {
+        docTitle: document.getElementById("doc-title")?.textContent ?? "",
+        enabledDocumentControls,
+        viewerText: document.getElementById("viewer")?.textContent ?? "",
+      };
+    }, documentControlIds);
+    if (
+      lastState.docTitle === "MathRead Library" &&
+      lastState.viewerText.includes("No document open")
+    ) {
+      return lastState;
+    }
+    await Bun.sleep(100);
+  }
+  throw new Error(`Timed out waiting for no-document reader state: ${JSON.stringify(lastState)}`);
+}
+
+type LegacyHighlight = {
+  id: string;
+  pageNumber: number;
+  color: string;
+  createdAt?: string;
+  rects: { xPct: number; yPct: number; wPct: number; hPct: number }[];
+  text: string;
+  comment?: string;
+};
+
+function legacyRects(): LegacyHighlight["rects"] {
+  return [{ xPct: 0.1, yPct: 0.1, wPct: 0.25, hPct: 0.05 }];
+}
+
+function legacyHighlight(): LegacyHighlight {
+  return {
+    id: "legacy-complete",
+    pageNumber: 1,
+    color: "#91edd0",
+    createdAt: "2026-07-04T00:00:00.000Z",
+    rects: legacyRects(),
+    text: "legacy lattice quote",
+    comment: "legacy migration comment",
+  };
+}
+
+async function seedLegacyReaderState(
+  page: Page,
+  extensionId: string,
+  key: string,
+  highlights: LegacyHighlight[],
+  autosaveMs: number,
+): Promise<void> {
+  await page.goto(`chrome-extension://${extensionId}/poc/reader.css`, { waitUntil: "domcontentloaded" });
+  await page.evaluate(
+    ({ key, highlights }) => {
+      localStorage.setItem(`mathread-poc-highlights:${key}`, JSON.stringify(highlights));
+    },
+    { key, highlights },
+  );
+  const serviceWorker = page.context().serviceWorkers().find(worker => worker.url().startsWith("chrome-extension://"));
+  assert(serviceWorker !== undefined);
+  await serviceWorker.evaluate(
+    async autosaveMs => {
+      const chromeApi = (globalThis as typeof globalThis & {
+        chrome: {
+          storage: {
+            local: {
+              set(items: Record<string, unknown>): Promise<void>;
+            };
+          };
+        };
+      }).chrome;
+      await chromeApi.storage.local.set({
+        "mathread.settings": {
+          autosaveMs,
+          fitWidthOnOpen: false,
+          lineNumbers: true,
+        },
+      });
+    },
+    autosaveMs,
+  );
+}
+
+async function legacyHighlightsRaw(page: Page, key: string): Promise<string | null> {
+  return await page.evaluate(key => localStorage.getItem(`mathread-poc-highlights:${key}`), key);
+}
+
+async function waitForStablePageDom(page: Page): Promise<{ canvasCount: number; pageNumbers: string[] }> {
+  let lastSignature = "";
+  let stableSamples = 0;
+  let lastDom = { canvasCount: 0, pageNumbers: [] as string[] };
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    lastDom = await page.evaluate(() => ({
+      canvasCount: document.querySelectorAll("#viewer canvas").length,
+      pageNumbers: Array.from(document.querySelectorAll("#viewer .page"))
+        .map(page => page.getAttribute("data-page-number") ?? ""),
+    }));
+    const signature = JSON.stringify(lastDom);
+    if (signature === lastSignature) {
+      stableSamples += 1;
+      if (stableSamples >= 5) {
+        return lastDom;
+      }
+    } else {
+      lastSignature = signature;
+      stableSamples = 0;
+    }
+    await Bun.sleep(100);
+  }
+  return lastDom;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
