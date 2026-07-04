@@ -40,6 +40,11 @@ def create_portal_router(root: Path) -> APIRouter:
         relative_path = library.write_note_image(root, key, await image.read())
         return NoteImageResult(relative_path=relative_path)
 
+    @router.get("/notes/{key}/assets/{filename}")
+    def get_note_asset(key: str, filename: str) -> Response:
+        asset_path = library.resolve_note_asset(root, key, filename)
+        return Response(content=asset_path.read_bytes(), media_type="image/png")
+
     @router.get("/pdf/{key}")
     def get_pdf(key: str) -> Response:
         pdf_path = library.resolve_pdf(root, key)

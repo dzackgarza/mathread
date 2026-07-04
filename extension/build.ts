@@ -8,6 +8,10 @@ import { join } from "path";
 const distExt = "dist/extension";
 
 copyFileSync(join("extension", "manifest.json"), join(distExt, "manifest.json"));
+copyFileSync(
+  join("extension", "mathread", "options.html"),
+  join(distExt, "mathread", "options.html"),
+);
 
 // reader.js and its pre-minified vendor ESM ship verbatim: re-bundling minified ESM
 // through bun corrupts identifiers. Only backend.ts (already built to poc/vendor/backend.js

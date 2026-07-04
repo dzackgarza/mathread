@@ -1,0 +1,88 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>MathRead Settings</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 40px;
+        background: #1f1f1f;
+        color: #e6e6e6;
+        font: 14px/1.5 system-ui, sans-serif;
+        max-width: 640px;
+      }
+      h1 { font-size: 20px; margin: 0 0 24px; }
+      h2 { font-size: 15px; margin: 28px 0 10px; color: #fff; }
+      section {
+        background: #2a2a2a;
+        border-radius: 10px;
+        padding: 16px 20px;
+        margin-bottom: 16px;
+      }
+      .status-row { display: flex; align-items: center; gap: 10px; }
+      .status-dot { width: 12px; height: 12px; border-radius: 50%; background: #9a9a9a; flex: none; }
+      .status-dot.ok { background: #34a853; }
+      .status-dot.down { background: #ea4335; }
+      #backend-detail { white-space: pre-wrap; color: #bdbdbd; font-size: 13px; margin-top: 10px; }
+      label { display: flex; align-items: center; gap: 10px; margin: 12px 0; }
+      input[type="number"] {
+        width: 90px;
+        background: #1f1f1f;
+        color: #e6e6e6;
+        border: 1px solid #444;
+        border-radius: 6px;
+        padding: 4px 8px;
+      }
+      button {
+        background: #3b5bdb;
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        padding: 7px 18px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      button.secondary { background: #444; }
+      #save-status { margin-left: 12px; color: #34a853; font-size: 13px; }
+      .hint { color: #9a9a9a; font-size: 12.5px; margin: 4px 0 0 26px; }
+    </style>
+  </head>
+  <body>
+    <h1>MathRead</h1>
+
+    <section>
+      <h2 style="margin-top: 0">Backend</h2>
+      <div class="status-row">
+        <span id="backend-dot" class="status-dot"></span>
+        <span id="backend-summary">Checking…</span>
+        <button id="backend-refresh" class="secondary" type="button">Refresh</button>
+      </div>
+      <div id="backend-detail"></div>
+    </section>
+
+    <section>
+      <h2 style="margin-top: 0">Reader</h2>
+      <label>
+        <input type="checkbox" id="fit-width-on-open" />
+        Fit pages to the window width when opening a document
+      </label>
+      <label>
+        <input type="checkbox" id="line-numbers" />
+        Show line numbers in the notes editor
+      </label>
+      <label>
+        Autosave notes after
+        <input type="number" id="autosave-ms" min="200" max="10000" step="100" />
+        ms of inactivity
+      </label>
+      <div>
+        <button id="save" type="button">Save</button>
+        <span id="save-status" role="status"></span>
+      </div>
+      <p class="hint">Settings apply to newly opened reader tabs.</p>
+    </section>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

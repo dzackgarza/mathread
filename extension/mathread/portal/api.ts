@@ -123,6 +123,35 @@ export async function postNoteImage(key: string, png: Blob): Promise<string> {
   return parseImageUploadResponse(await response.json());
 }
 
+/** URL serving an uploaded clip PNG back for note previews. */
+export function noteAssetUrl(key: string, filename: string): string {
+  return `${API_BASE}/notes/${encodeURIComponent(key)}/assets/${encodeURIComponent(filename)}`;
+}
+
+export type BackendHealth =
+  | { ok: true; detail: string }
+  | { ok: false; detail: string };
+
+/** Cheap reachability + readiness probe against GET /status for the header light. */
+export async function backendHealth(): Promise<BackendHealth> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/status`);
+  } catch (error) {
+    return { ok: false, detail: `MathRead backend unreachable at ${API_BASE}: ${error}` };
+  }
+  if (!response.ok) {
+    return { ok: false, detail: `MathRead backend error: ${response.status} ${response.statusText}` };
+  }
+  const value: unknown = await response.json();
+  invariant(isRecord(value), 'MathRead backend status must be an object');
+  invariant(typeof value.ready === 'boolean', 'MathRead backend status must declare ready');
+  invariant(typeof value.root === 'string', 'MathRead backend status must declare root');
+  return value.ready
+    ? { ok: true, detail: `MathRead backend ready — ${API_BASE} → ${value.root}` }
+    : { ok: false, detail: `MathRead backend storage not ready: ${value.root}` };
+}
+
 export function pdfUrl(key: string): string {
   return `${API_BASE}/pdf/${encodeURIComponent(key)}`;
 }

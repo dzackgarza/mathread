@@ -139,6 +139,18 @@ def write_note_image(root: Path, key: str, png_bytes: bytes) -> str:
     return f"{assets_dir.name}/{image_path.name}"
 
 
+def resolve_note_asset(root: Path, key: str, filename: str) -> Path:
+    """Map an uploaded clip filename to its file under the note's assets dir,
+    rejecting traversal and missing files."""
+    if filename != Path(filename).name or not filename.endswith(".png"):
+        raise UnknownLibraryKeyError(key)
+    _, assets_dir = sidecar_paths(resolve_pdf(root, key))
+    path = assets_dir / filename
+    if not path.is_file():
+        raise UnknownLibraryKeyError(key)
+    return path
+
+
 def delete_library_entry(root: Path, key: str) -> None:
     """Remove a stored PDF together with its sidecar note, assets dir, and read-history."""
     pdf = resolve_pdf(root, key)

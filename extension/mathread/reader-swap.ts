@@ -39,7 +39,9 @@ async function interceptPdfDocument(): Promise<void> {
     return;
   }
 
-  const pdfUrl = window.location.href;
+  // View links carry mrpage/mrzoom on the source URL; strip them so capture identity
+  // stays the canonical PDF URL, and forward them into the reader as page/zoom.
+  const pdfUrl = canonicalPdfUrl(window.location.href);
   if (isBackendServedPdfUrl(pdfUrl, chrome.runtime.getManifest())) {
     // Opened from the library: already captured, the key is the backend filename.
     mountReader(libraryKeyFromBackendPdfUrl(pdfUrl));
@@ -90,12 +92,34 @@ function referrerSourceUrl(pdfUrl: string): string {
   }
 }
 
+function canonicalPdfUrl(href: string): string {
+  const url = new URL(href);
+  url.searchParams.delete("mrpage");
+  url.searchParams.delete("mrzoom");
+  return url.href;
+}
+
+function viewRestoreParams(href: string): string {
+  const params = new URL(href).searchParams;
+  let restore = "";
+  const page = params.get("mrpage");
+  if (page !== null) {
+    restore += `&page=${encodeURIComponent(page)}`;
+  }
+  const zoom = params.get("mrzoom");
+  if (zoom !== null) {
+    restore += `&zoom=${encodeURIComponent(zoom)}`;
+  }
+  return restore;
+}
+
 function mountReader(key: string): void {
   const newBody = document.createElement("body");
   newBody.style.cssText = "margin:0; padding:0; height:100vh; overflow:hidden;";
 
   const reader = document.createElement("iframe");
-  reader.src = `${chrome.runtime.getURL("poc/reader.html")}?key=${encodeURIComponent(key)}`;
+  reader.src = `${chrome.runtime.getURL("poc/reader.html")}?key=${encodeURIComponent(key)}`
+    + viewRestoreParams(window.location.href);
   reader.name = "mathreadReaderFrame";
   reader.style.cssText = "border:none; width:100%; height:100%;";
   reader.title = "MathRead reader";

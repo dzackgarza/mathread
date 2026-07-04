@@ -5,9 +5,11 @@
 export { marked } from "marked";
 export { default as DOMPurify } from "dompurify";
 export {
+  backendHealth,
   deleteLibraryEntry,
   getLibrary,
   getNote,
+  noteAssetUrl,
   pdfUrl,
   postNoteImage,
   postReadEvent,

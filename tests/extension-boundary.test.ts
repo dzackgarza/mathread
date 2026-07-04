@@ -242,7 +242,9 @@ test("built extension renders every page of a large captured PDF in the reader",
 test("reader renders all pages of a large PDF with real content", async () => {
   await withExtensionReader(async ({ backendPort, courseServer, extensionId, page }) => {
     const key = await preCapturePdfThroughBackend(backendPort, courseServer, "large-numdam-pdf");
-    await page.goto(readerPageUrl(extensionId, key), { waitUntil: "domcontentloaded" });
+    // View-link restore: page/zoom params (forwarded from mrpage/mrzoom on the source
+    // URL by reader-swap) re-open the document at that view.
+    await page.goto(`${readerPageUrl(extensionId, key)}&page=3&zoom=0.9`, { waitUntil: "domcontentloaded" });
 
     // The reader renders every page as a stacked canvas; a fully rendered 6-page
     // document has 6 canvases and the last one has real ink — proof that late pages
@@ -251,6 +253,8 @@ test("reader renders all pages of a large PDF with real content", async () => {
     const rendered = await canvasPixelEvidence(page, 5);
     expect(rendered.canvasSize).toBeGreaterThan(10_000);
     expect(rendered.nonWhitePixels).toBeGreaterThan(250);
+    await expectElementText(page.locator("#zoom-level"), text => text === "72%");
+    await expectInputValue(page.locator("#page-input"), value => value === "3");
   });
 }, 60_000);
 
@@ -270,6 +274,9 @@ test("reader Key Points panel persists notes to the on-disk sidecar and renders 
     await page.keyboard.type("# Heading\n\nSome **bold** text.");
 
     // Debounced autosave writes the markdown sidecar next to the stored PDF.
+    // The Notes tab (tab-bar button + rail chip) is colored once nontrivial notes exist.
+    await waitForHasNoteMarker(page);
+
     const noteText = await waitForNoteSaved(
       backendPort,
       key,
@@ -677,6 +684,35 @@ async function expectElementText(
     await Bun.sleep(100);
   }
   throw new Error(`Timed out waiting for element text; last text: ${lastText}`);
+}
+
+async function waitForHasNoteMarker(surface: ReaderSurface): Promise<void> {
+  const marked = surface.locator('.nav-tb-btn.has-note[data-tab="keypoints"]');
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (await marked.count() === 1) {
+      return;
+    }
+    await Bun.sleep(100);
+  }
+  throw new Error("Timed out waiting for the Notes tab has-note marker");
+}
+
+async function expectInputValue(
+  locator: ReturnType<Page["locator"]>,
+  predicate: (value: string) => boolean,
+): Promise<void> {
+  let lastValue = "<missing>";
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const value = await locator.inputValue().catch(() => null);
+    if (value !== null) {
+      lastValue = value;
+      if (predicate(value)) {
+        return;
+      }
+    }
+    await Bun.sleep(100);
+  }
+  throw new Error(`Timed out waiting for input value; last value: ${lastValue}`);
 }
 
 async function waitForNoteSaved(

@@ -1145,8 +1145,8 @@ body {
 .notes-toolbar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 10px;
+  gap: 4px;
+  padding: 8px 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
   flex: none;
 }
@@ -1157,9 +1157,10 @@ body {
   color: #cfcfcf;
   border: 1px solid rgba(255, 255, 255, 0.25);
   border-radius: 14px;
-  padding: 3px 12px;
+  padding: 3px 9px;
   font-size: 12px;
   cursor: pointer;
+  flex: none;
 }
 
 .notes-mode-btn.active {
@@ -1253,6 +1254,11 @@ body {
 
 .notes-preview a { color: #8ab4f8; }
 
+.notes-preview img {
+  max-width: 100%;
+  border-radius: 4px;
+}
+
 .notes-error {
   padding: 16px;
   color: #f2b8b5;
@@ -1328,4 +1334,49 @@ body {
 .library-entry-trash:hover {
   background: rgba(255, 255, 255, 0.1);
   color: #f2b8b5;
+}
+
+/* ---------- Backend status light ---------- */
+.backend-light {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  margin-left: 10px;
+  flex: none;
+  cursor: pointer;
+  background: #9a9a9a;
+}
+
+.backend-light.checking { background: #c8a94b; }
+.backend-light.ok { background: #34a853; }
+.backend-light.down { background: #ea4335; box-shadow: 0 0 6px rgba(234, 67, 53, 0.7); }
+
+/* ---------- Notes tab: colored when nontrivial notes exist ---------- */
+.nav-tb-btn.has-note svg,
+.nav-expand-btn.has-note svg {
+  fill: #ffd166;
+}
+
+/* ---------- Screen clipping ---------- */
+.notes-mode-btn.clipping {
+  background: #ffd166;
+  color: #202124;
+  border-color: transparent;
+}
+
+.clip-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  cursor: crosshair;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.clip-rect {
+  position: fixed;
+  border: 2px solid #ffd166;
+  background: rgba(255, 209, 102, 0.15);
+  pointer-events: none;
 }

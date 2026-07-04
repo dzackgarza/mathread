@@ -3,11 +3,14 @@
 import { getDocument, GlobalWorkerOptions, TextLayer } from "./vendor/pdfjs/pdf.min.mjs";
 import {
   DOMPurify,
+  backendHealth,
   deleteLibraryEntry,
   getLibrary,
   getNote,
   marked,
+  noteAssetUrl,
   pdfUrl as backendPdfUrl,
+  postNoteImage,
   postReadEvent,
   putNote,
 } from "./vendor/backend.js";
@@ -31,7 +34,11 @@ GlobalWorkerOptions.workerSrc = chrome.runtime.getURL("poc/vendor/pdfjs/pdf.work
 // The reader is keyed by the backend library key (the stored PDF filename). The PDF
 // bytes come from GET /pdf/{key}; provenance (original pdf_url, title) comes from the
 // library entry. Without a key the reader is a library browser only.
-const libraryKey = new URLSearchParams(location.search).get("key");
+const bootParams = new URLSearchParams(location.search);
+const libraryKey = bootParams.get("key");
+// View restore: reader-swap forwards mrpage/mrzoom from the source URL as page/zoom.
+const initialPage = Number(bootParams.get("page"));
+const initialZoom = Number(bootParams.get("zoom"));
 const storageKey = `mathread-poc-highlights:${libraryKey}`;
 
 const $ = id => document.getElementById(id);
@@ -65,9 +72,13 @@ const notesErrorEl = $("notes-error");
 const notesSaveBtn = $("notes-save");
 const notesModeEditBtn = $("notes-mode-edit");
 const notesModePreviewBtn = $("notes-mode-preview");
+const notesClipBtn = $("notes-clip");
+const backendLightEl = $("backend-light");
+const clipOverlayEl = $("clip-overlay");
+const clipRectEl = $("clip-rect");
 
 let highlights = loadHighlights();
-let scale = 1.25;
+let scale = Number.isFinite(initialZoom) && initialZoom > 0 ? initialZoom : 1.25;
 let rotation = 0;
 let pdfDoc = null;
 let pdfData = null;
@@ -79,6 +90,9 @@ let noteSaveTimer = null;
 let notesInitialized = false;
 let notesPreviewVisible = false;
 let readEventTimer = null;
+// User-tunable settings (see mathread/options.html); loaded before the editor mounts.
+const settingsDefaults = { autosaveMs: 800, fitWidthOnOpen: false, lineNumbers: true };
+let settings = settingsDefaults;
 let pageContainers = [];
 let currentPageNumber = 1;
 let intersectionObserver = null;
@@ -88,6 +102,26 @@ let aiView = null;
 let thumbsBuilt = false;
 let searchMatches = [];
 let searchIndex = -1;
+
+// ---------- Backend status light ----------
+backendLightEl.addEventListener("click", () => chrome.runtime.openOptionsPage());
+
+async function refreshBackendLight() {
+  const health = await backendHealth();
+  backendLightEl.classList.remove("checking", "ok", "down");
+  backendLightEl.classList.add(health.ok ? "ok" : "down");
+  backendLightEl.title = `${health.detail}\nClick for MathRead settings.`;
+}
+void refreshBackendLight();
+setInterval(() => {
+  void refreshBackendLight();
+}, 30_000);
+
+async function loadSettings() {
+  const stored = await chrome.storage.local.get(["mathread.settings"]);
+  const raw = stored["mathread.settings"];
+  settings = { ...settingsDefaults, ...(typeof raw === "object" && raw !== null ? raw : {}) };
+}
 
 // ---------- Toolbar wiring ----------
 $("prev-page").addEventListener("click", () => jumpPage(-1));
@@ -220,6 +254,7 @@ main().catch(error => {
 });
 
 async function main() {
+  await loadSettings();
   const entries = await getLibrary();
   renderLibraryEntries(entries);
 
@@ -251,6 +286,11 @@ async function main() {
   renderOutline().catch(error => console.error("MATHREAD-POC-OUTLINE-ERROR", error));
   await renderAllPages();
   watchCurrentPage();
+  if (Number.isFinite(initialPage) && initialPage >= 1) {
+    scrollToPage(initialPage);
+  } else if (settings.fitWidthOnOpen && !(Number.isFinite(initialZoom) && initialZoom > 0)) {
+    void fitWidth();
+  }
   pageInputEl.value = String(currentPageNumber);
   void initNotes();
   postReadEvent(libraryKey, null).catch(error => console.error("MATHREAD-READ-EVENT-ERROR", error));
@@ -689,12 +729,13 @@ async function initNotes() {
   notesErrorEl.hidden = true;
   noteState = { kind: "clean" };
   renderNoteStatus();
+  renderNotesTabMarker(text.trim().length > 0);
   aiView = new EditorView({
     parent: aiEditorEl,
     state: EditorState.create({
       doc: text,
       extensions: [
-        lineNumbers(),
+        ...(settings.lineNumbers ? [lineNumbers()] : []),
         history(),
         highlightActiveLine(),
         keymap.of([...defaultKeymap, ...historyKeymap]),
@@ -715,12 +756,20 @@ async function initNotes() {
 function onNoteEdited() {
   noteState = { kind: "dirty" };
   renderNoteStatus();
+  renderNotesTabMarker(aiView.state.doc.toString().trim().length > 0);
   clearTimeout(noteSaveTimer);
   noteSaveTimer = setTimeout(() => {
     void saveNote();
-  }, 800);
+  }, settings.autosaveMs);
   if (notesPreviewVisible) {
     renderNotesPreview();
+  }
+}
+
+// Color the Notes tab (tab-bar button + collapsed-rail chip) when nontrivial notes exist.
+function renderNotesTabMarker(hasNote) {
+  for (const el of document.querySelectorAll('[data-tab="keypoints"]')) {
+    el.classList.toggle("has-note", hasNote);
   }
 }
 
@@ -739,7 +788,7 @@ async function saveNote() {
     if (noteState.kind === "dirty") {
       noteSaveTimer = setTimeout(() => {
         void saveNote();
-      }, 800);
+      }, settings.autosaveMs);
     }
   } catch (error) {
     noteState = { kind: "error", message: String(error) };
@@ -777,6 +826,18 @@ function setNotesPreview(visible) {
 function renderNotesPreview() {
   const text = aiView ? aiView.state.doc.toString() : "";
   notesPreviewEl.innerHTML = DOMPurify.sanitize(marked.parse(text, { gfm: true, async: false }));
+  // Clip images are note-relative ("<stem>.assets/clip-01.png") so the sidecar renders in
+  // any markdown tool on disk; in the reader they resolve through the backend asset route.
+  for (const img of notesPreviewEl.querySelectorAll("img")) {
+    const src = img.getAttribute("src");
+    if (src !== null && !/^[a-z][a-z0-9+.-]*:/i.test(src)) {
+      const segments = src.split("/");
+      const filename = segments[segments.length - 1];
+      if (filename !== undefined && filename.length > 0 && libraryKey) {
+        img.src = noteAssetUrl(libraryKey, filename);
+      }
+    }
+  }
 }
 
 function showNotesError(message) {
@@ -924,6 +985,10 @@ async function renderOneThumb(pageNumber, wrap) {
 
 // ---------- More menu actions ----------
 function handleMenuAction(action) {
+  if (action === "copy-view-link") {
+    void copyViewLink();
+    return;
+  }
   if (action?.startsWith("mode-")) {
     for (const item of moreMenuEl.querySelectorAll(".menu-check")) {
       item.dataset.checked = String(item.dataset.action === action);
@@ -1114,6 +1179,158 @@ async function populateScholarMenu() {
   }
 }
 
+// ---------- View links (URL-first: source URL + mrpage/mrzoom restore the view) ----------
+function currentViewUrl() {
+  if (libraryEntry === null) {
+    return null;
+  }
+  const url = new URL(libraryEntry.pdf_url);
+  url.searchParams.set("mrpage", String(currentPageNumber));
+  url.searchParams.set("mrzoom", scale.toFixed(2));
+  return url.href;
+}
+
+async function copyViewLink() {
+  const viewUrl = currentViewUrl();
+  if (viewUrl === null) {
+    flashTitle("No document open to link");
+    return;
+  }
+  await navigator.clipboard.writeText(viewUrl);
+  flashTitle("Copied view link");
+}
+
+// ---------- Screen clipping: drag a region into the notes as an image ----------
+notesClipBtn.addEventListener("click", () => startClip());
+
+let clipDragStart = null;
+
+function startClip() {
+  if (!libraryKey || !pdfDoc) {
+    flashTitle("Open a document to clip");
+    return;
+  }
+  notesClipBtn.classList.add("clipping");
+  clipOverlayEl.hidden = false;
+  clipRectEl.style.width = "0px";
+  clipRectEl.style.height = "0px";
+}
+
+function endClip() {
+  notesClipBtn.classList.remove("clipping");
+  clipOverlayEl.hidden = true;
+  clipDragStart = null;
+}
+
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && !clipOverlayEl.hidden) {
+    endClip();
+  }
+});
+
+clipOverlayEl.addEventListener("mousedown", event => {
+  event.preventDefault();
+  clipDragStart = { x: event.clientX, y: event.clientY };
+  positionClipRect(event.clientX, event.clientY);
+});
+
+clipOverlayEl.addEventListener("mousemove", event => {
+  if (clipDragStart !== null) {
+    positionClipRect(event.clientX, event.clientY);
+  }
+});
+
+clipOverlayEl.addEventListener("mouseup", event => {
+  if (clipDragStart === null) {
+    return;
+  }
+  const region = {
+    left: Math.min(clipDragStart.x, event.clientX),
+    top: Math.min(clipDragStart.y, event.clientY),
+    width: Math.abs(event.clientX - clipDragStart.x),
+    height: Math.abs(event.clientY - clipDragStart.y),
+  };
+  endClip();
+  if (region.width < 8 || region.height < 8) {
+    return;
+  }
+  void captureClip(region).catch(error => {
+    console.error("MATHREAD-CLIP-ERROR", error);
+    flashTitle(`Clip failed: ${error}`);
+  });
+});
+
+function positionClipRect(x, y) {
+  const left = Math.min(clipDragStart.x, x);
+  const top = Math.min(clipDragStart.y, y);
+  clipRectEl.style.left = `${left}px`;
+  clipRectEl.style.top = `${top}px`;
+  clipRectEl.style.width = `${Math.abs(x - clipDragStart.x)}px`;
+  clipRectEl.style.height = `${Math.abs(y - clipDragStart.y)}px`;
+}
+
+/** Compose the selected viewport region from the rendered page canvases into a PNG,
+ * upload it as a note asset, and append a markdown image whose alt text is the view URL. */
+async function captureClip(region) {
+  const out = document.createElement("canvas");
+  const context = out.getContext("2d");
+  let pixelRatio = null;
+
+  for (const entry of pageContainers) {
+    const canvas = entry.pageDiv.querySelector("canvas");
+    const rect = canvas.getBoundingClientRect();
+    const overlapLeft = Math.max(region.left, rect.left);
+    const overlapTop = Math.max(region.top, rect.top);
+    const overlapRight = Math.min(region.left + region.width, rect.right);
+    const overlapBottom = Math.min(region.top + region.height, rect.bottom);
+    if (overlapRight <= overlapLeft || overlapBottom <= overlapTop) {
+      continue;
+    }
+    if (pixelRatio === null) {
+      pixelRatio = canvas.width / rect.width;
+      out.width = Math.round(region.width * pixelRatio);
+      out.height = Math.round(region.height * pixelRatio);
+      context.fillStyle = "#fff";
+      context.fillRect(0, 0, out.width, out.height);
+    }
+    context.drawImage(
+      canvas,
+      (overlapLeft - rect.left) * pixelRatio,
+      (overlapTop - rect.top) * pixelRatio,
+      (overlapRight - overlapLeft) * pixelRatio,
+      (overlapBottom - overlapTop) * pixelRatio,
+      (overlapLeft - region.left) * pixelRatio,
+      (overlapTop - region.top) * pixelRatio,
+      (overlapRight - overlapLeft) * pixelRatio,
+      (overlapBottom - overlapTop) * pixelRatio,
+    );
+  }
+  if (pixelRatio === null) {
+    flashTitle("Clip missed the document");
+    return;
+  }
+
+  const blob = await new Promise(resolve => out.toBlob(resolve, "image/png"));
+  if (blob === null) {
+    throw new Error("Could not encode the clipped region as PNG");
+  }
+  const relativePath = await postNoteImage(libraryKey, blob);
+
+  await initNotes();
+  if (!aiView) {
+    throw new Error("Notes editor unavailable; clip was uploaded but not inserted");
+  }
+  const viewUrl = currentViewUrl();
+  const altText = viewUrl === null ? "clip" : viewUrl;
+  const docLength = aiView.state.doc.length;
+  const prefix = docLength === 0 ? "" : "\n";
+  aiView.dispatch({
+    changes: { from: docLength, insert: `${prefix}![${altText}](${relativePath})\n` },
+  });
+  activateTab("keypoints");
+  flashTitle("Clip added to notes");
+}
+
 // ---------- Small helpers ----------
 function toggleSidebar(force) {
   const open = force ?? !sidebarEl.classList.contains("open");
@@ -1135,9 +1352,12 @@ function watchCurrentPage() {
   intersectionObserver?.disconnect();
   intersectionObserver = new IntersectionObserver(
     entries => {
+      // Ties (several fully visible pages at low zoom) resolve to the topmost page.
       const mostVisible = entries
         .filter(e => e.isIntersecting)
-        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        .sort((a, b) =>
+          b.intersectionRatio - a.intersectionRatio
+          || a.boundingClientRect.top - b.boundingClientRect.top)[0];
       if (mostVisible) {
         currentPageNumber = Number(mostVisible.target.dataset.pageNumber);
         pageInputEl.value = String(currentPageNumber);

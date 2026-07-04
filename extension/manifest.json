@@ -22,6 +22,7 @@
     }
   ],
   "action": {},
+  "options_page": "mathread/options.html",
   "web_accessible_resources": [
     {
       "resources": ["poc/*"],

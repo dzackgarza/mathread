@@ -22,6 +22,7 @@
           </svg>
         </span>
         <span id="doc-title" class="doc-title">Loading…</span>
+        <button id="backend-light" class="backend-light checking" title="Checking MathRead backend…" aria-label="MathRead backend status"></button>
       </div>
 
       <div class="tb-group tb-center">
@@ -81,6 +82,7 @@
             <svg viewBox="0 0 24 24"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" /></svg>
           </button>
           <div id="more-menu" class="more-menu">
+            <button class="menu-item" data-action="copy-view-link">Copy view link</button>
             <button class="menu-item" data-action="properties">Document properties</button>
             <button class="menu-item" data-action="chrome-viewer">Open in Chrome viewer</button>
             <div class="menu-divider"></div>
@@ -137,7 +139,7 @@
 
       <aside id="nav" class="nav hidden">
         <div class="nav-tb">
-          <button class="nav-tb-btn" data-tab="keypoints" title="Key points">
+          <button class="nav-tb-btn" data-tab="keypoints" title="Notes">
             <svg viewBox="0 0 24 24"><path d="M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z" /></svg>
           </button>
           <button class="nav-tb-btn active" data-tab="outline" title="Outline">
@@ -156,6 +158,7 @@
               <div class="notes-toolbar">
                 <button id="notes-mode-edit" class="notes-mode-btn active" title="Edit markdown">Edit</button>
                 <button id="notes-mode-preview" class="notes-mode-btn" title="Rendered preview">Preview</button>
+                <button id="notes-clip" class="notes-mode-btn" title="Clip a region of the page into your notes">Clip</button>
                 <span id="notes-status" class="notes-status" role="status"></span>
                 <button id="notes-save" class="notes-save-btn" title="Save notes now">Save</button>
               </div>
@@ -185,7 +188,7 @@
           <button class="nav-expand-btn" data-tab="keypoints">
             <span class="nav-expand-btn-content">
               <svg viewBox="0 0 24 24"><path d="M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z" /></svg>
-              <span class="nav-expand-btn-text">Key points</span>
+              <span class="nav-expand-btn-text">Notes</span>
             </span>
           </button>
           <button class="nav-expand-btn" data-tab="outline">
@@ -231,6 +234,9 @@
         <button data-color="#f8bfbf" title="Pink highlight"><span style="background: #f8bfbf"></span></button>
         <button data-color="#d8bef4" title="Purple highlight"><span style="background: #d8bef4"></span></button>
       </div>
+    </div>
+    <div id="clip-overlay" class="clip-overlay" hidden>
+      <div id="clip-rect" class="clip-rect"></div>
     </div>
     <script type="module" src="reader.js"></script>
   </body>
