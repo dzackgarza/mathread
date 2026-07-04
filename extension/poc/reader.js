@@ -1,6 +1,8 @@
-// ponytail: all pages render upfront, one full re-render per zoom/rotate step;
-// highlights stay in localStorage keyed by library key (separate concern from notes).
+// ponytail: all pages render upfront, one full re-render per zoom/rotate step.
+// Highlights/comments live in the markdown notes sidecar as pandoc fenced divs
+// (see annotations.ts) — the note doc is the single durable annotation store.
 import { getDocument, GlobalWorkerOptions, TextLayer } from "./vendor/pdfjs/pdf.min.mjs";
+import { parseAnnotations, previewMarkdown, removeAnnotation, upsertAnnotation } from "./annotations.js";
 import {
   DOMPurify,
   backendHealth,
@@ -39,7 +41,8 @@ const libraryKey = bootParams.get("key");
 // View restore: reader-swap forwards mrpage/mrzoom from the source URL as page/zoom.
 const initialPage = Number(bootParams.get("page"));
 const initialZoom = Number(bootParams.get("zoom"));
-const storageKey = `mathread-poc-highlights:${libraryKey}`;
+// Legacy localStorage highlight store; read once to migrate into the notes sidecar.
+const legacyStorageKey = `mathread-poc-highlights:${libraryKey}`;
 
 const $ = id => document.getElementById(id);
 const viewerEl = $("viewer");
@@ -77,7 +80,7 @@ const backendLightEl = $("backend-light");
 const clipOverlayEl = $("clip-overlay");
 const clipRectEl = $("clip-rect");
 
-let highlights = loadHighlights();
+let highlights = []; // parsed from the note doc; refreshAnnotations() is the only writer
 let scale = Number.isFinite(initialZoom) && initialZoom > 0 ? initialZoom : 1.25;
 let rotation = 0;
 let pdfDoc = null;
@@ -86,6 +89,10 @@ let libraryEntry = null;
 let pdfUrl = null; // original provenance URL (Scholar lookup, document properties)
 // Editor state machine: loading → clean ⇄ dirty → saving → clean | error.
 let noteState = { kind: "loading" };
+// The note sidecar text, loaded once at boot before page render so highlights are
+// known when the pages first draw (see loadNoteText). The editor, once mounted,
+// becomes the live source; until then this holds the loaded text.
+let noteText = null;
 let noteSaveTimer = null;
 let notesInitialized = false;
 let notesPreviewVisible = false;
@@ -282,6 +289,9 @@ async function main() {
   pdfDoc = await getDocument({ data: pdfData.slice(0) }).promise;
   pageTotalEl.textContent = String(pdfDoc.numPages);
   setDocTitle();
+  // Load annotations before rendering so highlights draw with the pages (and thus
+  // before the smooth scrollToPage below), not during the scroll settle.
+  await loadNoteText();
   renderSidebarList();
   renderOutline().catch(error => console.error("MATHREAD-POC-OUTLINE-ERROR", error));
   await renderAllPages();
@@ -472,18 +482,15 @@ function commitPendingHighlight(color, focusComment) {
     return;
   }
   const highlight = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: `a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     pageNumber: pending.pageNumber,
     text: pending.text,
     color,
     comment: "",
     rects: pending.rects,
-    createdAt: Date.now(),
+    created: new Date().toISOString(),
   };
-  highlights.push(highlight);
-  saveHighlights(highlights);
-  drawStoredHighlights();
-  renderSidebarList();
+  mutateNote(doc => upsertAnnotation(doc, highlight));
   window.getSelection()?.removeAllRanges();
   popupEl.classList.remove("visible");
   delete popupEl.dataset.pending;
@@ -519,7 +526,7 @@ function renderSidebarList() {
     return;
   }
   let lastPageNumber = null;
-  for (const highlight of [...highlights].sort((a, b) => a.pageNumber - b.pageNumber || a.createdAt - b.createdAt)) {
+  for (const highlight of [...highlights].sort((a, b) => a.pageNumber - b.pageNumber || a.created.localeCompare(b.created))) {
     if (highlight.pageNumber !== lastPageNumber) {
       lastPageNumber = highlight.pageNumber;
       const header = document.createElement("div");
@@ -547,8 +554,7 @@ function renderSidebarList() {
     comment.rows = 1;
     comment.value = highlight.comment;
     comment.addEventListener("change", () => {
-      highlight.comment = comment.value;
-      saveHighlights(highlights);
+      mutateNote(doc => upsertAnnotation(doc, { ...highlight, comment: comment.value }));
     });
 
     const footer = document.createElement("div");
@@ -560,10 +566,7 @@ function renderSidebarList() {
     removeButton.title = "Remove";
     removeButton.textContent = "🗑";
     removeButton.addEventListener("click", () => {
-      highlights = highlights.filter(h => h.id !== highlight.id);
-      saveHighlights(highlights);
-      drawStoredHighlights();
-      renderSidebarList();
+      mutateNote(doc => removeAnnotation(doc, highlight.id));
     });
     footer.append(dot, removeButton);
 
@@ -586,7 +589,7 @@ function emptyHighlightsMarkup() {
       </svg>
       Select text to highlight or comment.
       <br /><br />
-      Highlights are saved on this device.
+      Highlights are stored as annotation blocks in this PDF's markdown notes.
     </div>`;
 }
 
@@ -715,25 +718,21 @@ async function initNotes() {
     return;
   }
 
-  let text;
-  try {
-    text = await getNote(libraryKey);
-  } catch (error) {
-    notesInitialized = false; // allow retry on next tab activation
-    noteState = { kind: "error", message: String(error) };
-    renderNoteStatus();
-    showNotesError(`Could not load notes from the MathRead backend:\n${error}`);
+  // Boot loads the note text before render; the lazy tab-activation path may arrive
+  // first, or after a boot-time load failure, so ensure the text is present.
+  if (noteText === null && !(await loadNoteText())) {
+    notesInitialized = false; // load failed; error surfaced, allow retry on next activation
     return;
   }
 
   notesErrorEl.hidden = true;
   noteState = { kind: "clean" };
   renderNoteStatus();
-  renderNotesTabMarker(text.trim().length > 0);
+  renderNotesTabMarker(noteText.trim().length > 0);
   aiView = new EditorView({
     parent: aiEditorEl,
     state: EditorState.create({
-      doc: text,
+      doc: noteText,
       extensions: [
         ...(settings.lineNumbers ? [lineNumbers()] : []),
         history(),
@@ -746,11 +745,31 @@ async function initNotes() {
         EditorView.updateListener.of(update => {
           if (update.docChanged) {
             onNoteEdited();
+            refreshAnnotations();
           }
         }),
       ],
     }),
   });
+  migrateLegacyHighlights();
+}
+
+// Load the note sidecar once and derive highlight state from it, independent of the
+// editor. Highlights render on the PDF whether or not the notes tab is ever opened,
+// so this runs at boot before page render. Returns false if the backend load failed
+// (error surfaced to the notes panel); highlights then stay empty.
+async function loadNoteText() {
+  try {
+    noteText = await getNote(libraryKey);
+  } catch (error) {
+    noteState = { kind: "error", message: String(error) };
+    renderNoteStatus();
+    showNotesError(`Could not load notes from the MathRead backend:\n${error}`);
+    return false;
+  }
+  highlights = parseAnnotations(noteText);
+  noteState = { kind: "clean" };
+  return true;
 }
 
 function onNoteEdited() {
@@ -825,7 +844,9 @@ function setNotesPreview(visible) {
 // output (same policy as the citation renderer: never inject live markup).
 function renderNotesPreview() {
   const text = aiView ? aiView.state.doc.toString() : "";
-  notesPreviewEl.innerHTML = DOMPurify.sanitize(marked.parse(text, { gfm: true, async: false }));
+  // Annotation fenced divs are rewritten to plain markdown so the preview shows
+  // the quoted passage + comment instead of raw ::: fences.
+  notesPreviewEl.innerHTML = DOMPurify.sanitize(marked.parse(previewMarkdown(text), { gfm: true, async: false }));
   // Clip images are note-relative ("<stem>.assets/clip-01.png") so the sidecar renders in
   // any markdown tool on disk; in the reader they resolve through the backend asset route.
   for (const img of notesPreviewEl.querySelectorAll("img")) {
@@ -1408,14 +1429,51 @@ function flashTitle(message) {
   }, 1800);
 }
 
-function loadHighlights() {
-  const raw = localStorage.getItem(storageKey);
-  if (raw === null) {
-    return []; // nothing stored yet for this key — a real empty state, not a fallback
+// Every annotation mutation routes through the notes editor doc, so the existing
+// autosave state machine owns persistence and the sidecar stays the single store.
+// Full-doc replace resets the editor cursor; acceptable — mutations originate from
+// the PDF pane, not mid-typing.
+function mutateNote(transform) {
+  if (!aiView) {
+    flashTitle("Notes unavailable — annotation not saved");
+    return;
   }
-  return JSON.parse(raw);
+  const doc = aiView.state.doc.toString();
+  const next = transform(doc);
+  if (next !== doc) {
+    aiView.dispatch({ changes: { from: 0, to: doc.length, insert: next } });
+  }
 }
 
-function saveHighlights(value) {
-  localStorage.setItem(storageKey, JSON.stringify(value));
+// Re-derive highlights from the note doc (the only writer of `highlights`), so
+// hand-edited annotation blocks re-render on the fly like UI-created ones.
+function refreshAnnotations() {
+  highlights = aiView ? parseAnnotations(aiView.state.doc.toString()) : [];
+  drawStoredHighlights();
+  renderSidebarList();
+}
+
+// One-time import of the pre-sidecar localStorage highlight store.
+function migrateLegacyHighlights() {
+  const raw = localStorage.getItem(legacyStorageKey);
+  if (raw === null) {
+    return;
+  }
+  const legacy = JSON.parse(raw);
+  mutateNote(doc =>
+    legacy.reduce(
+      (text, h) =>
+        upsertAnnotation(text, {
+          id: h.id,
+          pageNumber: h.pageNumber,
+          color: h.color,
+          created: new Date(h.createdAt ?? 0).toISOString(),
+          rects: h.rects,
+          text: h.text,
+          comment: h.comment ?? "",
+        }),
+      doc,
+    ),
+  );
+  localStorage.removeItem(legacyStorageKey);
 }

@@ -20,7 +20,7 @@
   "scripts": {
     "test": "bun run build && bun test",
     "typecheck": "tsc --noEmit",
-    "build": "rm -rf dist/extension && bun build ./extension/mathread/background.ts ./extension/mathread/link-origin.ts ./extension/mathread/reader-swap.ts ./extension/mathread/options.ts --outdir dist/extension/mathread --target browser && bun build ./extension/poc/backend.ts --outdir dist/extension/poc/vendor --target browser && bun run extension/build.ts",
+    "build": "rm -rf dist/extension && bun build ./extension/mathread/background.ts ./extension/mathread/link-origin.ts ./extension/mathread/reader-swap.ts ./extension/mathread/options.ts --outdir dist/extension/mathread --target browser && bun build ./extension/poc/backend.ts --outdir dist/extension/poc/vendor --target browser && bun build ./extension/poc/annotations.ts --outdir dist/extension/poc --target browser && bun run extension/build.ts",
     "dev": "bun run build && bun build --watch ./extension/mathread/background.ts ./extension/mathread/link-origin.ts ./extension/mathread/reader-swap.ts --outdir dist/extension/mathread --target browser"
   },
   "type": "module",
