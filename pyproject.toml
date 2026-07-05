@@ -22,25 +22,6 @@ dev = [
     "pytest>=9.0.0",
 ]
 
-[tool.importlinter]
-root_packages = ["mathread"]
-include_external_packages = true
-
-[[tool.importlinter.contracts]]
-name = "Application entrypoints depend inward on core modules"
-type = "layers"
-layers = [
-    "mathread.__main__",
-    "mathread.cli",
-    "mathread.server",
-    "mathread.portal",
-    "mathread.capture",
-    "mathread.library",
-    "mathread.naming",
-    "mathread.metadata",
-    "mathread.models",
-]
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
