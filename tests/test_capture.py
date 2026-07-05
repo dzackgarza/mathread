@@ -200,7 +200,7 @@ def test_status_reports_ready_storage_contract_for_existing_root(tmp_path: Path)
         "inbox": str(reading_root / "inbox"),
         "service": {
             "name": "mathread",
-            "version": "0.1.0",
+            "version": "1.0.0",
         },
         "storage": {
             "root_exists": True,
@@ -233,7 +233,7 @@ def test_status_reports_missing_root_as_not_ready_without_creating_storage(tmp_p
         "inbox": str(reading_root / "inbox"),
         "service": {
             "name": "mathread",
-            "version": "0.1.0",
+            "version": "1.0.0",
         },
         "storage": {
             "root_exists": False,
