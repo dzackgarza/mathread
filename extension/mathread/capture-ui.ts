@@ -49,7 +49,6 @@ type BackendStatus = {
   backend_url: string;
   portal_url: string;
   root: string;
-  inbox: string;
   service: {
     name: string;
     version: string;
@@ -57,8 +56,6 @@ type BackendStatus = {
   storage: {
     root_exists: boolean;
     root_writable: boolean;
-    inbox_exists: boolean;
-    inbox_writable: boolean;
   };
   capabilities: {
     capture: boolean;
@@ -514,7 +511,7 @@ function renderBackendReady(captureBtn: HTMLButtonElement, status: BackendStatus
     disabled: !status.capabilities.capture,
     text: status.capabilities.capture ? "Capture" : "Storage",
     title: status.capabilities.capture
-      ? `Capture to ${status.inbox}`
+      ? `Capture to ${status.root}`
       : `MathRead storage root is not ready: ${status.root}`,
   });
   renderCaptureStatus(backendReadinessText(status));
@@ -589,15 +586,12 @@ function parseBackendStatus(value: unknown): BackendStatus {
   invariant(typeof value.backend_url === "string", "MathRead backend status response must declare backend_url");
   invariant(typeof value.portal_url === "string", "MathRead backend status response must declare portal_url");
   invariant(typeof value.root === "string", "MathRead backend status response must declare root");
-  invariant(typeof value.inbox === "string", "MathRead backend status response must declare inbox");
   invariant(isRecord(value.service), "MathRead backend status response must declare service");
   invariant(typeof value.service.name === "string", "MathRead backend service status must declare name");
   invariant(typeof value.service.version === "string", "MathRead backend service status must declare version");
   invariant(isRecord(value.storage), "MathRead backend status response must declare storage");
   invariant(typeof value.storage.root_exists === "boolean", "MathRead backend storage status must declare root_exists");
   invariant(typeof value.storage.root_writable === "boolean", "MathRead backend storage status must declare root_writable");
-  invariant(typeof value.storage.inbox_exists === "boolean", "MathRead backend storage status must declare inbox_exists");
-  invariant(typeof value.storage.inbox_writable === "boolean", "MathRead backend storage status must declare inbox_writable");
   invariant(isRecord(value.capabilities), "MathRead backend status response must declare capabilities");
   invariant(typeof value.capabilities.capture === "boolean", "MathRead backend capabilities must declare capture");
   invariant(typeof value.capabilities.open_file === "boolean", "MathRead backend capabilities must declare open_file");
@@ -608,7 +602,6 @@ function parseBackendStatus(value: unknown): BackendStatus {
     backend_url: value.backend_url,
     portal_url: value.portal_url,
     root: value.root,
-    inbox: value.inbox,
     service: {
       name: value.service.name,
       version: value.service.version,
@@ -616,8 +609,6 @@ function parseBackendStatus(value: unknown): BackendStatus {
     storage: {
       root_exists: value.storage.root_exists,
       root_writable: value.storage.root_writable,
-      inbox_exists: value.storage.inbox_exists,
-      inbox_writable: value.storage.inbox_writable,
     },
     capabilities: {
       capture: value.capabilities.capture,
@@ -691,13 +682,10 @@ function backendReadinessText(status: BackendStatus): string {
   return [
     status.ready ? "MathRead backend ready" : "MathRead backend storage not ready",
     `Backend: ${status.backend_url}`,
-    `Root: ${status.root}`,
-    `Inbox: ${status.inbox}`,
+    `Library folder: ${status.root}`,
     `Storage: ${storageState}`,
-    `Root exists: ${status.storage.root_exists}`,
-    `Root writable: ${status.storage.root_writable}`,
-    `Inbox exists: ${status.storage.inbox_exists}`,
-    `Inbox writable: ${status.storage.inbox_writable}`,
+    `Folder exists: ${status.storage.root_exists}`,
+    `Folder writable: ${status.storage.root_writable}`,
     `Service: ${status.service.name} ${status.service.version}`,
   ].join("\n");
 }

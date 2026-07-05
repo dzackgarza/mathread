@@ -197,7 +197,6 @@ def test_status_reports_ready_storage_contract_for_existing_root(tmp_path: Path)
         "backend_url": "http://127.0.0.1:8765",
         "portal_url": "http://markdown-editor.localhost",
         "root": str(reading_root),
-        "inbox": str(reading_root / "inbox"),
         "service": {
             "name": "mathread",
             "version": "1.0.0",
@@ -205,8 +204,6 @@ def test_status_reports_ready_storage_contract_for_existing_root(tmp_path: Path)
         "storage": {
             "root_exists": True,
             "root_writable": True,
-            "inbox_exists": False,
-            "inbox_writable": False,
         },
         "capabilities": {
             "capture": True,
@@ -216,7 +213,7 @@ def test_status_reports_ready_storage_contract_for_existing_root(tmp_path: Path)
         },
         "ready": True,
     }
-    assert not (reading_root / "inbox").exists()
+    assert not any(reading_root.iterdir())
 
 
 def test_status_reports_missing_root_as_not_ready_without_creating_storage(tmp_path: Path) -> None:
@@ -230,7 +227,6 @@ def test_status_reports_missing_root_as_not_ready_without_creating_storage(tmp_p
         "backend_url": "http://127.0.0.1:8765",
         "portal_url": "http://markdown-editor.localhost",
         "root": str(reading_root),
-        "inbox": str(reading_root / "inbox"),
         "service": {
             "name": "mathread",
             "version": "1.0.0",
@@ -238,8 +234,6 @@ def test_status_reports_missing_root_as_not_ready_without_creating_storage(tmp_p
         "storage": {
             "root_exists": False,
             "root_writable": False,
-            "inbox_exists": False,
-            "inbox_writable": False,
         },
         "capabilities": {
             "capture": False,
@@ -311,7 +305,7 @@ def test_cli_capture_url_forwards_headers_and_stores_pdf_with_provenance(
             cookie="mathread_session=service-test",
         )
     ]
-    assert stored_path == mathread_service.root / "inbox" / "notes.pdf"
+    assert stored_path == mathread_service.root / "notes.pdf"
     assert result["original_sha256"] == sha256(sample_pdf_bytes).hexdigest()
     assert result["stored_sha256"] == sha256(stored_path.read_bytes()).hexdigest()
     assert result["capture"] == "capture-url"
@@ -344,7 +338,7 @@ def test_cli_service_uses_mathread_root_and_accepts_real_http_capture(
     stored_path = Path(result["stored_path"])
     metadata = pdf_docinfo(stored_path)
 
-    assert stored_path == mathread_service.root / "inbox" / "service-notes.pdf"
+    assert stored_path == mathread_service.root / "service-notes.pdf"
     assert result["original_sha256"] == sha256(sample_pdf_bytes).hexdigest()
     assert result["stored_sha256"] == sha256(stored_path.read_bytes()).hexdigest()
     assert result["capture"] == "capture-bytes"
@@ -401,7 +395,7 @@ def test_cli_service_reuses_matching_pdf_and_splits_same_filename_different_hash
     assert different["existing"] is False
     assert different["original_sha256"] == sha256(different_pdf_bytes).hexdigest()
     assert different["original_sha256"] != first["original_sha256"]
-    assert different_path == (mathread_service.root / "inbox" / f"notes--{different['original_sha256'][:12]}.pdf")
+    assert different_path == (mathread_service.root / f"notes--{different['original_sha256'][:12]}.pdf")
     assert different["stored_sha256"] == sha256(different_path.read_bytes()).hexdigest()
 
 
@@ -410,7 +404,7 @@ def test_cli_service_rejects_invalid_pdf_input_without_storing_success_artifact(
 ) -> None:
     response = post_capture_bytes(mathread_service, b"<html><body>not a pdf</body></html>", "not-a-pdf.pdf")
 
-    assert list((mathread_service.root / "inbox").glob("*.pdf")) == []
+    assert list(mathread_service.root.glob("*.pdf")) == []
     assert 400 <= response.status_code < 500
 
 

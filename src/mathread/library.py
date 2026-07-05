@@ -1,13 +1,14 @@
 """Reading-portal data plane over the capture store.
 
-The capture pipeline (`capture.py`) owns writing PDFs into ``<root>/inbox`` with
-provenance embedded in each PDF. This module adds the *reading* side: sidecar markdown
-notes and their captured images co-located next to each PDF, plus a read-history index
-(the one fact that is neither embedded in the PDF nor derivable from it).
+The capture pipeline (`capture.py`) owns writing PDFs into the configured library
+root with provenance embedded in each PDF. This module adds the reading side:
+markdown notes and their captured images co-located next to each PDF, plus a
+read-history index (the one fact that is neither embedded in the PDF nor
+derivable from it).
 
-Layout for ``inbox/<name>.pdf``:
-    inbox/<name>.md          -- sidecar note
-    inbox/<name>.assets/     -- captured region images, referenced relatively from the note
+Layout for ``<root>/<name>.pdf``:
+    <root>/<name>.md          -- note
+    <root>/<name>.assets/     -- captured region images, referenced relatively from the note
 
 Read-history lives in ``<root>/library.json`` keyed by the stored filename; provenance
 stays authoritative inside each PDF and is read live.
@@ -42,15 +43,11 @@ DEFAULT_OPEN_ROOT_COMMAND: OpenRootCommand = ("xdg-open",)
 
 
 class UnknownLibraryKeyError(Exception):
-    """Requested key does not resolve to a stored PDF in the inbox."""
+    """Requested key does not resolve to a stored PDF in the library folder."""
 
 
 class InvalidNoteImageError(Exception):
     """Uploaded note image is not a PNG."""
-
-
-def inbox_dir(root: Path) -> Path:
-    return root / "inbox"
 
 
 def history_path(root: Path) -> Path:
@@ -64,7 +61,7 @@ def open_library_root(root: Path, command: OpenRootCommand = DEFAULT_OPEN_ROOT_C
     subprocess.run([*command, str(root)], check=True)
 
 
-def sidecar_paths(pdf_path: Path) -> tuple[Path, Path]:
+def note_paths(pdf_path: Path) -> tuple[Path, Path]:
     """Return (markdown note path, assets directory) co-located with the PDF."""
     return pdf_path.with_suffix(".md"), pdf_path.with_suffix(".assets")
 
@@ -73,7 +70,7 @@ def resolve_pdf(root: Path, key: str) -> Path:
     """Map a library key to its stored PDF, rejecting traversal and missing keys."""
     if key != Path(key).name or key in {"", ".", ".."} or not key.endswith(".pdf"):
         raise UnknownLibraryKeyError(key)
-    path = inbox_dir(root) / key
+    path = root / key
     if not path.is_file():
         raise UnknownLibraryKeyError(key)
     return path
@@ -81,14 +78,13 @@ def resolve_pdf(root: Path, key: str) -> Path:
 
 def list_library(root: Path) -> list[LibraryEntry]:
     history = _load_history(root)
-    inbox = inbox_dir(root)
-    if not inbox.is_dir():
+    if not root.is_dir():
         return []
 
     entries: list[LibraryEntry] = []
-    for pdf in sorted(inbox.glob("*.pdf")):
+    for pdf in sorted(root.glob("*.pdf")):
         provenance = read_capture_provenance(pdf)
-        note_path, _ = sidecar_paths(pdf)
+        note_path, _ = note_paths(pdf)
         read_state = _read_state(pdf, history)
         entries.append(
             LibraryEntry(
@@ -126,12 +122,12 @@ def _read_state(pdf: Path, history: History) -> HistoryRecord:
 
 
 def read_note(root: Path, key: str) -> str:
-    note_path, _ = sidecar_paths(resolve_pdf(root, key))
+    note_path, _ = note_paths(resolve_pdf(root, key))
     return note_path.read_text(encoding="utf-8") if note_path.is_file() else ""
 
 
 def write_note(root: Path, key: str, text: str) -> None:
-    note_path, _ = sidecar_paths(resolve_pdf(root, key))
+    note_path, _ = note_paths(resolve_pdf(root, key))
     note_path.write_text(text, encoding="utf-8")
 
 
@@ -140,7 +136,7 @@ def write_note_image(root: Path, key: str, png_bytes: bytes) -> str:
     if not png_bytes.startswith(PNG_MAGIC):
         raise InvalidNoteImageError(key)
 
-    _, assets_dir = sidecar_paths(resolve_pdf(root, key))
+    _, assets_dir = note_paths(resolve_pdf(root, key))
     assets_dir.mkdir(parents=True, exist_ok=True)
 
     index = _next_clip_index(assets_dir)
@@ -154,7 +150,7 @@ def resolve_note_asset(root: Path, key: str, filename: str) -> Path:
     rejecting traversal and missing files."""
     if filename != Path(filename).name or not filename.endswith(".png"):
         raise UnknownLibraryKeyError(key)
-    _, assets_dir = sidecar_paths(resolve_pdf(root, key))
+    _, assets_dir = note_paths(resolve_pdf(root, key))
     path = assets_dir / filename
     if not path.is_file():
         raise UnknownLibraryKeyError(key)
@@ -162,9 +158,9 @@ def resolve_note_asset(root: Path, key: str, filename: str) -> Path:
 
 
 def delete_library_entry(root: Path, key: str) -> None:
-    """Remove a stored PDF together with its sidecar note, assets dir, and read-history."""
+    """Remove a stored PDF together with its note, assets dir, and read-history."""
     pdf = resolve_pdf(root, key)
-    note_path, assets_dir = sidecar_paths(pdf)
+    note_path, assets_dir = note_paths(pdf)
     pdf.unlink()
     note_path.unlink(missing_ok=True)
     if assets_dir.is_dir():

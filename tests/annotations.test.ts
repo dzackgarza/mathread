@@ -1,4 +1,4 @@
-// Annotations live inside the markdown notes sidecar as pandoc fenced divs:
+// Annotations live inside the markdown notes file as pandoc fenced divs:
 //
 //   ::: {.annotation id="a-1" page="3" color="#ffe09d" created="<ISO>" rects="x,y,w,h;..."}
 //   > highlighted source text (blockquoted, one line per source line)
@@ -7,7 +7,7 @@
 //   :::
 //
 // The div attributes carry everything needed to re-render the highlight on the
-// PDF at any zoom (rects are page-fraction coordinates), so the sidecar is the
+// PDF at any zoom (rects are page-fraction coordinates), so the note file is the
 // single durable store - nothing in localStorage, nothing embedded in the PDF.
 import { expect, test } from "bun:test";
 import {

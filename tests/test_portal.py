@@ -90,7 +90,7 @@ def test_library_title_falls_back_to_stem_when_title_hint_is_blank(
     assert entries[0]["title"] == "1703.05882"
 
 
-def test_note_round_trip_writes_sidecar_next_to_pdf(
+def test_note_round_trip_writes_markdown_file_next_to_pdf(
     client: TestClient,
     sample_pdf_bytes: bytes,
     tmp_path: Path,
@@ -100,8 +100,8 @@ def test_note_round_trip_writes_sidecar_next_to_pdf(
     put = client.put(f"/notes/{key}", json={"key": key, "text": "# Reading notes\n\nlattice stuff"})
     assert put.status_code == 200
 
-    sidecar = tmp_path / "reading-root" / "inbox" / "notes.md"
-    assert sidecar.read_text(encoding="utf-8") == "# Reading notes\n\nlattice stuff"
+    note_path = tmp_path / "reading-root" / "notes.md"
+    assert note_path.read_text(encoding="utf-8") == "# Reading notes\n\nlattice stuff"
 
     get = client.get(f"/notes/{key}")
     assert get.status_code == 200
@@ -111,7 +111,7 @@ def test_note_round_trip_writes_sidecar_next_to_pdf(
     assert listed[0]["has_note"] is True
 
 
-def test_get_note_returns_empty_when_no_sidecar_yet(
+def test_get_note_returns_empty_when_no_note_file_yet(
     client: TestClient,
     sample_pdf_bytes: bytes,
 ) -> None:
@@ -129,12 +129,12 @@ def test_note_image_written_relative_to_note_and_png_validated(
     tmp_path: Path,
 ) -> None:
     key = capture(client, sample_pdf_bytes)
-    inbox = tmp_path / "reading-root" / "inbox"
+    library_root = tmp_path / "reading-root"
 
     first = client.post(f"/notes/{key}/image", files={"image": ("clip.png", PNG_PIXEL, "image/png")})
     assert first.status_code == 200
     assert first.json()["relative_path"] == "notes.assets/clip-01.png"
-    assert (inbox / "notes.assets" / "clip-01.png").read_bytes() == PNG_PIXEL
+    assert (library_root / "notes.assets" / "clip-01.png").read_bytes() == PNG_PIXEL
 
     second = client.post(f"/notes/{key}/image", files={"image": ("clip.png", PNG_PIXEL, "image/png")})
     assert second.json()["relative_path"] == "notes.assets/clip-02.png"
@@ -179,27 +179,27 @@ def test_read_event_sets_first_read_once_and_updates_last_position(
     assert after_second["last_position"] == 0.9
 
 
-def test_delete_removes_pdf_sidecar_assets_and_history(
+def test_delete_removes_pdf_note_assets_and_history(
     client: TestClient,
     sample_pdf_bytes: bytes,
     tmp_path: Path,
 ) -> None:
     key = capture(client, sample_pdf_bytes)
-    inbox = tmp_path / "reading-root" / "inbox"
+    library_root = tmp_path / "reading-root"
     client.put(f"/notes/{key}", json={"key": key, "text": "notes"})
     client.post(f"/notes/{key}/image", files={"image": ("clip.png", PNG_PIXEL, "image/png")})
     client.post("/read-event", json={"key": key, "position": 0.4})
-    assert (inbox / "notes.pdf").is_file()
-    assert (inbox / "notes.md").is_file()
-    assert (inbox / "notes.assets" / "clip-01.png").is_file()
+    assert (library_root / "notes.pdf").is_file()
+    assert (library_root / "notes.md").is_file()
+    assert (library_root / "notes.assets" / "clip-01.png").is_file()
     assert key in (tmp_path / "reading-root" / "library.json").read_text(encoding="utf-8")
 
     response = client.delete(f"/library/{key}")
 
     assert response.status_code == 204
-    assert not (inbox / "notes.pdf").exists()
-    assert not (inbox / "notes.md").exists()
-    assert not (inbox / "notes.assets").exists()
+    assert not (library_root / "notes.pdf").exists()
+    assert not (library_root / "notes.md").exists()
+    assert not (library_root / "notes.assets").exists()
     assert key not in (tmp_path / "reading-root" / "library.json").read_text(encoding="utf-8")
     assert client.get("/library").json() == []
 

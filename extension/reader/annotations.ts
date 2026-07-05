@@ -1,6 +1,6 @@
 // Annotation storage model: each highlight/comment lives in the markdown notes
-// sidecar as a pandoc fenced div carrying everything needed to re-render it on
-// the PDF at any zoom. The sidecar is the single durable store — no localStorage,
+// file as a pandoc fenced div carrying everything needed to re-render it on
+// the PDF at any zoom. The note file is the single durable store — no localStorage,
 // nothing embedded in the PDF — so notes stay portable, diffable plain text.
 //
 //   ::: {.annotation id="a-1" page="3" color="#ffe09d" created="<ISO>" rects="x,y,w,h;..."}

@@ -1,5 +1,5 @@
 // ponytail: all pages render upfront, one full re-render per zoom/rotate step.
-// Highlights/comments live in the markdown notes sidecar as pandoc fenced divs
+// Highlights/comments live in the markdown notes file as pandoc fenced divs
 // (see annotations.ts) - the note doc is the single durable annotation store.
 import { getDocument, GlobalWorkerOptions, TextLayer } from "./vendor/pdfjs/pdf.min.mjs";
 import { parseAnnotations, previewMarkdown, removeAnnotation, upsertAnnotation } from "./annotations.js";
@@ -43,7 +43,7 @@ const libraryKey = bootParams.get("key");
 // View restore: reader-swap forwards mrpage/mrzoom from the source URL as page/zoom.
 const initialPage = Number(bootParams.get("page"));
 const initialZoom = Number(bootParams.get("zoom"));
-// Legacy localStorage highlight store; read once to migrate into the notes sidecar.
+// Legacy localStorage highlight store; read once to migrate into the notes file.
 const legacyStorageKey = `mathread-legacy-highlights:${libraryKey}`;
 
 const $ = id => document.getElementById(id);
@@ -80,6 +80,7 @@ const searchInputEl = $("search-input");
 const searchCountEl = $("search-count");
 const libraryListEl = $("library-list");
 const notesStatusEl = $("notes-status");
+const notesPathEl = $("notes-path");
 const notesPreviewEl = $("notes-preview");
 const notesErrorEl = $("notes-error");
 const notesSaveBtn = $("notes-save");
@@ -87,6 +88,7 @@ const notesModeEditBtn = $("notes-mode-edit");
 const notesModePreviewBtn = $("notes-mode-preview");
 const notesClipBtn = $("notes-clip");
 const backendLightEl = $("backend-light");
+const openArxivBtn = $("open-arxiv");
 const clipOverlayEl = $("clip-overlay");
 const clipRectEl = $("clip-rect");
 
@@ -99,7 +101,7 @@ let libraryEntry = null;
 let pdfUrl = null; // original provenance URL (Scholar lookup, document properties)
 // Editor state machine: loading -> clean <-> dirty -> saving -> clean | error.
 let noteState = { kind: "loading" };
-// The note sidecar text, loaded once at boot before page render so highlights are
+// The note text, loaded once at boot before page render so highlights are
 // known when the pages first draw (see loadNoteText). The editor, once mounted,
 // becomes the live source; until then this holds the loaded text.
 let noteText = null;
@@ -175,6 +177,7 @@ $("download").addEventListener("click", downloadPdf);
 $("print").addEventListener("click", () => window.print());
 
 $("cite").addEventListener("click", () => toggleCiteDialog());
+openArxivBtn.addEventListener("click", () => openArxivPage());
 scholarMenuBtn.addEventListener("click", () => toggleScholarMenu());
 
 // ---------- Search ----------
@@ -313,6 +316,7 @@ async function main() {
   }
   libraryEntry = matchingEntry;
   pdfUrl = libraryEntry.pdf_url;
+  configureArxivButton(pdfUrl);
 
   const response = await fetch(backendPdfUrl(libraryKey));
   if (!response.ok) {
@@ -668,9 +672,6 @@ function appendEmptyHighlights(target) {
   empty.append(
     svg,
     document.createTextNode("Select text to highlight or comment."),
-    document.createElement("br"),
-    document.createElement("br"),
-    document.createTextNode("Highlights are stored as annotation blocks in this PDF's markdown notes."),
   );
   target.append(empty);
 }
@@ -782,7 +783,7 @@ function activateTab(name) {
   }
 }
 
-// ---------- Key Points: sidecar-backed markdown notes ----------
+// ---------- Notes: markdown file-backed notes ----------
 notesSaveBtn.addEventListener("click", () => {
   void saveNote();
 });
@@ -796,7 +797,7 @@ async function initNotes() {
   notesInitialized = true;
 
   if (!libraryKey) {
-    showNotesError("Open a PDF to take notes - notes live in the PDF's markdown sidecar.");
+    showNotesError("Open a PDF to take notes.");
     return;
   }
 
@@ -822,7 +823,6 @@ async function initNotes() {
         keymap.of([...defaultKeymap, ...historyKeymap]),
         markdown(),
         syntaxHighlighting(defaultHighlightStyle),
-        placeholder("Write notes... (saved to the PDF's markdown sidecar)"),
         EditorView.lineWrapping,
         EditorView.updateListener.of(update => {
           if (update.docChanged) {
@@ -836,7 +836,7 @@ async function initNotes() {
   migrateLegacyHighlights();
 }
 
-// Load the note sidecar once and derive highlight state from it, independent of the
+// Load the note file once and derive highlight state from it, independent of the
 // editor. Highlights render on the PDF whether or not the notes tab is ever opened,
 // so this runs at boot before page render. Returns false if the backend load failed
 // (error surfaced to the notes panel); highlights then stay empty.
@@ -913,6 +913,7 @@ function renderNoteStatus() {
   notesStatusEl.title = label;
   notesStatusEl.classList.toggle("error", noteState.kind === "error");
   notesSaveBtn.disabled = noteState.kind === "loading" || noteState.kind === "saving";
+  notesPathEl.textContent = noteFilename();
 }
 
 function setNotesPreview(visible) {
@@ -935,7 +936,7 @@ function renderNotesPreview() {
   const rendered = marked.parse(previewMarkdown(text), { gfm: true, async: false });
   const fragment = DOMPurify.sanitize(rendered, { RETURN_DOM_FRAGMENT: true });
   notesPreviewEl.replaceChildren(fragment);
-  // Clip images are note-relative ("<stem>.assets/clip-01.png") so the sidecar renders in
+  // Clip images are note-relative ("<stem>.assets/clip-01.png") so the note renders in
   // any markdown tool on disk; in the reader they resolve through the backend asset route.
   for (const img of notesPreviewEl.querySelectorAll("img")) {
     const src = img.getAttribute("src");
@@ -952,6 +953,10 @@ function renderNotesPreview() {
 function showNotesError(message) {
   notesErrorEl.textContent = message;
   notesErrorEl.hidden = false;
+}
+
+function noteFilename() {
+  return libraryKey ? libraryKey.replace(/\.pdf$/, ".md") : "";
 }
 
 // ---------- Library: backend-backed list / open / trash ----------
@@ -1014,7 +1019,7 @@ function renderLibrary(backendStatus, entries) {
     trash.title = "Trash - deletes the PDF and its notes";
     trash.textContent = "🗑";
     trash.addEventListener("click", () => {
-      if (!confirm(`Trash "${entry.title}"?\n\nThis deletes the stored PDF, its notes, and its assets.`)) {
+      if (!confirm(`Trash "${entry.title}"?\n\nThis deletes the stored PDF, its notes, and its images.`)) {
         return;
       }
       deleteLibraryEntry(entry.key)
@@ -1043,27 +1048,17 @@ function appendLibraryLocation(backendStatus) {
   rootButton.disabled = !backendStatus.capabilities.open_root;
   rootButton.title = backendStatus.capabilities.open_root
     ? "Open library folder"
-    : "Library root is not available";
+    : "Library folder is not available";
 
   const rootLabel = document.createElement("span");
   rootLabel.className = "library-location-label";
-  rootLabel.textContent = "Root";
+  rootLabel.dataset.testid = "library-location-label";
+  rootLabel.textContent = "Library folder";
   const rootPath = document.createElement("span");
   rootPath.className = "library-location-path";
-  rootPath.dataset.testid = "library-root-path";
+  rootPath.dataset.testid = "library-folder-path";
   rootPath.textContent = backendStatus.root;
   rootButton.append(rootLabel, rootPath);
-
-  const inboxRow = document.createElement("div");
-  inboxRow.className = "library-location-row";
-  const inboxLabel = document.createElement("span");
-  inboxLabel.className = "library-location-label";
-  inboxLabel.textContent = "PDFs";
-  const inboxPath = document.createElement("span");
-  inboxPath.className = "library-location-path";
-  inboxPath.dataset.testid = "library-inbox-path";
-  inboxPath.textContent = backendStatus.inbox;
-  inboxRow.append(inboxLabel, inboxPath);
 
   const openStatus = document.createElement("div");
   openStatus.className = "library-location-status";
@@ -1086,7 +1081,7 @@ function appendLibraryLocation(backendStatus) {
       });
   });
 
-  section.append(heading, rootButton, inboxRow, openStatus);
+  section.append(heading, rootButton, openStatus);
   libraryListEl.append(section);
 }
 
@@ -1321,6 +1316,40 @@ function renderCitation(data) {
   if (citeBodyEl.children.length === 0) {
     setStatusMessage(citeBodyEl, "cite-status", "Google Scholar returned no citation for this document.");
   }
+}
+
+function configureArxivButton(url) {
+  const arxivPageUrl = arxivAbstractUrl(url);
+  openArxivBtn.hidden = arxivPageUrl === null;
+  if (arxivPageUrl !== null) {
+    openArxivBtn.dataset.arxivUrl = arxivPageUrl;
+  } else {
+    delete openArxivBtn.dataset.arxivUrl;
+  }
+}
+
+function openArxivPage() {
+  const url = openArxivBtn.dataset.arxivUrl;
+  if (url !== undefined) {
+    window.open(url, "_blank", "noopener");
+  }
+}
+
+function arxivAbstractUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.hostname !== "arxiv.org" && parsed.hostname !== "www.arxiv.org") {
+    return null;
+  }
+  const match = parsed.pathname.match(/^\/(?:pdf|abs)\/([^/?#]+)(?:\.pdf)?$/i);
+  if (match === null || match[1] === undefined) {
+    return null;
+  }
+  return `https://arxiv.org/abs/${match[1].replace(/\.pdf$/i, "")}`;
 }
 
 // Scholar links dropdown (grad-cap button): Cited by / Related / All versions.
@@ -1607,7 +1636,7 @@ function flashTitle(message) {
 }
 
 // Every annotation mutation routes through the notes editor doc, so the existing
-// autosave state machine owns persistence and the sidecar stays the single store.
+// autosave state machine owns persistence and the note file stays the single store.
 // Full-doc replace resets the editor cursor; acceptable - mutations originate from
 // the PDF pane, not mid-typing.
 function mutateNote(transform) {
@@ -1630,7 +1659,7 @@ function refreshAnnotations() {
   renderSidebarList();
 }
 
-// One-time import of the pre-sidecar localStorage highlight store.
+// One-time import of the older localStorage highlight store.
 function migrateLegacyHighlights() {
   const raw = localStorage.getItem(legacyStorageKey);
   if (raw === null) {

@@ -34,7 +34,6 @@ export interface BackendStatus {
   backend_url: string;
   portal_url: string;
   root: string;
-  inbox: string;
   service: {
     name: string;
     version: string;
@@ -42,8 +41,6 @@ export interface BackendStatus {
   storage: {
     root_exists: boolean;
     root_writable: boolean;
-    inbox_exists: boolean;
-    inbox_writable: boolean;
   };
   capabilities: {
     capture: boolean;
@@ -129,7 +126,6 @@ function parseBackendStatus(value: unknown): BackendStatus {
     backend_url: stringField(value, 'backend_url', 'MathRead backend status'),
     portal_url: stringField(value, 'portal_url', 'MathRead backend status'),
     root: stringField(value, 'root', 'MathRead backend status'),
-    inbox: stringField(value, 'inbox', 'MathRead backend status'),
     service: {
       name: stringField(service, 'name', 'MathRead backend service'),
       version: stringField(service, 'version', 'MathRead backend service'),
@@ -137,8 +133,6 @@ function parseBackendStatus(value: unknown): BackendStatus {
     storage: {
       root_exists: booleanField(storage, 'root_exists', 'MathRead backend storage'),
       root_writable: booleanField(storage, 'root_writable', 'MathRead backend storage'),
-      inbox_exists: booleanField(storage, 'inbox_exists', 'MathRead backend storage'),
-      inbox_writable: booleanField(storage, 'inbox_writable', 'MathRead backend storage'),
     },
     capabilities: {
       capture: booleanField(capabilities, 'capture', 'MathRead backend capabilities'),
@@ -231,7 +225,7 @@ export function pdfUrl(key: string): string {
   return `${API_BASE}/pdf/${encodeURIComponent(key)}`;
 }
 
-/** Trash a library item: removes the PDF, its sidecar note, assets, and read-history. */
+/** Trash a library item: removes the PDF, its note, assets, and read-history. */
 export async function deleteLibraryEntry(key: string): Promise<void> {
   await ok(await fetch(`${API_BASE}/library/${encodeURIComponent(key)}`, { method: 'DELETE' }));
 }
