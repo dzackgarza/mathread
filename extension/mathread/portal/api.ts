@@ -30,6 +30,30 @@ export interface LibraryEntry {
   last_position: number; // scroll fraction 0..1, 0 = first page
 }
 
+export interface BackendStatus {
+  backend_url: string;
+  portal_url: string;
+  root: string;
+  inbox: string;
+  service: {
+    name: string;
+    version: string;
+  };
+  storage: {
+    root_exists: boolean;
+    root_writable: boolean;
+    inbox_exists: boolean;
+    inbox_writable: boolean;
+  };
+  capabilities: {
+    capture: boolean;
+    open_file: boolean;
+    reveal_file: boolean;
+    open_root: boolean;
+  };
+  ready: boolean;
+}
+
 async function ok(response: Response): Promise<Response> {
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText} for ${response.url}`);
@@ -81,6 +105,51 @@ function parseLibrary(value: unknown): LibraryEntry[] {
   return value.map(parseLibraryEntry);
 }
 
+function booleanField(value: Record<string, unknown>, field: string, context: string): boolean {
+  const candidate = value[field];
+  invariant(typeof candidate === 'boolean', `${context} must declare ${field}`);
+  return candidate;
+}
+
+function stringField(value: Record<string, unknown>, field: string, context: string): string {
+  const candidate = value[field];
+  invariant(typeof candidate === 'string', `${context} must declare ${field}`);
+  return candidate;
+}
+
+function parseBackendStatus(value: unknown): BackendStatus {
+  invariant(isRecord(value), 'MathRead backend status must be an object');
+  const service = value.service;
+  invariant(isRecord(service), 'MathRead backend status must declare service');
+  const storage = value.storage;
+  invariant(isRecord(storage), 'MathRead backend status must declare storage');
+  const capabilities = value.capabilities;
+  invariant(isRecord(capabilities), 'MathRead backend status must declare capabilities');
+  return {
+    backend_url: stringField(value, 'backend_url', 'MathRead backend status'),
+    portal_url: stringField(value, 'portal_url', 'MathRead backend status'),
+    root: stringField(value, 'root', 'MathRead backend status'),
+    inbox: stringField(value, 'inbox', 'MathRead backend status'),
+    service: {
+      name: stringField(service, 'name', 'MathRead backend service'),
+      version: stringField(service, 'version', 'MathRead backend service'),
+    },
+    storage: {
+      root_exists: booleanField(storage, 'root_exists', 'MathRead backend storage'),
+      root_writable: booleanField(storage, 'root_writable', 'MathRead backend storage'),
+      inbox_exists: booleanField(storage, 'inbox_exists', 'MathRead backend storage'),
+      inbox_writable: booleanField(storage, 'inbox_writable', 'MathRead backend storage'),
+    },
+    capabilities: {
+      capture: booleanField(capabilities, 'capture', 'MathRead backend capabilities'),
+      open_file: booleanField(capabilities, 'open_file', 'MathRead backend capabilities'),
+      reveal_file: booleanField(capabilities, 'reveal_file', 'MathRead backend capabilities'),
+      open_root: booleanField(capabilities, 'open_root', 'MathRead backend capabilities'),
+    },
+    ready: booleanField(value, 'ready', 'MathRead backend status'),
+  };
+}
+
 function parseNoteResponse(value: unknown): string {
   invariant(isRecord(value), 'MathRead note response must be an object');
   invariant(typeof value.text === 'string', 'MathRead note response must declare text');
@@ -96,6 +165,15 @@ function parseImageUploadResponse(value: unknown): string {
 export async function getLibrary(): Promise<LibraryEntry[]> {
   const response = await ok(await fetch(`${API_BASE}/library`));
   return parseLibrary(await response.json());
+}
+
+export async function getBackendStatus(): Promise<BackendStatus> {
+  const response = await ok(await fetch(`${API_BASE}/status`));
+  return parseBackendStatus(await response.json());
+}
+
+export async function openLibraryRoot(): Promise<void> {
+  await ok(await fetch(`${API_BASE}/library/open-root`, { method: 'POST' }));
 }
 
 export async function getNote(key: string): Promise<string> {
@@ -143,13 +221,10 @@ export async function backendHealth(): Promise<BackendHealth> {
   if (!response.ok) {
     return { ok: false, detail: `MathRead backend error: ${response.status} ${response.statusText}` };
   }
-  const value: unknown = await response.json();
-  invariant(isRecord(value), 'MathRead backend status must be an object');
-  invariant(typeof value.ready === 'boolean', 'MathRead backend status must declare ready');
-  invariant(typeof value.root === 'string', 'MathRead backend status must declare root');
-  return value.ready
-    ? { ok: true, detail: `MathRead backend ready - ${API_BASE} -> ${value.root}` }
-    : { ok: false, detail: `MathRead backend storage not ready: ${value.root}` };
+  const status = parseBackendStatus(await response.json());
+  return status.ready
+    ? { ok: true, detail: `MathRead backend ready - ${API_BASE} -> ${status.root}` }
+    : { ok: false, detail: `MathRead backend storage not ready: ${status.root}` };
 }
 
 export function pdfUrl(key: string): string {

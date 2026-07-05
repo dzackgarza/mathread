@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypedDict, cast
@@ -36,6 +37,8 @@ class HistoryRecord(TypedDict):
 History = dict[str, HistoryRecord]
 
 FIRST_PAGE = 0.0
+type OpenRootCommand = tuple[str, ...]
+DEFAULT_OPEN_ROOT_COMMAND: OpenRootCommand = ("xdg-open",)
 
 
 class UnknownLibraryKeyError(Exception):
@@ -52,6 +55,13 @@ def inbox_dir(root: Path) -> Path:
 
 def history_path(root: Path) -> Path:
     return root / "library.json"
+
+
+def open_library_root(root: Path, command: OpenRootCommand = DEFAULT_OPEN_ROOT_COMMAND) -> None:
+    """Open the library root in the user's file browser."""
+    assert root.is_dir(), f"MathRead library root must exist before it can be opened: {root}"
+    assert command, "MathRead library root opener command must not be empty"
+    subprocess.run([*command, str(root)], check=True)
 
 
 def sidecar_paths(pdf_path: Path) -> tuple[Path, Path]:

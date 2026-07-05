@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from io import BytesIO
 from pathlib import Path
 
@@ -205,6 +206,21 @@ def test_delete_removes_pdf_sidecar_assets_and_history(
 
 def test_delete_unknown_key_is_404(client: TestClient) -> None:
     assert client.delete("/library/ghost.pdf").status_code == 404
+
+
+def test_open_root_endpoint_runs_file_browser_command_against_library_root(tmp_path: Path) -> None:
+    reading_root = tmp_path / "reading-root"
+    reading_root.mkdir()
+    script = (
+        "import pathlib, sys; "
+        "pathlib.Path(sys.argv[1], 'opened-by-mathread.txt').write_text('opened', encoding='utf-8')"
+    )
+    client = TestClient(create_app(reading_root, open_root_command=(sys.executable, "-c", script)))
+
+    response = client.post("/library/open-root")
+
+    assert response.status_code == 204
+    assert (reading_root / "opened-by-mathread.txt").read_text(encoding="utf-8") == "opened"
 
 
 def test_unknown_key_is_404_across_note_image_and_read_event(client: TestClient) -> None:

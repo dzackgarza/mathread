@@ -212,7 +212,7 @@ def test_status_reports_ready_storage_contract_for_existing_root(tmp_path: Path)
             "capture": True,
             "open_file": True,
             "reveal_file": False,
-            "open_root": False,
+            "open_root": True,
         },
         "ready": True,
     }

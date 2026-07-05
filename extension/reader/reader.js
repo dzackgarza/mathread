@@ -7,10 +7,12 @@ import {
   DOMPurify,
   backendHealth,
   deleteLibraryEntry,
+  getBackendStatus,
   getLibrary,
   getNote,
   marked,
   noteAssetUrl,
+  openLibraryRoot,
   pdfUrl as backendPdfUrl,
   postNoteImage,
   postReadEvent,
@@ -293,8 +295,8 @@ main().catch(error => {
 
 async function main() {
   await loadSettings();
-  const entries = await getLibrary();
-  renderLibraryEntries(entries);
+  const [backendStatus, entries] = await Promise.all([getBackendStatus(), getLibrary()]);
+  renderLibrary(backendStatus, entries);
 
   if (!libraryKey) {
     docTitleEl.textContent = "MathRead Library";
@@ -955,7 +957,8 @@ function showNotesError(message) {
 // ---------- Library: backend-backed list / open / trash ----------
 async function refreshLibrary() {
   try {
-    renderLibraryEntries(await getLibrary());
+    const [backendStatus, entries] = await Promise.all([getBackendStatus(), getLibrary()]);
+    renderLibrary(backendStatus, entries);
   } catch (error) {
     libraryListEl.innerHTML = "";
     const panel = document.createElement("div");
@@ -966,8 +969,9 @@ async function refreshLibrary() {
   }
 }
 
-function renderLibraryEntries(entries) {
+function renderLibrary(backendStatus, entries) {
   libraryListEl.innerHTML = "";
+  appendLibraryLocation(backendStatus);
   if (entries.length === 0) {
     const empty = document.createElement("div");
     empty.className = "library-empty";
@@ -1021,6 +1025,69 @@ function renderLibraryEntries(entries) {
     item.append(open, trash);
     libraryListEl.append(item);
   }
+}
+
+function appendLibraryLocation(backendStatus) {
+  const section = document.createElement("section");
+  section.className = "library-location";
+  section.setAttribute("aria-label", "Library storage location");
+
+  const heading = document.createElement("div");
+  heading.className = "library-location-heading";
+  heading.textContent = "Library storage";
+
+  const rootButton = document.createElement("button");
+  rootButton.className = "library-location-open";
+  rootButton.type = "button";
+  rootButton.dataset.testid = "library-open-root";
+  rootButton.disabled = !backendStatus.capabilities.open_root;
+  rootButton.title = backendStatus.capabilities.open_root
+    ? "Open library folder"
+    : "Library root is not available";
+
+  const rootLabel = document.createElement("span");
+  rootLabel.className = "library-location-label";
+  rootLabel.textContent = "Root";
+  const rootPath = document.createElement("span");
+  rootPath.className = "library-location-path";
+  rootPath.dataset.testid = "library-root-path";
+  rootPath.textContent = backendStatus.root;
+  rootButton.append(rootLabel, rootPath);
+
+  const inboxRow = document.createElement("div");
+  inboxRow.className = "library-location-row";
+  const inboxLabel = document.createElement("span");
+  inboxLabel.className = "library-location-label";
+  inboxLabel.textContent = "PDFs";
+  const inboxPath = document.createElement("span");
+  inboxPath.className = "library-location-path";
+  inboxPath.dataset.testid = "library-inbox-path";
+  inboxPath.textContent = backendStatus.inbox;
+  inboxRow.append(inboxLabel, inboxPath);
+
+  const openStatus = document.createElement("div");
+  openStatus.className = "library-location-status";
+  openStatus.setAttribute("role", "status");
+
+  rootButton.addEventListener("click", () => {
+    rootButton.disabled = true;
+    openStatus.classList.remove("error");
+    openStatus.textContent = "Opening...";
+    void openLibraryRoot()
+      .then(() => {
+        openStatus.textContent = "Opened";
+      })
+      .catch(error => {
+        openStatus.classList.add("error");
+        openStatus.textContent = `Open failed: ${error}`;
+      })
+      .finally(() => {
+        rootButton.disabled = !backendStatus.capabilities.open_root;
+      });
+  });
+
+  section.append(heading, rootButton, inboxRow, openStatus);
+  libraryListEl.append(section);
 }
 
 function relativeTime(iso) {

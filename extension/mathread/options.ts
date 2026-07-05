@@ -1,7 +1,12 @@
 // Extension options page: backend health surface + reader settings persisted to
 // chrome.storage.local under "mathread.settings" (read by reader.js at boot).
-import { backendHealth } from "./portal/api";
+import { backendHealth, getBackendStatus, openLibraryRoot } from "./portal/api";
 import { backendOriginFromManifest } from "./capture-client";
+import {
+  type MathReadSettings,
+  loadMathReadSettings,
+  settingsStorageKey,
+} from "./settings";
 
 declare const chrome: {
   runtime: {
@@ -15,20 +20,6 @@ declare const chrome: {
   };
 };
 
-export type ReaderSettings = {
-  autosaveMs: number;
-  fitWidthOnOpen: boolean;
-  lineNumbers: boolean;
-};
-
-export const settingsStorageKey = "mathread.settings";
-
-const settingsDefaults: ReaderSettings = {
-  autosaveMs: 800,
-  fitWidthOnOpen: false,
-  lineNumbers: true,
-};
-
 function element<T extends HTMLElement>(id: string): T {
   const found = document.getElementById(id);
   if (found === null) {
@@ -40,6 +31,11 @@ function element<T extends HTMLElement>(id: string): T {
 const backendDot = element<HTMLSpanElement>("backend-dot");
 const backendSummary = element<HTMLSpanElement>("backend-summary");
 const backendDetail = element<HTMLDivElement>("backend-detail");
+const libraryRoot = element<HTMLSpanElement>("library-root");
+const libraryInbox = element<HTMLSpanElement>("library-inbox");
+const openLibraryRootButton = element<HTMLButtonElement>("open-library-root");
+const openLibraryRootStatus = element<HTMLSpanElement>("open-library-root-status");
+const autoCapturePdfsInput = element<HTMLInputElement>("auto-capture-pdfs");
 const fitWidthInput = element<HTMLInputElement>("fit-width-on-open");
 const lineNumbersInput = element<HTMLInputElement>("line-numbers");
 const autosaveInput = element<HTMLInputElement>("autosave-ms");
@@ -49,22 +45,33 @@ const saveStatus = element<HTMLSpanElement>("save-status");
 async function refreshBackendStatus(): Promise<void> {
   backendDot.classList.remove("ok", "down");
   backendSummary.textContent = "Checking…";
+  libraryRoot.textContent = "Checking…";
+  libraryInbox.textContent = "Checking…";
+  openLibraryRootButton.disabled = true;
   const origin = backendOriginFromManifest(chrome.runtime.getManifest());
   const health = await backendHealth();
   backendDot.classList.add(health.ok ? "ok" : "down");
   backendSummary.textContent = health.ok ? `Ready at ${origin}` : `Unavailable at ${origin}`;
-  backendDetail.textContent = health.ok
-    ? health.detail
-    : `${health.detail}\nStart it with: just serve (in the mathread repo)`;
+  if (!health.ok) {
+    backendDetail.textContent = `${health.detail}\nStart it with: just serve (in the mathread repo)`;
+    libraryRoot.textContent = "Unavailable";
+    libraryInbox.textContent = "Unavailable";
+    return;
+  }
+  const status = await getBackendStatus();
+  backendDetail.textContent = [
+    health.detail,
+    `Service: ${status.service.name} ${status.service.version}`,
+    `Storage ready: ${status.ready ? "yes" : "no"}`,
+  ].join("\n");
+  libraryRoot.textContent = status.root;
+  libraryInbox.textContent = status.inbox;
+  openLibraryRootButton.disabled = !status.capabilities.open_root;
 }
 
 async function loadSettings(): Promise<void> {
-  const stored = await chrome.storage.local.get([settingsStorageKey]);
-  const raw = stored[settingsStorageKey];
-  const settings: ReaderSettings = {
-    ...settingsDefaults,
-    ...(typeof raw === "object" && raw !== null ? (raw as Partial<ReaderSettings>) : {}),
-  };
+  const settings = await loadMathReadSettings(chrome.storage.local);
+  autoCapturePdfsInput.checked = settings.autoCapturePdfs;
   fitWidthInput.checked = settings.fitWidthOnOpen;
   lineNumbersInput.checked = settings.lineNumbers;
   autosaveInput.value = String(settings.autosaveMs);
@@ -77,7 +84,8 @@ async function saveSettings(): Promise<void> {
     saveStatus.style.color = "#ea4335";
     return;
   }
-  const settings: ReaderSettings = {
+  const settings: MathReadSettings = {
+    autoCapturePdfs: autoCapturePdfsInput.checked,
     autosaveMs,
     fitWidthOnOpen: fitWidthInput.checked,
     lineNumbers: lineNumbersInput.checked,
@@ -92,6 +100,23 @@ async function saveSettings(): Promise<void> {
 
 element<HTMLButtonElement>("backend-refresh").addEventListener("click", () => {
   void refreshBackendStatus();
+});
+openLibraryRootButton.addEventListener("click", () => {
+  openLibraryRootButton.disabled = true;
+  openLibraryRootStatus.style.color = "#e6e6e6";
+  openLibraryRootStatus.textContent = "Opening…";
+  void openLibraryRoot()
+    .then(() => {
+      openLibraryRootStatus.style.color = "#34a853";
+      openLibraryRootStatus.textContent = "Opened";
+    })
+    .catch(error => {
+      openLibraryRootStatus.style.color = "#ea4335";
+      openLibraryRootStatus.textContent = `Open failed: ${error}`;
+    })
+    .finally(() => {
+      void refreshBackendStatus();
+    });
 });
 saveButton.addEventListener("click", () => {
   void saveSettings();

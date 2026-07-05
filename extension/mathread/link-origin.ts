@@ -6,6 +6,7 @@ import {
   rememberPdfLinkOrigin,
   runtimeCaptureMessage,
 } from "./capture-client";
+import { loadMathReadSettings } from "./settings";
 
 type ChromeRuntime = {
   runtime: {
@@ -42,6 +43,9 @@ document.addEventListener(
 );
 
 async function captureClickedPdfLink(target: Element): Promise<void> {
+  if (!(await loadMathReadSettings(chrome.storage.local)).autoCapturePdfs) {
+    return;
+  }
   const anchor = target.closest<HTMLAnchorElement>("a[href]");
   if (anchor === null) {
     return;
@@ -71,6 +75,9 @@ async function capturePdfFromCurrentDocument(): Promise<void> {
   // A PDF served from the backend's own /pdf/{key} route (library reopen) is already
   // captured — capturing it again would store the backend's copy as a new item.
   if (isBackendServedPdfUrl(document.location.href, chrome.runtime.getManifest())) {
+    return;
+  }
+  if (!(await loadMathReadSettings(chrome.storage.local)).autoCapturePdfs) {
     return;
   }
 

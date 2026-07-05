@@ -10,13 +10,13 @@
         background: #1f1f1f;
         color: #e6e6e6;
         font: 14px/1.5 system-ui, sans-serif;
-        max-width: 640px;
+        max-width: 760px;
       }
       h1 { font-size: 20px; margin: 0 0 24px; }
       h2 { font-size: 15px; margin: 28px 0 10px; color: #fff; }
       section {
         background: #2a2a2a;
-        border-radius: 10px;
+        border-radius: 8px;
         padding: 16px 20px;
         margin-bottom: 16px;
       }
@@ -38,14 +38,55 @@
         background: #3b5bdb;
         color: #fff;
         border: none;
-        border-radius: 8px;
+        border-radius: 6px;
         padding: 7px 18px;
         font-size: 13px;
         cursor: pointer;
       }
       button.secondary { background: #444; }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
       #save-status { margin-left: 12px; color: #34a853; font-size: 13px; }
       .hint { color: #9a9a9a; font-size: 12.5px; margin: 4px 0 0 26px; }
+      .path-action {
+        display: grid;
+        grid-template-columns: 130px minmax(0, 1fr);
+        gap: 14px;
+        width: 100%;
+        margin: 10px 0;
+        padding: 10px 12px;
+        background: #1f1f1f;
+        color: #e6e6e6;
+        border: 1px solid #444;
+        text-align: left;
+      }
+      .path-action:hover:not(:disabled) {
+        border-color: #6b8cff;
+        background: #242936;
+      }
+      .path-label,
+      .field-label {
+        color: #bdbdbd;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0;
+      }
+      .path-value,
+      .field-value {
+        min-width: 0;
+        overflow-wrap: anywhere;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12.5px;
+      }
+      .field-row {
+        display: grid;
+        grid-template-columns: 130px minmax(0, 1fr);
+        gap: 14px;
+        padding: 6px 0;
+      }
+      #open-library-root-status { margin-left: 0; font-size: 13px; }
     </style>
   </head>
   <body>
@@ -59,6 +100,27 @@
         <button id="backend-refresh" class="secondary" type="button">Refresh</button>
       </div>
       <div id="backend-detail"></div>
+    </section>
+
+    <section>
+      <h2 style="margin-top: 0">Library</h2>
+      <button id="open-library-root" class="path-action" type="button" disabled>
+        <span class="path-label">Library root</span>
+        <span id="library-root" class="path-value">Checking…</span>
+      </button>
+      <div class="field-row">
+        <span class="field-label">Captured PDFs</span>
+        <span id="library-inbox" class="field-value">Checking…</span>
+      </div>
+      <span id="open-library-root-status" role="status"></span>
+    </section>
+
+    <section>
+      <h2 style="margin-top: 0">Capture</h2>
+      <label>
+        <input type="checkbox" id="auto-capture-pdfs" />
+        Automatically capture PDF tabs into MathRead
+      </label>
     </section>
 
     <section>

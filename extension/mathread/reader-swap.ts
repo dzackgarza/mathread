@@ -16,6 +16,7 @@ import {
   runtimeCaptureMessage,
   storedPdfLinkOrigin,
 } from "./capture-client";
+import { loadMathReadSettings } from "./settings";
 
 declare const chrome: {
   runtime: {
@@ -45,6 +46,10 @@ async function interceptPdfDocument(): Promise<void> {
   if (isBackendServedPdfUrl(pdfUrl, chrome.runtime.getManifest())) {
     // Opened from the library: already captured, the key is the backend filename.
     mountReader(libraryKeyFromBackendPdfUrl(pdfUrl));
+    return;
+  }
+
+  if (!(await loadMathReadSettings(chrome.storage.local)).autoCapturePdfs) {
     return;
   }
 

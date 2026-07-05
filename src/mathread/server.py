@@ -10,7 +10,7 @@ from pydantic import HttpUrl
 
 from mathread import __version__
 from mathread.capture import InvalidPdfCaptureError, capture_bytes, capture_url
-from mathread.library import InvalidNoteImageError, UnknownLibraryKeyError
+from mathread.library import DEFAULT_OPEN_ROOT_COMMAND, InvalidNoteImageError, OpenRootCommand, UnknownLibraryKeyError
 from mathread.models import (
     BackendCapabilities,
     BackendServiceStatus,
@@ -25,7 +25,11 @@ from mathread.portal import create_portal_router
 DEFAULT_PORTAL_URL = "http://markdown-editor.localhost"
 
 
-def create_app(root: Path, portal_url: str = DEFAULT_PORTAL_URL) -> FastAPI:
+def create_app(
+    root: Path,
+    portal_url: str = DEFAULT_PORTAL_URL,
+    open_root_command: OpenRootCommand = DEFAULT_OPEN_ROOT_COMMAND,
+) -> FastAPI:
     app = FastAPI(title="MathRead")
 
     # Local reading portal (vite dev + <slug>.localhost) reaches the backend cross-origin.
@@ -57,7 +61,7 @@ def create_app(root: Path, portal_url: str = DEFAULT_PORTAL_URL) -> FastAPI:
     ) -> Response:
         return Response(status_code=400)
 
-    app.include_router(create_portal_router(root))
+    app.include_router(create_portal_router(root, open_root_command))
 
     @app.post("/capture-url", response_model=CaptureResult)
     def capture_url_endpoint(request: CaptureUrlRequest) -> CaptureResult:
@@ -84,7 +88,7 @@ def create_app(root: Path, portal_url: str = DEFAULT_PORTAL_URL) -> FastAPI:
                 capture=root_writable,
                 open_file=True,
                 reveal_file=False,
-                open_root=False,
+                open_root=root.is_dir(),
             ),
             ready=root_writable,
         )

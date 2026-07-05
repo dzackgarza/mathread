@@ -143,6 +143,12 @@ test("reader Library panel lists, opens, and trashes captured items against the 
     await page.goto(readerPageUrl(extensionId, firstKey), { waitUntil: "domcontentloaded" });
     await page.locator('.nav-expand-btn[data-tab="library"]').click();
     await waitForLibraryEntryCount(page, 2);
+    await expectElementText(page.locator('[data-testid="library-root-path"]'), text => text === readingRoot);
+    await expectElementText(
+      page.locator('[data-testid="library-inbox-path"]'),
+      text => text === join(readingRoot, "inbox"),
+    );
+    expect(await page.locator('[data-testid="library-open-root"]').isEnabled()).toBe(true);
 
     // Entry cards carry the title, a has-note marker, and a relative last-read time.
     const firstEntry = page.locator('[data-testid="library-entry"]', { hasText: "notes" });
@@ -394,6 +400,81 @@ test("reader disables document-only toolbar actions when no document key is open
     expect(state.docTitle).toBe("MathRead Library");
     expect(state.viewerText).toContain("No document open");
     expect(state.enabledDocumentControls).toEqual([]);
+  });
+}, 120_000);
+
+test("options page exposes library storage and persists capture and reader settings", async () => {
+  await withExtensionReader(async ({ extensionId, page, readingRoot }) => {
+    await page.goto(`chrome-extension://${extensionId}/mathread/options.html`, { waitUntil: "domcontentloaded" });
+    await expectElementText(page.locator("#backend-summary"), text => text.startsWith("Ready at "));
+    await expectElementText(page.locator("#library-root"), text => text === readingRoot);
+    await expectElementText(page.locator("#library-inbox"), text => text === join(readingRoot, "inbox"));
+    expect(await page.locator("#open-library-root").isEnabled()).toBe(true);
+    await expectInputValue(page.locator("#autosave-ms"), value => value === "800");
+    expect(await page.locator("#auto-capture-pdfs").isChecked()).toBe(true);
+
+    await page.locator("#auto-capture-pdfs").setChecked(false);
+    await page.locator("#fit-width-on-open").setChecked(true);
+    await page.locator("#line-numbers").setChecked(false);
+    await page.locator("#autosave-ms").fill("1200");
+    await page.locator("#save").click();
+    await expectElementText(page.locator("#save-status"), text => text === "Saved");
+
+    const serviceWorker = page.context().serviceWorkers().find(worker => worker.url().startsWith("chrome-extension://"));
+    assert(serviceWorker !== undefined);
+    const stored = await serviceWorker.evaluate(async () => {
+      const chromeApi = (globalThis as typeof globalThis & {
+        chrome: {
+          storage: {
+            local: {
+              get(keys: string[]): Promise<Record<string, unknown>>;
+            };
+          };
+        };
+      }).chrome;
+      return chromeApi.storage.local.get(["mathread.settings"]);
+    });
+    expect(stored["mathread.settings"]).toEqual({
+      autoCapturePdfs: false,
+      autosaveMs: 1200,
+      fitWidthOnOpen: true,
+      lineNumbers: false,
+    });
+  });
+}, 120_000);
+
+test("auto-capture setting leaves direct PDF tabs uncaptured when disabled", async () => {
+  await withExtensionReader(async ({ courseServer, extensionId, page, readingRoot }) => {
+    const serviceWorker = page.context().serviceWorkers().find(worker => worker.url().startsWith("chrome-extension://"));
+    assert(serviceWorker !== undefined);
+    await serviceWorker.evaluate(async () => {
+      const chromeApi = (globalThis as typeof globalThis & {
+        chrome: {
+          storage: {
+            local: {
+              set(items: Record<string, unknown>): Promise<void>;
+            };
+          };
+        };
+      }).chrome;
+      await chromeApi.storage.local.set({
+        "mathread.settings": {
+          autoCapturePdfs: false,
+          autosaveMs: 800,
+          fitWidthOnOpen: false,
+          lineNumbers: true,
+        },
+      });
+    });
+
+    await page.goto(`${courseServer.url.origin}/notes.pdf`);
+    await Bun.sleep(1500);
+
+    expect(page.frames().some(frame => frame.name() === "mathreadReaderFrame")).toBe(false);
+    expect(existsSync(join(readingRoot, "inbox"))).toBe(false);
+    await page.goto(`chrome-extension://${extensionId}/reader/reader.html`, { waitUntil: "domcontentloaded" });
+    const state = await waitForNoDocumentReaderState(page);
+    expect(state.docTitle).toBe("MathRead Library");
   });
 }, 120_000);
 

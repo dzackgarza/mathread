@@ -7,9 +7,11 @@ import DOMPurifyImpl from "dompurify";
 import {
   backendHealth as backendHealthImpl,
   deleteLibraryEntry as deleteLibraryEntryImpl,
+  getBackendStatus as getBackendStatusImpl,
   getLibrary as getLibraryImpl,
   getNote as getNoteImpl,
   noteAssetUrl as noteAssetUrlImpl,
+  openLibraryRoot as openLibraryRootImpl,
   pdfUrl as pdfUrlImpl,
   postNoteImage as postNoteImageImpl,
   postReadEvent as postReadEventImpl,
@@ -20,9 +22,11 @@ export const marked = markedRenderer;
 export const DOMPurify = DOMPurifyImpl;
 export const backendHealth = backendHealthImpl;
 export const deleteLibraryEntry = deleteLibraryEntryImpl;
+export const getBackendStatus = getBackendStatusImpl;
 export const getLibrary = getLibraryImpl;
 export const getNote = getNoteImpl;
 export const noteAssetUrl = noteAssetUrlImpl;
+export const openLibraryRoot = openLibraryRootImpl;
 export const pdfUrl = pdfUrlImpl;
 export const postNoteImage = postNoteImageImpl;
 export const postReadEvent = postReadEventImpl;

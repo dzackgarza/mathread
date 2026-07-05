@@ -19,7 +19,10 @@ from mathread.models import (
 )
 
 
-def create_portal_router(root: Path) -> APIRouter:
+def create_portal_router(
+    root: Path,
+    open_root_command: library.OpenRootCommand = library.DEFAULT_OPEN_ROOT_COMMAND,
+) -> APIRouter:
     router = APIRouter()
 
     @router.get("/library", response_model=list[LibraryEntry])
@@ -58,6 +61,11 @@ def create_portal_router(root: Path) -> APIRouter:
     @router.delete("/library/{key}")
     def delete_entry(key: str) -> Response:
         library.delete_library_entry(root, key)
+        return Response(status_code=204)
+
+    @router.post("/library/open-root")
+    def open_root() -> Response:
+        library.open_library_root(root, open_root_command)
         return Response(status_code=204)
 
     return router
