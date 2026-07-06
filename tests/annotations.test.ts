@@ -160,6 +160,29 @@ test("hand-authored block with unquoted-style spacing still parses", () => {
   expect(parsed[0]!.comment).toBe("my remark");
 });
 
+test("serialized attributes escape quotes so ids round-trip without corrupting the block", () => {
+  const annotation = { ...base, id: 'a-"quoted"' };
+  const block = serializeAnnotation(annotation);
+  expect(block).toContain('id="a-&quot;quoted&quot;"');
+
+  const parsed = parseAnnotations(block);
+  expect(parsed.length).toBe(1);
+  expect(parsed[0]!.id).toBe(annotation.id);
+});
+
+test("malformed annotation blocks are visible syntax errors and block mutation", () => {
+  const doc = [
+    '::: {.annotation id="broken" page="NaN" color="#fff" created="x" rects="bogus"}',
+    "> text",
+    ":::",
+    "",
+    serializeAnnotation(base),
+  ].join("\n");
+
+  expect(() => parseAnnotations(doc)).toThrow();
+  expect(() => upsertAnnotation(doc, { ...base, id: "broken", comment: "replacement" })).toThrow();
+});
+
 test("malformed blocks are skipped, not fatal", () => {
   const doc = [
     '::: {.annotation id="broken" page="NaN" color="#fff" created="x" rects="bogus"}',

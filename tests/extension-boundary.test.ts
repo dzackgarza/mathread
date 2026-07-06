@@ -325,6 +325,51 @@ test("reader Key Points panel persists notes to the on-disk sidecar and renders 
   });
 }, 60_000);
 
+test("reader Key Points panel blocks stale autosave and resolves disk conflicts", async () => {
+  await withExtensionReader(async ({ backendPort, courseServer, extensionId, page, readingRoot }) => {
+    const key = await preCapturePdfThroughBackend(backendPort, courseServer, "direct-pdf-tab");
+
+    await page.goto(readerPageUrl(extensionId, key), { waitUntil: "domcontentloaded" });
+    await waitForCanvasCount(page, 1);
+    await page.locator('.nav-expand-btn[data-tab="keypoints"]').click();
+
+    const editor = page.locator("#ai-editor .cm-content");
+    await editor.click();
+    await page.keyboard.type("original buffer");
+    await waitForNoteSaved(backendPort, key, text => text === "original buffer");
+    await expectElementText(page.locator("#notes-status"), text => text === "Saved");
+
+    const sidecarPath = noteSidecarPath(readingRoot, key);
+    writeFileSync(sidecarPath, "disk edit from another tab\n");
+    await editor.click();
+    await page.keyboard.type("\nstale local edit");
+    await expectElementText(page.locator("#notes-status"), text => text === "Save failed: conflict");
+    await expectElementText(page.locator("#notes-error"), text => text.includes("modified on disk"));
+    expect(readFileSync(sidecarPath, "utf8")).toBe("disk edit from another tab\n");
+
+    await page.getByRole("button", { name: "Load from Disk" }).click();
+    await expectElementText(page.locator("#notes-status"), text => text === "Saved");
+    await expectElementText(
+      editor,
+      text => text.includes("disk edit from another tab") && !text.includes("stale local edit"),
+    );
+
+    writeFileSync(sidecarPath, "second disk edit from another tab\n");
+    await editor.click();
+    await page.keyboard.type("\noverwrite local edit");
+    await expectElementText(page.locator("#notes-status"), text => text === "Save failed: conflict");
+    expect(readFileSync(sidecarPath, "utf8")).toBe("second disk edit from another tab\n");
+
+    await page.getByRole("button", { name: "Overwrite Disk" }).click();
+    await waitForNoteSaved(
+      backendPort,
+      key,
+      text => text.includes("overwrite local edit") && !text.includes("second disk edit"),
+    );
+    await expectElementText(page.locator("#notes-status"), text => text === "Saved");
+  });
+}, 60_000);
+
 test("reader Key Points panel surfaces a loud error when the backend dies (no localStorage fallback)", async () => {
   await withExtensionReader(async ({ backend, backendPort, courseServer, extensionId, page }) => {
     const key = await preCapturePdfThroughBackend(backendPort, courseServer, "direct-pdf-tab");
@@ -502,6 +547,15 @@ test("reader keeps exactly one coherent page set after rapid toolbar rerenders",
 
 function readerPageUrl(extensionId: string, key: string): string {
   return `chrome-extension://${extensionId}/reader/reader.html?key=${encodeURIComponent(key)}`;
+}
+
+function noteSidecarPath(readingRoot: string, key: string): string {
+  const filename = key.replace(/\.pdf$/, ".md");
+  const inboxPath = join(readingRoot, "inbox", filename);
+  if (existsSync(inboxPath)) {
+    return inboxPath;
+  }
+  return join(readingRoot, filename);
 }
 
 function assertReaderFrameUrl(url: string, expectedKey: string): void {
