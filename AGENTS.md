@@ -36,3 +36,5 @@ Move reusable lessons during maintenance with:
 agent-memory maintain move <key> --to global/advice
 ```
 <!-- agent-memory:end -->
+
+> Optimized tool-use workflow for agents: see [SDL.md](./SDL.md).

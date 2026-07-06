@@ -11,6 +11,8 @@
 // single durable store - nothing in localStorage, nothing embedded in the PDF.
 import { expect, test } from "bun:test";
 import {
+  AnnotationSyntaxError,
+  parseAnnotationDocument,
   parseAnnotations,
   previewMarkdown,
   removeAnnotation,
@@ -160,7 +162,7 @@ test("hand-authored block with unquoted-style spacing still parses", () => {
   expect(parsed[0]!.comment).toBe("my remark");
 });
 
-test("serialized attributes escape quotes so ids round-trip without corrupting the block", () => {
+test("serialized attributes round-trip quoted characters without corrupting the block", () => {
   const annotation = { ...base, id: 'a-"quoted"' };
   const block = serializeAnnotation(annotation);
   expect(block).toContain('id="a-&quot;quoted&quot;"');
@@ -178,19 +180,21 @@ test("malformed annotation blocks are visible syntax errors and block mutation",
     "",
     serializeAnnotation(base),
   ].join("\n");
-
-  expect(() => parseAnnotations(doc)).toThrow();
-  expect(() => upsertAnnotation(doc, { ...base, id: "broken", comment: "replacement" })).toThrow();
+  const result = parseAnnotationDocument(doc);
+  expect(result.error).toBeInstanceOf(AnnotationSyntaxError);
+  expect(result.error?.lineNumber).toBe(1);
+  expect(result.annotations).toEqual([]);
+  expect(() => parseAnnotations(doc)).toThrow(AnnotationSyntaxError);
+  expect(() => upsertAnnotation(doc, { ...base, id: "broken", comment: "replacement" })).toThrow(AnnotationSyntaxError);
 });
 
-test("malformed blocks are skipped, not fatal", () => {
+test("unescaped quote in an annotation attribute is a visible syntax error", () => {
   const doc = [
-    '::: {.annotation id="broken" page="NaN" color="#fff" created="x" rects="bogus"}',
+    '::: {.annotation id="broken"quote" page="3" color="#fff" created="x" rects="0.1,0.2,0.3,0.4"}',
     "> text",
     ":::",
-    "",
-    serializeAnnotation(base),
   ].join("\n");
-  const parsed = parseAnnotations(doc);
-  expect(parsed.map(a => a.id)).toEqual([base.id]);
+  const result = parseAnnotationDocument(doc);
+  expect(result.error).toBeInstanceOf(AnnotationSyntaxError);
+  expect(result.error?.lineNumber).toBe(1);
 });
