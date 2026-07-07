@@ -1,13 +1,7 @@
-export type CaptureHeaders = {
-  referer: string;
-  cookie?: string;
-};
-
-export type CaptureUrlRequest = {
+export type CaptureRequest = {
   pdf_url: string;
   source_url: string;
   title_hint?: string;
-  headers?: CaptureHeaders;
 };
 
 export type CaptureResult = {
@@ -31,12 +25,11 @@ export type PdfLinkOrigin = {
 };
 
 export type RuntimeCaptureResponse =
-  | { ok: true; result: CaptureResult }
-  | { ok: false; error: string };
+  { ok: true; result: CaptureResult } | { ok: false; error: string };
 
 export type RuntimeCaptureMessage = {
-  type: "mathread:capture-url";
-  request: CaptureUrlRequest;
+  type: "mathread:capture";
+  request: CaptureRequest;
 };
 
 export const pdfLinkOriginsStorageKey = "mathread.pdfLinkOrigins";
@@ -65,12 +58,15 @@ function safeDecodeUriComponent(value: string): string {
  * cannot URI-encode substitutions) and the content-script fallback format
  * (`?file=<encoded-url>`), plus a bare-pathname fallback.
  */
-export function pdfUrlFromLocation(search: string, pathname: string): string | undefined {
+export function pdfUrlFromLocation(
+  search: string,
+  pathname: string,
+): string | undefined {
   const queryString = search.slice(1);
   return (
-    pdfUrlFromFileQuery(queryString)
-    ?? pdfUrlFromDnrQuery(queryString)
-    ?? pdfUrlFromPathname(pathname)
+    pdfUrlFromFileQuery(queryString) ??
+    pdfUrlFromDnrQuery(queryString) ??
+    pdfUrlFromPathname(pathname)
   );
 }
 
@@ -85,7 +81,9 @@ function pdfUrlFromFileQuery(queryString: string): string | undefined {
 
 function pdfUrlFromDnrQuery(queryString: string): string | undefined {
   if (queryString.startsWith("DNR:")) {
-    return originalPdfUrlOrUndefined(safeDecodeUriComponent(queryString.slice(4)));
+    return originalPdfUrlOrUndefined(
+      safeDecodeUriComponent(queryString.slice(4)),
+    );
   }
   return undefined;
 }
@@ -105,7 +103,7 @@ export function captureRequestForClickedPdfLink(
   linkHref: string,
   sourceUrl: string,
   titleHint: string,
-): CaptureUrlRequest {
+): CaptureRequest {
   return {
     pdf_url: new URL(linkHref, sourceUrl).href,
     source_url: sourceUrl,
@@ -114,39 +112,62 @@ export function captureRequestForClickedPdfLink(
 }
 
 export function runtimeCaptureMessage(
-  request: CaptureUrlRequest,
+  request: CaptureRequest,
 ): RuntimeCaptureMessage {
   return {
-    type: "mathread:capture-url",
+    type: "mathread:capture",
     request,
   };
 }
 
-export async function postCaptureUrl(
-  request: CaptureUrlRequest,
+export async function postCaptureBytes(
+  request: CaptureRequest,
+  pdfBytes: ArrayBuffer,
+  filename: string,
   endpoint: string,
 ): Promise<CaptureResult> {
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(request),
-  });
-  invariant(
-    response.ok,
-    `MathRead backend rejected capture request: ${response.status} ${response.statusText}`,
+  const form = new FormData();
+  form.append(
+    "pdf",
+    new Blob([pdfBytes], { type: "application/pdf" }),
+    filename,
   );
+  form.append("pdf_url", request.pdf_url);
+  form.append("source_url", request.source_url);
+  if (request.title_hint !== undefined) {
+    form.append("title_hint", request.title_hint);
+  }
+
+  const response = await fetch(endpoint, { method: "POST", body: form });
+  if (!response.ok) {
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      const body: unknown = await response.json();
+      if (
+        isRecord(body) &&
+        typeof body.error === "string" &&
+        typeof body.message === "string"
+      ) {
+        detail = `${body.error}: ${body.message}`;
+      }
+    } catch {
+      // Body wasn't JSON; keep the status-based detail.
+    }
+    throw new Error(`MathRead backend rejected capture: ${detail}`);
+  }
   return parseCaptureResult(await response.json());
 }
 
 export async function rememberPdfLinkOrigin(
   storage: ExtensionLocalStorage,
-  request: CaptureUrlRequest,
+  request: CaptureRequest,
 ): Promise<void> {
   const values = await storage.get([pdfLinkOriginsStorageKey]);
   const origins = parsePdfLinkOrigins(values[pdfLinkOriginsStorageKey]);
-  origins[request.pdf_url] = request.title_hint === undefined
-    ? { source_url: request.source_url }
-    : { source_url: request.source_url, title_hint: request.title_hint };
+  origins[request.pdf_url] =
+    request.title_hint === undefined
+      ? { source_url: request.source_url }
+      : { source_url: request.source_url, title_hint: request.title_hint };
   await storage.set({ [pdfLinkOriginsStorageKey]: origins });
 }
 
@@ -167,7 +188,7 @@ export function backendOriginFromManifest(manifest: {
     hostPermissions !== undefined,
     "extension manifest must declare localhost backend host_permissions",
   );
-  const backendPermission = hostPermissions.find(permission =>
+  const backendPermission = hostPermissions.find((permission) =>
     permission.startsWith("http://127.0.0.1:"),
   );
   invariant(
@@ -181,16 +202,16 @@ export function backendOriginFromManifest(manifest: {
   return backendPermission.slice(0, -2);
 }
 
-export function captureUrlEndpointFromManifest(manifest: {
+export function captureBytesEndpointFromManifest(manifest: {
   host_permissions?: string[];
 }): string {
-  return `${backendOriginFromManifest(manifest)}/capture-url`;
+  return `${backendOriginFromManifest(manifest)}/capture-bytes`;
 }
 
 /**
  * A PDF served from the MathRead backend's own /pdf/{key} endpoint (the shell's library
- * reopen path) is by definition already captured — capturing it again would have the
- * backend fetch its own capture route as if it were a fresh external source.
+ * reopen path) is by definition already captured — capturing it again would store the
+ * backend's own copy as a new item.
  */
 export function isBackendServedPdfUrl(
   pdfUrl: string,
@@ -202,7 +223,10 @@ export function isBackendServedPdfUrl(
 /** The library key is the stored PDF's filename (see src/mathread/library.py). */
 export function libraryKeyFromStoredPath(storedPath: string): string {
   const key = storedPath.split("/").pop();
-  invariant(key !== undefined && key.length > 0, `MathRead stored_path has no filename: ${storedPath}`);
+  invariant(
+    key !== undefined && key.length > 0,
+    `MathRead stored_path has no filename: ${storedPath}`,
+  );
   return key;
 }
 
@@ -216,13 +240,18 @@ export function libraryKeyFromBackendPdfUrl(pdfUrl: string): string {
   return decodeURIComponent(lastSegment);
 }
 
-export function parseRuntimeCaptureResponse(value: unknown): RuntimeCaptureResponse {
+export function parseRuntimeCaptureResponse(
+  value: unknown,
+): RuntimeCaptureResponse {
   invariant(isRecord(value), "MathRead capture response must be an object");
   if (value.ok === true) {
     return { ok: true, result: parseCaptureResult(value.result) };
   }
   invariant(value.ok === false, "MathRead capture response must declare ok");
-  invariant(typeof value.error === "string", "MathRead capture failure response must declare error");
+  invariant(
+    typeof value.error === "string",
+    "MathRead capture failure response must declare error",
+  );
   return { ok: false, error: value.error };
 }
 
@@ -233,16 +262,27 @@ function parsePdfLinkOrigins(value: unknown): Record<string, PdfLinkOrigin> {
   invariant(isRecord(value), "MathRead PDF link origins must be an object");
   const origins: Record<string, PdfLinkOrigin> = {};
   for (const [pdfUrl, origin] of Object.entries(value)) {
-    invariant(typeof pdfUrl === "string", "MathRead PDF link origin key must be a string");
-    invariant(isRecord(origin), `MathRead PDF link origin must be an object: ${pdfUrl}`);
-    invariant(typeof origin.source_url === "string", `MathRead PDF link origin must declare source_url: ${pdfUrl}`);
     invariant(
-      typeof origin.title_hint === "undefined" || typeof origin.title_hint === "string",
+      typeof pdfUrl === "string",
+      "MathRead PDF link origin key must be a string",
+    );
+    invariant(
+      isRecord(origin),
+      `MathRead PDF link origin must be an object: ${pdfUrl}`,
+    );
+    invariant(
+      typeof origin.source_url === "string",
+      `MathRead PDF link origin must declare source_url: ${pdfUrl}`,
+    );
+    invariant(
+      typeof origin.title_hint === "undefined" ||
+        typeof origin.title_hint === "string",
       `MathRead PDF link origin title_hint must be a string when present: ${pdfUrl}`,
     );
-    origins[pdfUrl] = origin.title_hint === undefined
-      ? { source_url: origin.source_url }
-      : { source_url: origin.source_url, title_hint: origin.title_hint };
+    origins[pdfUrl] =
+      origin.title_hint === undefined
+        ? { source_url: origin.source_url }
+        : { source_url: origin.source_url, title_hint: origin.title_hint };
   }
   return origins;
 }
@@ -254,7 +294,10 @@ function invariant(condition: unknown, message: string): asserts condition {
 }
 
 function parseCaptureResult(value: unknown): CaptureResult {
-  invariant(isRecord(value), "MathRead backend capture response must be an object");
+  invariant(
+    isRecord(value),
+    "MathRead backend capture response must be an object",
+  );
   const capture = value.capture;
   invariant(
     capture === "capture-url" || capture === "capture-bytes",

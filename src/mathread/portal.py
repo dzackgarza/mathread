@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Response, UploadFile
+from fastapi import APIRouter, HTTPException, Response, UploadFile
 
 from mathread import library
 from mathread.models import (
@@ -21,7 +21,7 @@ from mathread.models import (
 
 def create_portal_router(
     root: Path,
-    open_root_command: library.OpenRootCommand = library.DEFAULT_OPEN_ROOT_COMMAND,
+    open_root_command: library.OpenRootCommand,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -31,12 +31,21 @@ def create_portal_router(
 
     @router.get("/notes/{key}", response_model=NoteContent)
     def get_note(key: str) -> NoteContent:
-        return NoteContent(key=key, text=library.read_note(root, key))
+        text, version = library.read_note(root, key)
+        return NoteContent(key=key, text=text, version=version)
 
     @router.put("/notes/{key}", response_model=NoteContent)
     def put_note(key: str, note: NoteContent) -> NoteContent:
-        library.write_note(root, key, note.text)
-        return NoteContent(key=key, text=note.text)
+        try:
+            new_version = library.write_note(root, key, note.text, note.version)
+            return NoteContent(key=key, text=note.text, version=new_version)
+        except library.NoteVersionConflictError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
+
+    @router.put("/notes/{key}/overwrite", response_model=NoteContent)
+    def overwrite_note(key: str, note: NoteContent) -> NoteContent:
+        new_version = library.overwrite_note(root, key, note.text)
+        return NoteContent(key=key, text=note.text, version=new_version)
 
     @router.post("/notes/{key}/image", response_model=NoteImageResult)
     async def post_note_image(key: str, image: UploadFile) -> NoteImageResult:

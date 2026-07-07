@@ -2,7 +2,7 @@
 // Highlights/comments live in the markdown notes sidecar as pandoc fenced divs
 // (see annotations.ts) - the note doc is the single durable annotation store.
 import { getDocument, GlobalWorkerOptions, TextLayer } from "./vendor/pdfjs/pdf.min.mjs";
-import { parseAnnotations, previewMarkdown, removeAnnotation, upsertAnnotation } from "./annotations.js";
+import { parseAnnotationDocument, previewMarkdown, removeAnnotation, upsertAnnotation } from "./annotations.js";
 import {
   DOMPurify,
   backendHealth,
@@ -13,6 +13,7 @@ import {
   marked,
   noteAssetUrl,
   openLibraryRoot,
+  overwriteNote,
   pdfUrl as backendPdfUrl,
   postNoteImage,
   postReadEvent,
@@ -103,6 +104,7 @@ let noteState = { kind: "loading" };
 // known when the pages first draw (see loadNoteText). The editor, once mounted,
 // becomes the live source; until then this holds the loaded text.
 let noteText = null;
+let noteVersion = "";
 let noteSaveTimer = null;
 let notesInitialized = false;
 let notesPreviewVisible = false;
@@ -807,8 +809,10 @@ async function initNotes() {
     return;
   }
 
-  notesErrorEl.hidden = true;
-  noteState = { kind: "clean" };
+  if (noteState.kind !== "syntax-error") {
+    notesErrorEl.hidden = true;
+    noteState = { kind: "clean" };
+  }
   renderNoteStatus();
   renderNotesTabMarker(noteText.trim().length > 0);
   aiView = new EditorView({
@@ -825,9 +829,8 @@ async function initNotes() {
         placeholder("Write notes... (saved to the PDF's markdown sidecar)"),
         EditorView.lineWrapping,
         EditorView.updateListener.of(update => {
-          if (update.docChanged) {
+          if (update.docChanged && refreshAnnotations()) {
             onNoteEdited();
-            refreshAnnotations();
           }
         }),
       ],
@@ -842,19 +845,34 @@ async function initNotes() {
 // (error surfaced to the notes panel); highlights then stay empty.
 async function loadNoteText() {
   try {
-    noteText = await getNote(libraryKey);
+    const res = await getNote(libraryKey);
+    noteText = res.text;
+    if (res.version) {
+      noteVersion = res.version;
+    } else {
+      noteVersion = "";
+    }
   } catch (error) {
     noteState = { kind: "error", message: String(error) };
     renderNoteStatus();
     showNotesError(`Could not load notes from the MathRead backend:\n${error}`);
     return false;
   }
-  highlights = parseAnnotations(noteText);
+  const parsed = parseAnnotationDocument(noteText);
+  if (parsed.error !== null) {
+    setAnnotationSyntaxError(parsed.error);
+    highlights = [];
+    return true;
+  }
+  highlights = parsed.annotations;
   noteState = { kind: "clean" };
   return true;
 }
 
 function onNoteEdited() {
+  if (noteState.kind === "conflict") {
+    return;
+  }
   noteState = { kind: "dirty" };
   renderNoteStatus();
   renderNotesTabMarker(aiView.state.doc.toString().trim().length > 0);
@@ -874,8 +892,94 @@ function renderNotesTabMarker(hasNote) {
   }
 }
 
+function showNotesConflict(pendingText) {
+  notesErrorEl.innerHTML = "";
+
+  const title = document.createElement("div");
+  title.className = "notes-error-title";
+  title.style.fontWeight = "bold";
+  title.style.marginBottom = "8px";
+  title.textContent = "Conflict: Note modified elsewhere";
+  notesErrorEl.append(title);
+
+  const desc = document.createElement("p");
+  desc.style.margin = "0 0 8px 0";
+  desc.textContent = "This note has been modified on disk or in another tab. Choose how to resolve this conflict:";
+  notesErrorEl.append(desc);
+
+  const btnContainer = document.createElement("div");
+  btnContainer.style.display = "flex";
+  btnContainer.style.gap = "8px";
+
+  const overwriteBtn = document.createElement("button");
+  overwriteBtn.className = "notes-conflict-btn";
+  overwriteBtn.textContent = "Overwrite Disk";
+  overwriteBtn.style.padding = "4px 8px";
+  overwriteBtn.onclick = async () => {
+    notesErrorEl.hidden = true;
+    notesErrorEl.innerHTML = "";
+    noteState = { kind: "saving" };
+    renderNoteStatus();
+    try {
+      const res = await overwriteNote(libraryKey, pendingText);
+      if (res.version) {
+        noteVersion = res.version;
+      } else {
+        noteVersion = "";
+      }
+      noteState = aiView.state.doc.toString() === pendingText ? { kind: "clean" } : { kind: "dirty" };
+      if (noteState.kind === "dirty") {
+        noteSaveTimer = setTimeout(() => {
+          void saveNote();
+        }, settings.autosaveMs);
+      }
+    } catch (error) {
+      if (String(error).includes("409")) {
+        showNotesConflict(pendingText);
+      } else {
+        noteState = { kind: "error", message: String(error) };
+      }
+    }
+    renderNoteStatus();
+  };
+
+  const loadBtn = document.createElement("button");
+  loadBtn.className = "notes-conflict-btn";
+  loadBtn.textContent = "Load from Disk";
+  loadBtn.style.padding = "4px 8px";
+  loadBtn.onclick = async () => {
+    notesErrorEl.hidden = true;
+    notesErrorEl.innerHTML = "";
+    noteState = { kind: "loading" };
+    renderNoteStatus();
+    try {
+      const res = await getNote(libraryKey);
+      noteText = res.text;
+      if (res.version) {
+        noteVersion = res.version;
+      } else {
+        noteVersion = "";
+      }
+      aiView.dispatch({
+        changes: { from: 0, to: aiView.state.doc.length, insert: noteText },
+      });
+      if (refreshAnnotations()) {
+        noteState = { kind: "clean" };
+      }
+    } catch (error) {
+      noteState = { kind: "error", message: String(error) };
+    }
+    renderNoteStatus();
+  };
+
+  btnContainer.append(overwriteBtn);
+  btnContainer.append(loadBtn);
+  notesErrorEl.append(btnContainer);
+  notesErrorEl.hidden = false;
+}
+
 async function saveNote() {
-  if (!aiView || !libraryKey || noteState.kind === "saving") {
+  if (!aiView || !libraryKey || noteState.kind === "saving" || noteState.kind === "syntax-error") {
     return;
   }
   clearTimeout(noteSaveTimer);
@@ -883,7 +987,12 @@ async function saveNote() {
   renderNoteStatus();
   const text = aiView.state.doc.toString();
   try {
-    await putNote(libraryKey, text);
+    const res = await putNote(libraryKey, text, noteVersion);
+    if (res.version) {
+      noteVersion = res.version;
+    } else {
+      noteVersion = "";
+    }
     if (pendingLegacyMigrationStorageKey !== null) {
       localStorage.removeItem(pendingLegacyMigrationStorageKey);
       pendingLegacyMigrationStorageKey = null;
@@ -896,7 +1005,12 @@ async function saveNote() {
       }, settings.autosaveMs);
     }
   } catch (error) {
-    noteState = { kind: "error", message: String(error) };
+    if (String(error).includes("409")) {
+      noteState = { kind: "conflict" };
+      showNotesConflict(text);
+    } else {
+      noteState = { kind: "error", message: String(error) };
+    }
   }
   renderNoteStatus();
 }
@@ -907,12 +1021,14 @@ function renderNoteStatus() {
     clean: () => "Saved",
     dirty: () => "Unsaved changes",
     saving: () => "Saving...",
+    conflict: () => "Save failed: conflict",
+    "syntax-error": () => "Fix annotation syntax",
     error: () => `Save failed: ${noteState.message}`,
   }[noteState.kind]();
   notesStatusEl.textContent = label;
   notesStatusEl.title = label;
-  notesStatusEl.classList.toggle("error", noteState.kind === "error");
-  notesSaveBtn.disabled = noteState.kind === "loading" || noteState.kind === "saving";
+  notesStatusEl.classList.toggle("error", noteState.kind === "error" || noteState.kind === "conflict" || noteState.kind === "syntax-error");
+  notesSaveBtn.disabled = noteState.kind === "loading" || noteState.kind === "saving" || noteState.kind === "conflict" || noteState.kind === "syntax-error";
 }
 
 function setNotesPreview(visible) {
@@ -930,13 +1046,19 @@ function setNotesPreview(visible) {
 // output (same policy as the citation renderer: never inject live markup).
 function renderNotesPreview() {
   const text = aiView ? aiView.state.doc.toString() : "";
+  const parsed = parseAnnotationDocument(text);
+  if (parsed.error !== null) {
+    setAnnotationSyntaxError(parsed.error);
+    notesPreviewEl.replaceChildren();
+    return;
+  }
   // Annotation fenced divs are rewritten to plain markdown so the preview shows
   // the quoted passage + comment instead of raw ::: fences.
   const rendered = marked.parse(previewMarkdown(text), { gfm: true, async: false });
   const fragment = DOMPurify.sanitize(rendered, { RETURN_DOM_FRAGMENT: true });
   notesPreviewEl.replaceChildren(fragment);
-  // Clip images are note-relative ("<stem>.assets/clip-01.png") so the sidecar renders in
-  // any markdown tool on disk; in the reader they resolve through the backend asset route.
+  // Clip images are note-relative ("../clips/<paper-key>/clip-01.png"); in the
+  // reader they resolve through the backend asset route.
   for (const img of notesPreviewEl.querySelectorAll("img")) {
     const src = img.getAttribute("src");
     if (src !== null && !/^[a-z][a-z0-9+.-]*:/i.test(src)) {
@@ -954,7 +1076,26 @@ function showNotesError(message) {
   notesErrorEl.hidden = false;
 }
 
+function setAnnotationSyntaxError(error) {
+  noteState = { kind: "syntax-error", message: String(error) };
+  showNotesError(`Fix annotation syntax in the Markdown note:\n${error.message}`);
+  renderNoteStatus();
+}
+
 // ---------- Library: backend-backed list / open / trash ----------
+function localReaderUrl(key) {
+  const url = new URL(chrome.runtime.getURL("reader/reader.html"));
+  url.searchParams.set("key", key);
+  return url;
+}
+
+function libraryEntryOpenHref(entry) {
+  if (entry.pdf_url !== undefined) {
+    return entry.pdf_url;
+  }
+  return localReaderUrl(entry.key).href;
+}
+
 async function refreshLibrary() {
   try {
     const [backendStatus, entries] = await Promise.all([getBackendStatus(), getLibrary()]);
@@ -1002,10 +1143,7 @@ function renderLibrary(backendStatus, entries) {
       if (entry.key === libraryKey) {
         return;
       }
-      // The library is URL-first: opening an item navigates back to its source URL, and
-      // the interception path (reader-swap.ts) captures/recognizes it from there. The
-      // locally stored copy is provenance backup only, never the serving source.
-      window.top.location.href = entry.pdf_url;
+      window.top.location.href = libraryEntryOpenHref(entry);
     });
 
     const trash = document.createElement("button");
@@ -1357,10 +1495,16 @@ async function populateScholarMenu() {
   }
 }
 
-// ---------- View links (URL-first: source URL + mrpage/mrzoom restore the view) ----------
+// ---------- View links ----------
 function currentViewUrl() {
   if (libraryEntry === null) {
     return null;
+  }
+  if (libraryEntry.pdf_url === undefined) {
+    const localUrl = localReaderUrl(libraryEntry.key);
+    localUrl.searchParams.set("page", String(currentPageNumber));
+    localUrl.searchParams.set("zoom", scale.toFixed(2));
+    return localUrl.href;
   }
   const url = new URL(libraryEntry.pdf_url);
   url.searchParams.set("mrpage", String(currentPageNumber));
@@ -1616,6 +1760,12 @@ function mutateNote(transform) {
     return;
   }
   const doc = aiView.state.doc.toString();
+  const parsed = parseAnnotationDocument(doc);
+  if (parsed.error !== null) {
+    setAnnotationSyntaxError(parsed.error);
+    flashTitle("Fix annotation syntax before changing annotations");
+    return;
+  }
   const next = transform(doc);
   if (next !== doc) {
     aiView.dispatch({ changes: { from: 0, to: doc.length, insert: next } });
@@ -1625,9 +1775,22 @@ function mutateNote(transform) {
 // Re-derive highlights from the note doc (the only writer of `highlights`), so
 // hand-edited annotation blocks re-render on the fly like UI-created ones.
 function refreshAnnotations() {
-  highlights = aiView ? parseAnnotations(aiView.state.doc.toString()) : [];
+  const parsed = parseAnnotationDocument(aiView ? aiView.state.doc.toString() : "");
+  if (parsed.error !== null) {
+    highlights = [];
+    setAnnotationSyntaxError(parsed.error);
+    drawStoredHighlights();
+    renderSidebarList();
+    return false;
+  }
+  if (noteState.kind === "syntax-error") {
+    notesErrorEl.hidden = true;
+    notesErrorEl.textContent = "";
+  }
+  highlights = parsed.annotations;
   drawStoredHighlights();
   renderSidebarList();
+  return true;
 }
 
 // One-time import of the pre-sidecar localStorage highlight store.
