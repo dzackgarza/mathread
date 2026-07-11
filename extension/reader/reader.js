@@ -1,7 +1,13 @@
-// ponytail: all pages render upfront, one full re-render per zoom/rotate step.
 // Highlights/comments live in the markdown notes sidecar as pandoc fenced divs
 // (see annotations.ts) - the note doc is the single durable annotation store.
-import { getDocument, GlobalWorkerOptions, TextLayer } from "./vendor/pdfjs/pdf.min.mjs";
+import { getDocument, GlobalWorkerOptions } from "./vendor/pdfjs/pdf.min.mjs";
+import {
+  EventBus,
+  LinkTarget,
+  PDFFindController,
+  PDFLinkService,
+  PDFViewer,
+} from "./vendor/pdfjs/pdf_viewer.mjs";
 import { parseAnnotationDocument, previewMarkdown, removeAnnotation, upsertAnnotation } from "./annotations.js";
 import {
   DOMPurify,
@@ -57,6 +63,7 @@ function setStatusMessage(target, className, message) {
 }
 
 const viewerEl = $("viewer");
+const pdfViewerEl = $("pdf-viewer");
 const sidebarEl = $("sidebar");
 const sidebarListEl = $("highlight-list");
 const navEl = $("nav");
@@ -92,7 +99,7 @@ const clipOverlayEl = $("clip-overlay");
 const clipRectEl = $("clip-rect");
 
 let highlights = []; // parsed from the note doc; refreshAnnotations() is the only writer
-let scale = Number.isFinite(initialZoom) && initialZoom > 0 ? initialZoom : 1.25;
+let scale = Number.isFinite(initialZoom) && initialZoom > 0 ? initialZoom : 1;
 let rotation = 0;
 let pdfDoc = null;
 let pdfData = null;
@@ -114,15 +121,32 @@ const settingsDefaults = { autosaveMs: 800, fitWidthOnOpen: false, lineNumbers: 
 let settings = settingsDefaults;
 let pageContainers = [];
 let currentPageNumber = 1;
-let intersectionObserver = null;
-let renderGeneration = 0;
 let paperTitle = "";
 let citeLoaded = false;
 let aiView = null;
 let thumbsBuilt = false;
-let searchMatches = [];
-let searchIndex = -1;
 let pendingLegacyMigrationStorageKey = null;
+
+const eventBus = new EventBus();
+const linkService = new PDFLinkService({
+  eventBus,
+  externalLinkTarget: LinkTarget.BLANK,
+});
+const findController = new PDFFindController({ eventBus, linkService });
+const pdfViewer = new PDFViewer({
+  container: viewerEl,
+  viewer: pdfViewerEl,
+  eventBus,
+  linkService,
+  findController,
+});
+linkService.setViewer(pdfViewer);
+const viewerResizeObserver = new ResizeObserver(() => {
+  if (pdfViewer.currentScaleValue === "page-width") {
+    pdfViewer.currentScaleValue = "page-width";
+  }
+});
+viewerResizeObserver.observe(viewerEl);
 
 const documentControlIds = [
   "prev-page",
@@ -159,17 +183,16 @@ async function loadSettings() {
 $("prev-page").addEventListener("click", () => jumpPage(-1));
 $("next-page").addEventListener("click", () => jumpPage(1));
 $("zoom-in").addEventListener("click", () => {
-  void rerender(scale + 0.15);
+  setScale(scale * 1.1);
 });
 $("zoom-out").addEventListener("click", () => {
-  void rerender(Math.max(0.4, scale - 0.15));
+  setScale(scale / 1.1);
 });
 $("fit-width").addEventListener("click", () => {
-  void fitWidth();
+  fitWidth();
 });
 $("rotate").addEventListener("click", () => {
-  rotation = (rotation + 90) % 360;
-  void rerender(scale);
+  pdfViewer.pagesRotation = (pdfViewer.pagesRotation + 90) % 360;
 });
 $("toggle-sidebar").addEventListener("click", () => toggleSidebar());
 $("close-sidebar").addEventListener("click", () => toggleSidebar(false));
@@ -322,7 +345,12 @@ async function main() {
   }
   pdfData = await response.arrayBuffer();
   // getDocument transfers the ArrayBuffer, so hand it a copy and keep pdfData for download.
-  pdfDoc = await getDocument({ data: pdfData.slice(0) }).promise;
+  pdfDoc = await getDocument({
+    data: pdfData.slice(0),
+    cMapUrl: chrome.runtime.getURL("reader/vendor/pdfjs/cmaps/"),
+    standardFontDataUrl: chrome.runtime.getURL("reader/vendor/pdfjs/standard_fonts/"),
+    wasmUrl: chrome.runtime.getURL("reader/vendor/pdfjs/wasm/"),
+  }).promise;
   pageTotalEl.textContent = String(pdfDoc.numPages);
   setDocumentControlsEnabled(true);
   setDocTitle();
@@ -333,13 +361,7 @@ async function main() {
   renderOutline().catch(error => {
     throw readerError("MATHREAD-READER-OUTLINE-ERROR", error);
   });
-  await renderAllPages();
-  watchCurrentPage();
-  if (Number.isFinite(initialPage) && initialPage >= 1) {
-    scrollToPage(initialPage);
-  } else if (settings.fitWidthOnOpen && !(Number.isFinite(initialZoom) && initialZoom > 0)) {
-    void fitWidth();
-  }
+  await mountPdfDocument();
   pageInputEl.value = String(currentPageNumber);
   void initNotes();
   postReadEvent(libraryKey, null).catch(error => {
@@ -393,10 +415,7 @@ async function buildOutlineList(items) {
         a.classList.remove("current");
       }
       link.classList.add("current");
-      const pageNumber = await outlineDestPageNumber(item.dest);
-      if (pageNumber !== undefined) {
-        scrollToPage(pageNumber);
-      }
+      await linkService.goToDestination(item.dest);
     });
     li.append(link);
     if (item.items && item.items.length > 0) {
@@ -407,97 +426,80 @@ async function buildOutlineList(items) {
   return list;
 }
 
-async function outlineDestPageNumber(dest) {
-  if (!dest) {
-    return undefined;
-  }
-  const explicitDest = typeof dest === "string" ? await pdfDoc.getDestination(dest) : dest;
-  if (!explicitDest || !explicitDest[0]) {
-    return undefined;
-  }
-  const pageIndex = await pdfDoc.getPageIndex(explicitDest[0]);
-  return pageIndex + 1;
-}
-
 // ---------- Page rendering ----------
-async function renderAllPages() {
-  const generation = ++renderGeneration;
-  viewerEl.innerHTML = "";
-  pageContainers = [];
-  for (let pageNumber = 1; pageNumber <= pdfDoc.numPages; pageNumber++) {
-    const page = await pdfDoc.getPage(pageNumber);
-    const viewport = page.getViewport({ scale, rotation });
-
-    const pageDiv = document.createElement("div");
-    pageDiv.className = "page";
-    pageDiv.style.width = `${viewport.width}px`;
-    pageDiv.style.height = `${viewport.height}px`;
-    pageDiv.dataset.pageNumber = String(pageNumber);
-
-    const canvas = document.createElement("canvas");
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-    await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
-    if (generation !== renderGeneration) {
-      return generation;
-    }
-
-    const textLayerDiv = document.createElement("div");
-    textLayerDiv.className = "textLayer";
-    const textLayer = new TextLayer({
-      textContentSource: await page.streamTextContent(),
-      container: textLayerDiv,
-      viewport,
-    });
-    await textLayer.render();
-    if (generation !== renderGeneration) {
-      return generation;
-    }
-
-    const highlightLayerDiv = document.createElement("div");
-    highlightLayerDiv.className = "highlightLayer";
-    const searchLayerDiv = document.createElement("div");
-    searchLayerDiv.className = "highlightLayer";
-
-    pageDiv.append(canvas, textLayerDiv, highlightLayerDiv, searchLayerDiv);
-    viewerEl.append(pageDiv);
-
-    const entry = { pageDiv, pageNumber, highlightLayerDiv, searchLayerDiv, textLayerDiv, width: viewport.width, height: viewport.height };
-    pageContainers.push(entry);
-    textLayerDiv.addEventListener("mouseup", () => handleSelection(entry));
+async function mountPdfDocument() {
+  const pagesInitialized = new Promise(resolve => {
+    eventBus.on("pagesinit", resolve, { once: true });
+  });
+  linkService.setDocument(pdfDoc, pdfUrl ?? backendPdfUrl(libraryKey));
+  pdfViewer.setDocument(pdfDoc);
+  await pagesInitialized;
+  syncPageContainers();
+  pdfViewer.currentScaleValue = settings.fitWidthOnOpen && !Number.isFinite(initialZoom)
+    ? "page-width"
+    : String(scale);
+  if (Number.isFinite(initialPage) && initialPage >= 1) {
+    scrollToPage(initialPage);
   }
   updateZoomLabel();
   drawStoredHighlights();
-  if (searchInputEl.value.trim()) {
-    runSearch(searchInputEl.value);
-  }
-  return generation;
 }
 
-async function rerender(newScale) {
-  scale = newScale;
-  const targetPageNumber = currentPageNumber;
-  const generation = await renderAllPages();
-  if (generation !== renderGeneration) {
-    return;
-  }
-  watchCurrentPage();
-  scrollToPage(targetPageNumber);
+function syncPageContainers() {
+  pageContainers = Array.from({ length: pdfViewer.pagesCount }, (_, index) => {
+    const pageView = pdfViewer.getPageView(index);
+    const pageDiv = pageView.div;
+    let highlightLayerDiv = pageDiv.querySelector(":scope > .highlightLayer");
+    if (highlightLayerDiv === null) {
+      highlightLayerDiv = document.createElement("div");
+      highlightLayerDiv.className = "highlightLayer";
+      pageDiv.append(highlightLayerDiv);
+      pageDiv.addEventListener("mouseup", () => handleSelection(pageContainers[index]));
+    }
+    return {
+      pageDiv,
+      pageNumber: index + 1,
+      highlightLayerDiv,
+      get width() { return pageDiv.clientWidth; },
+      get height() { return pageDiv.clientHeight; },
+    };
+  });
 }
 
-async function fitWidth() {
-  if (pdfDoc === null) {
-    return;
+function setScale(newScale) {
+  pdfViewer.currentScaleValue = String(Math.min(10, Math.max(0.1, newScale)));
+}
+
+function fitWidth() {
+  if (pdfDoc !== null) {
+    pdfViewer.currentScaleValue = "page-width";
   }
-  const page = await pdfDoc.getPage(currentPageNumber);
-  const base = page.getViewport({ scale: 1, rotation });
-  const available = viewerEl.clientWidth - 40;
-  await rerender(Math.max(0.4, available / base.width));
 }
 
 function updateZoomLabel() {
-  zoomLevelEl.textContent = `${Math.round(scale * 80)}%`;
+  zoomLevelEl.textContent = `${Math.round(scale * 100)}%`;
 }
+
+eventBus.on("pagechanging", ({ pageNumber }) => {
+  currentPageNumber = pageNumber;
+  pageInputEl.value = String(pageNumber);
+  scheduleReadEvent();
+});
+eventBus.on("scalechanging", ({ scale: nextScale }) => {
+  scale = nextScale;
+  updateZoomLabel();
+  drawStoredHighlights();
+});
+eventBus.on("rotationchanging", ({ pagesRotation }) => {
+  rotation = pagesRotation;
+  thumbsBuilt = false;
+  pagesListEl.replaceChildren();
+  drawStoredHighlights();
+});
+eventBus.on("pagerendered", () => {
+  syncPageContainers();
+  drawStoredHighlights();
+});
 
 // ---------- Selection + highlights ----------
 function handleSelection(entry) {
@@ -692,78 +694,44 @@ function toggleSearch(force) {
 }
 
 function clearSearch() {
-  for (const entry of pageContainers) {
-    entry.searchLayerDiv.innerHTML = "";
-  }
-  searchMatches = [];
-  searchIndex = -1;
+  eventBus.dispatch("findbarclose", { source: searchInputEl });
   searchCountEl.textContent = "";
 }
 
 function runSearch(query) {
-  clearSearch();
-  const needle = query.trim().toLowerCase();
-  if (needle.length === 0) {
+  if (query.trim().length === 0) {
+    clearSearch();
     return;
   }
-  for (const entry of pageContainers) {
-    const spans = entry.textLayerDiv.querySelectorAll("span");
-    const pageRect = entry.pageDiv.getBoundingClientRect();
-    for (const span of spans) {
-      const node = span.firstChild;
-      if (!node || node.nodeType !== Node.TEXT_NODE) {
-        continue;
-      }
-      const hay = node.textContent.toLowerCase();
-      let from = hay.indexOf(needle);
-      while (from !== -1) {
-        const range = document.createRange();
-        range.setStart(node, from);
-        range.setEnd(node, from + needle.length);
-        const hitEls = [];
-        for (const r of range.getClientRects()) {
-          const hit = document.createElement("div");
-          hit.className = "search-hit";
-          hit.style.left = `${r.left - pageRect.left}px`;
-          hit.style.top = `${r.top - pageRect.top}px`;
-          hit.style.width = `${r.width}px`;
-          hit.style.height = `${r.height}px`;
-          entry.searchLayerDiv.append(hit);
-          hitEls.push(hit);
-        }
-        searchMatches.push({ entry, hitEls });
-        from = hay.indexOf(needle, from + needle.length);
-      }
-    }
-  }
-  if (searchMatches.length > 0) {
-    setSearchIndex(0);
-  } else {
-    searchCountEl.textContent = "0 results";
-  }
+  dispatchFind("", false);
 }
 
 function stepSearch(delta) {
-  if (searchMatches.length === 0) {
+  if (searchInputEl.value.trim().length === 0) {
     return;
   }
-  setSearchIndex((searchIndex + delta + searchMatches.length) % searchMatches.length);
-  const match = searchMatches[searchIndex];
-  match.hitEls[0]?.scrollIntoView({ behavior: "smooth", block: "center" });
+  dispatchFind("again", delta < 0);
 }
 
-function setSearchIndex(index) {
-  for (const match of searchMatches) {
-    for (const el of match.hitEls) {
-      el.classList.remove("current");
-    }
-  }
-  searchIndex = index;
-  for (const el of searchMatches[index].hitEls) {
-    el.classList.add("current");
-  }
-  searchCountEl.textContent = `${index + 1} / ${searchMatches.length}`;
+function dispatchFind(type, findPrevious) {
+  eventBus.dispatch("find", {
+    source: searchInputEl,
+    type,
+    query: searchInputEl.value,
+    phraseSearch: true,
+    caseSensitive: false,
+    entireWord: false,
+    highlightAll: true,
+    findPrevious,
+    matchDiacritics: false,
+  });
 }
+
+eventBus.on("updatefindmatchescount", ({ matchesCount }) => {
+  searchCountEl.textContent = matchesCount.total === 0
+    ? "0 results"
+    : `${matchesCount.current} / ${matchesCount.total}`;
+});
 
 // ---------- Tabs / AI (key points) editor / thumbnails ----------
 function activateTab(name) {
@@ -1605,6 +1573,9 @@ async function captureClip(region) {
 
   for (const entry of pageContainers) {
     const canvas = entry.pageDiv.querySelector("canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) {
+      continue;
+    }
     const rect = canvas.getBoundingClientRect();
     const overlapLeft = Math.max(region.left, rect.left);
     const overlapTop = Math.max(region.top, rect.top);
@@ -1666,52 +1637,70 @@ function toggleSidebar(force) {
 }
 
 function scrollToPage(target) {
-  pageContainers.find(p => p.pageNumber === target)?.pageDiv.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (!Number.isInteger(target) || pdfViewer.pagesCount === 0) {
+    return;
+  }
+  const pageNumber = Math.min(pdfViewer.pagesCount, Math.max(1, target));
+  pdfViewer.currentPageNumber = pageNumber;
+  pdfViewer.scrollPageIntoView({ pageNumber });
 }
 
 function jumpPage(delta) {
-  const index = pageContainers.findIndex(p => p.pageNumber === currentPageNumber);
-  const next = pageContainers[Math.min(pageContainers.length - 1, Math.max(0, index + delta))];
-  next?.pageDiv.scrollIntoView({ behavior: "smooth", block: "start" });
+  scrollToPage(currentPageNumber + delta);
 }
 
-function watchCurrentPage() {
-  intersectionObserver?.disconnect();
-  intersectionObserver = new IntersectionObserver(
-    () => {
-      const visiblePage = currentVisiblePage();
-      if (visiblePage !== null) {
-        currentPageNumber = visiblePage;
-        pageInputEl.value = String(currentPageNumber);
-        scheduleReadEvent();
-      }
-    },
-    { root: viewerEl, threshold: [0.5] },
-  );
-  for (const entry of pageContainers) {
-    intersectionObserver.observe(entry.pageDiv);
-  }
+function isEditableTarget(target) {
+  return target instanceof HTMLElement
+    && (target.isContentEditable || target.closest("input, textarea, [contenteditable='true'], .cm-editor") !== null);
 }
 
-function currentVisiblePage() {
-  const viewerRect = viewerEl.getBoundingClientRect();
-  const visiblePages = pageContainers
-    .map(entry => {
-      const rect = entry.pageDiv.getBoundingClientRect();
-      const visibleHeight = Math.min(rect.bottom, viewerRect.bottom) - Math.max(rect.top, viewerRect.top);
-      return {
-        pageNumber: entry.pageNumber,
-        visibleHeight,
-        topDistance: Math.abs(rect.top - viewerRect.top),
-      };
-    })
-    .filter(page => page.visibleHeight > 0)
-    .sort((a, b) => a.topDistance - b.topDistance || a.pageNumber - b.pageNumber);
-  if (visiblePages.length === 0) {
-    return null;
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && !clipOverlayEl.hidden) {
+    endClip();
+    return;
   }
-  return visiblePages[0].pageNumber;
-}
+  if (event.defaultPrevented || isEditableTarget(event.target) || pdfDoc === null) {
+    return;
+  }
+  if (event.ctrlKey || event.metaKey) {
+    if (event.key === "=" || event.key === "+") {
+      setScale(scale * 1.1);
+    } else if (event.key === "-") {
+      setScale(scale / 1.1);
+    } else if (event.key === "0") {
+      setScale(1);
+    } else if (event.key.toLowerCase() === "f") {
+      toggleSearch(true);
+    } else {
+      return;
+    }
+    event.preventDefault();
+    return;
+  }
+  const pageDelta = event.key === "PageDown" || event.key === "ArrowDown" || event.key === "ArrowRight"
+    ? 1
+    : event.key === "PageUp" || event.key === "ArrowUp" || event.key === "ArrowLeft"
+      ? -1
+      : 0;
+  if (pageDelta !== 0) {
+    jumpPage(pageDelta);
+  } else if (event.key === "Home") {
+    scrollToPage(1);
+  } else if (event.key === "End") {
+    scrollToPage(pdfViewer.pagesCount);
+  } else {
+    return;
+  }
+  event.preventDefault();
+});
+
+viewerEl.addEventListener("wheel", event => {
+  if (!(event.ctrlKey || event.metaKey) || pdfDoc === null) {
+    return;
+  }
+  event.preventDefault();
+  setScale(scale * (event.deltaY < 0 ? 1.1 : 1 / 1.1));
+}, { passive: false });
 
 function scheduleReadEvent() {
   if (!libraryKey || !pdfDoc) {

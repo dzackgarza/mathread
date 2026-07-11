@@ -131,8 +131,10 @@ function mountReader(key: string): void {
   reader.name = "mathreadReaderFrame";
   // Cross-origin iframes only get async-clipboard access when the embedder delegates it.
   reader.allow = "clipboard-write";
+  reader.tabIndex = -1;
   reader.style.cssText = "border:none; width:100%; height:100%;";
   reader.title = "MathRead reader";
+  reader.addEventListener("load", () => reader.focus());
 
   newBody.appendChild(reader);
   document.body = newBody;

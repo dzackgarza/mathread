@@ -2,7 +2,7 @@
 // capture scripts (built by `bun build` before this runs), and the reader's static assets.
 // The pdf.js worker must ship as a real file (loaded via chrome.runtime.getURL), so it is
 // copied rather than bundled.
-import { copyFileSync, mkdirSync } from "fs";
+import { copyFileSync, cpSync, mkdirSync } from "fs";
 import { join } from "path";
 
 const distExt = "dist/extension";
@@ -35,6 +35,19 @@ for (const asset of ["pdf.min.mjs", "pdf.worker.min.mjs", "LICENSE"]) {
   copyFileSync(
     join("extension", "reader", "vendor", "pdfjs", asset),
     join(distExt, "reader", "vendor", "pdfjs", asset),
+  );
+}
+for (const asset of ["pdf_viewer.mjs", "pdf_viewer.css"]) {
+  copyFileSync(
+    join("node_modules", "pdfjs-dist", "web", asset),
+    join(distExt, "reader", "vendor", "pdfjs", asset),
+  );
+}
+for (const directory of ["cmaps", "standard_fonts", "wasm"]) {
+  cpSync(
+    join("node_modules", "pdfjs-dist", directory),
+    join(distExt, "reader", "vendor", "pdfjs", directory),
+    { recursive: true },
   );
 }
 

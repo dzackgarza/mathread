@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <title>MathRead Reader</title>
+    <link rel="stylesheet" href="vendor/pdfjs/pdf_viewer.css" />
     <link rel="stylesheet" href="reader.css" />
   </head>
   <body>
@@ -28,7 +29,7 @@
         <button id="prev-page" class="tb-btn" title="Previous page">
           <svg viewBox="0 0 24 24"><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" /></svg>
         </button>
-        <input id="page-input" class="page-input" type="text" inputmode="numeric" value="–" />
+        <input id="page-input" class="page-input" type="text" inputmode="numeric" value="–" aria-label="Page number" />
         <span class="page-total">/&nbsp;<span id="page-total">–</span></span>
         <button id="next-page" class="tb-btn" title="Next page">
           <svg viewBox="0 0 24 24"><path d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" /></svg>
@@ -133,7 +134,9 @@
     -->
     <div class="body">
       <div id="viewer" class="viewer">
-        <div class="loading">Loading PDF…</div>
+        <div id="pdf-viewer" class="pdfViewer">
+          <div class="loading">Loading PDF…</div>
+        </div>
       </div>
 
       <aside id="nav" class="nav hidden">

@@ -467,9 +467,12 @@ body {
   margin-inline-start: var(--nav-visible-width);
   margin-inline-end: var(--cp-visible-width);
   overflow: auto;
-  padding: 20px 0 80px;
   background: var(--desk-bg);
   transition: margin 0.15s ease-in-out;
+}
+
+.pdfViewer {
+  padding: 20px 0 80px;
 }
 
 /* No transition while the width-adjuster is being dragged. */
@@ -515,6 +518,10 @@ body {
     0 1px 6px rgba(0, 0, 0, 0.24);
 }
 
+.pdfViewer .page {
+  margin: 0 auto 18px;
+}
+
 .page canvas {
   display: block;
 }
@@ -529,17 +536,6 @@ body {
   position: absolute;
   border-radius: 1px;
   mix-blend-mode: multiply;
-}
-
-.search-hit {
-  position: absolute;
-  background: rgba(255, 150, 50, 0.4);
-  border-radius: 1px;
-  pointer-events: none;
-}
-
-.search-hit.current {
-  background: rgba(255, 145, 0, 0.75);
 }
 
 /* ---------- Left sidebar: reproduction of Scholar Reader's .gsr-nav ----------
@@ -1447,4 +1443,25 @@ body {
   border: 2px solid #ffd166;
   background: rgba(255, 209, 102, 0.15);
   pointer-events: none;
+}
+
+@media (max-width: 767px) {
+  .toolbar {
+    padding-inline: 4px;
+  }
+
+  .tb-left,
+  .tb-right,
+  .tb-divider,
+  #prev-page,
+  #next-page,
+  #rotate,
+  #search-toggle {
+    display: none;
+  }
+
+  .tb-center {
+    width: 100%;
+    justify-content: center;
+  }
 }

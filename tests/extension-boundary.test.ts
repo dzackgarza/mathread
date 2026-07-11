@@ -206,7 +206,7 @@ test("reader Library panel lists, opens, and trashes captured items against the 
       await reader.locator('.menu-item[data-action="copy-view-link"]').click();
       const expectedViewUrl = new URL(page.url());
       expectedViewUrl.searchParams.set("mrpage", "1");
-      expectedViewUrl.searchParams.set("mrzoom", "1.25");
+      expectedViewUrl.searchParams.set("mrzoom", "1.00");
       await waitForClipboardText(page, (text) => text === expectedViewUrl.href);
 
       await reader.locator('.nav-expand-btn[data-tab="library"]').click();
@@ -646,9 +646,9 @@ test("reader disables document-only toolbar actions when no document key is open
   });
 }, 120_000);
 
-test("reader keeps exactly one coherent page set after rapid toolbar rerenders", async () => {
+test("reader delegates stable responsive navigation to the PDF.js viewer", async () => {
   await withExtensionReader(
-    async ({ backendPort, courseServer, extensionId, page }) => {
+    async ({ artifacts, backendPort, courseServer, extensionId, page }) => {
       const key = await preCapturePdfThroughBackend(
         backendPort,
         courseServer,
@@ -657,32 +657,42 @@ test("reader keeps exactly one coherent page set after rapid toolbar rerenders",
       await page.goto(readerPageUrl(extensionId, key), {
         waitUntil: "domcontentloaded",
       });
-      await waitForCanvasCount(page, 6);
-
+      const pages = page.locator("#pdf-viewer .page");
+      await pages.first().waitFor();
+      await expectElementText(page.locator("#page-total"), (text) => /^\d+$/.test(text));
       const pageTotal = Number(await page.locator("#page-total").textContent());
-      await page.evaluate(() => {
-        const sequence = [
-          "zoom-in",
-          "zoom-out",
-          "rotate",
-          "fit-width",
-          "zoom-in",
-          "rotate",
-          "zoom-out",
-          "fit-width",
-        ];
-        for (let round = 0; round < 3; round += 1) {
-          for (const id of sequence) {
-            document.getElementById(id)?.click();
-          }
-        }
-      });
+      expect(await pages.count()).toBe(pageTotal);
+      expect(await page.getByRole("textbox", { name: "Page number" }).count()).toBe(1);
 
-      const dom = await waitForStablePageDom(page);
-      expect(dom.canvasCount).toBe(pageTotal);
-      expect(dom.pageNumbers).toEqual(
-        Array.from({ length: pageTotal }, (_, index) => String(index + 1)),
-      );
+      await pages.first().evaluate((element) => {
+        element.setAttribute("data-stability-witness", "original-page-view");
+      });
+      await page.locator("#zoom-in").click();
+      await page.locator("#rotate").click();
+      await page.locator("#zoom-out").click();
+      expect(await page.locator('[data-stability-witness="original-page-view"]').count()).toBe(1);
+
+      await page.locator("body").click({ position: { x: 700, y: 300 } });
+      await page.keyboard.press("PageDown");
+      await page.keyboard.press("PageDown");
+      expect(await page.locator("#page-input").inputValue()).toBe("3");
+      await page.screenshot({ path: join(artifacts.root, "viewer-desktop.png") });
+
+      await page.locator("#fit-width").click();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await Bun.sleep(250);
+      await page.screenshot({ path: join(artifacts.root, "viewer-mobile.png") });
+      const geometry = await page.locator("#viewer").evaluate((viewer) => ({
+        clientWidth: viewer.clientWidth,
+        scrollWidth: viewer.scrollWidth,
+      }));
+      expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+      const toolbarGeometry = await page.locator(".toolbar").evaluate((toolbar) => ({
+        clientWidth: toolbar.clientWidth,
+        scrollWidth: toolbar.scrollWidth,
+      }));
+      expect(toolbarGeometry.scrollWidth).toBeLessThanOrEqual(toolbarGeometry.clientWidth);
+      expect(await page.locator("#fit-width").isVisible()).toBe(true);
     },
   );
 }, 120_000);
@@ -863,6 +873,7 @@ async function runExtensionCapture(
 }
 
 type ExtensionReaderEvidence = {
+  artifacts: CaptureArtifacts;
   backend: RunningBackend;
   backendPort: number;
   context: BrowserContext;
@@ -917,6 +928,7 @@ async function withExtensionReader(
     attachPageDiagnostics(page, artifacts, "direct-pdf-tab");
 
     await callback({
+      artifacts,
       backend,
       backendPort,
       context,
