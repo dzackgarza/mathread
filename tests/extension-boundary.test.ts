@@ -697,6 +697,120 @@ test("reader delegates stable responsive navigation to the PDF.js viewer", async
   );
 }, 120_000);
 
+test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", async () => {
+  await withExtensionReader(
+    async ({ context, extensionId, page, readingRoot }) => {
+      const inbox = join(readingRoot, "inbox");
+      mkdirSync(inbox, { recursive: true });
+      const fixtureRoot = join("tests", "fixtures", "pdfjs");
+      const fixtureNames = [
+        "hello_world_rotated.pdf",
+        "extract_link.pdf",
+        "copy_paste_ligatures.pdf",
+        "cross-span-search.pdf",
+        "bitmap-symbol-textcomposite.pdf",
+      ];
+      for (const fixtureName of fixtureNames) {
+        writeFileSync(
+          join(inbox, fixtureName),
+          readFileSync(join(fixtureRoot, fixtureName)),
+        );
+      }
+
+      const cdp = await context.newCDPSession(page);
+      await cdp.send("Emulation.setDeviceMetricsOverride", {
+        width: 900,
+        height: 900,
+        deviceScaleFactor: 2,
+        mobile: false,
+      });
+
+      await page.goto(readerPageUrl(extensionId, "hello_world_rotated.pdf"), {
+        waitUntil: "domcontentloaded",
+      });
+      const rotatedPage = page.locator('#pdf-viewer .page[data-page-number="1"]');
+      const rotatedCanvas = rotatedPage.locator("canvas");
+      await rotatedCanvas.waitFor();
+      const rotatedGeometry = await rotatedPage.evaluate((element) => ({
+        width: element.clientWidth,
+        height: element.clientHeight,
+      }));
+      expect(rotatedGeometry.width).toBeGreaterThan(rotatedGeometry.height);
+      const dprGeometry = await rotatedCanvas.evaluate((canvas) => ({
+        backingWidth: canvas.width,
+        cssWidth: canvas.getBoundingClientRect().width,
+        devicePixelRatio: window.devicePixelRatio,
+      }));
+      expect(dprGeometry.devicePixelRatio).toBe(2);
+      expect(Math.abs(dprGeometry.backingWidth - 2 * dprGeometry.cssWidth)).toBeLessThanOrEqual(2);
+
+      await page.goto(readerPageUrl(extensionId, "extract_link.pdf"), {
+        waitUntil: "domcontentloaded",
+      });
+      const internalLink = page.locator('#pdf-viewer .annotationLayer a').first();
+      await internalLink.waitFor();
+      await internalLink.click();
+      await page.waitForFunction(() => {
+        const input = document.getElementById("page-input");
+        return input instanceof HTMLInputElement && input.value === "2";
+      });
+      expect(await page.locator("#page-input").inputValue()).toBe("2");
+
+      for (const [fixtureName, query] of [
+        ["copy_paste_ligatures.pdf", "ffi"],
+        ["cross-span-search.pdf", "theorem 4.2"],
+      ] as const) {
+        await page.goto(readerPageUrl(extensionId, fixtureName), {
+          waitUntil: "domcontentloaded",
+        });
+        await page.locator("#search-toggle").click();
+        await page.locator("#search-input").fill(query);
+        await expectElementText(
+          page.locator("#search-count"),
+          (text) => /^1 \/ [1-9]\d*$/.test(text),
+        );
+      }
+
+      await page.goto(readerPageUrl(extensionId, "bitmap-symbol-textcomposite.pdf"), {
+        waitUntil: "domcontentloaded",
+      });
+      const jbig2Evidence = await canvasPixelEvidence(page, 0);
+      expect(jbig2Evidence.canvasSize).toBeGreaterThan(10_000);
+      expect(jbig2Evidence.nonWhitePixels).toBeGreaterThan(250);
+    },
+  );
+}, 120_000);
+
+test("intercepted reader owns shortcuts without escaping the Notes editor", async () => {
+  await withExtensionReader(
+    async ({ courseServer, page, readingRoot }) => {
+      await page.goto(`${courseServer.url.origin}/notes.pdf`);
+      const storedPath = await waitForStoredPdf(readingRoot);
+      const key = storedKeyFromPath(storedPath);
+      const reader = await waitForReaderFrame(page, key);
+      await reader.locator("#pdf-viewer .page canvas").first().waitFor();
+
+      const initialZoom = await reader.locator("#zoom-level").textContent();
+      await page.keyboard.press("Control+=");
+      await expectElementText(
+        reader.locator("#zoom-level"),
+        (text) => text !== initialZoom,
+      );
+      expect(await page.evaluate(() => window.devicePixelRatio)).toBe(1);
+
+      await reader.locator('.nav-expand-btn[data-tab="keypoints"]').click();
+      const editor = reader.locator("#ai-editor .cm-content");
+      await editor.waitFor();
+      await editor.click();
+      const pageBeforeEditorKeys = await reader.locator("#page-input").inputValue();
+      await page.keyboard.press("End");
+      await page.keyboard.press("Control+f");
+      expect(await reader.locator("#page-input").inputValue()).toBe(pageBeforeEditorKeys);
+      expect(await reader.locator("#search-bar").evaluate((bar) => bar.classList.contains("open"))).toBe(false);
+    },
+  );
+}, 120_000);
+
 function readerPageUrl(extensionId: string, key: string): string {
   return `chrome-extension://${extensionId}/reader/reader.html?key=${encodeURIComponent(key)}`;
 }

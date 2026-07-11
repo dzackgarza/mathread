@@ -475,6 +475,11 @@ body {
   padding: 20px 0 80px;
 }
 
+.pdfViewer,
+.pdfViewer * {
+  box-sizing: content-box;
+}
+
 /* No transition while the width-adjuster is being dragged. */
 .body.resizing .viewer {
   transition: none;
@@ -1093,38 +1098,6 @@ body {
   width: 100%;
   height: 100%;
   border-radius: 50%;
-}
-
-/*
- * .textLayer rules below are pdf.js's own companion stylesheet for the
- * TextLayer class imported from vendor/pdfjs/pdf.min.mjs (pdfjs-dist,
- * Apache-2.0), trimmed to what our reader uses. Source:
- * node_modules/pdfjs-dist/web/pdf_viewer.css
- */
-.textLayer {
-  position: absolute;
-  inset: 0;
-  text-align: initial;
-  overflow: clip;
-  opacity: 1;
-  line-height: 1;
-  text-size-adjust: none;
-  transform-origin: 0 0;
-  z-index: 1;
-}
-
-.textLayer span,
-.textLayer br {
-  color: transparent;
-  position: absolute;
-  white-space: pre;
-  cursor: text;
-  transform-origin: 0% 0%;
-  user-select: text;
-}
-
-.textLayer ::selection {
-  background: rgba(120, 170, 255, 0.4);
 }
 
 /* ---------- Key Points: sidecar notes editor + preview ---------- */
