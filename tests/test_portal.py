@@ -431,9 +431,40 @@ def test_backend_migrates_prior_nested_library_before_serving_canonical_endpoint
     inbox = root / "inbox"
     inbox.mkdir(parents=True)
     key = "legacy-paper.pdf"
-    note_text = "# Prior-layout note\n\nPreserve this argument verbatim.\n"
+    prior_note_text = """# Prior-layout note
+
+Preserve this argument verbatim: ../clips/legacy-paper/clip-01.png
+
+![Clipped region](../clips/legacy-paper/clip-01.png)
+
+`![Inline code](../clips/legacy-paper/clip-01.png)`
+
+```markdown
+![Fenced code](../clips/legacy-paper/clip-01.png)
+```
+
+![Remote figure](https://example.edu/figures/clip-01.png)
+
+[Related argument](../references/context.md)
+"""
+    migrated_note_text = """# Prior-layout note
+
+Preserve this argument verbatim: ../clips/legacy-paper/clip-01.png
+
+![Clipped region](clips/legacy-paper/clip-01.png)
+
+`![Inline code](../clips/legacy-paper/clip-01.png)`
+
+```markdown
+![Fenced code](../clips/legacy-paper/clip-01.png)
+```
+
+![Remote figure](https://example.edu/figures/clip-01.png)
+
+[Related argument](../references/context.md)
+"""
     (inbox / key).write_bytes(sample_pdf_bytes)
-    (inbox / "legacy-paper.md").write_text(note_text, encoding="utf-8")
+    (inbox / "legacy-paper.md").write_text(prior_note_text, encoding="utf-8")
     clip_path = root / "clips" / "legacy-paper" / "clip-01.png"
     clip_path.parent.mkdir(parents=True)
     clip_path.write_bytes(PNG_PIXEL)
@@ -446,14 +477,20 @@ def test_backend_migrates_prior_nested_library_before_serving_canonical_endpoint
     }
     (root / "library.json").write_text(json.dumps(history), encoding="utf-8")
 
-    app = create_app(root)
+    client = TestClient(create_app(root))
 
     assert (root / key).read_bytes() == sample_pdf_bytes
-    assert (root / "legacy-paper.md").read_text(encoding="utf-8") == note_text
+    migrated_note_path = root / "legacy-paper.md"
+    migrated_note = migrated_note_path.read_text(encoding="utf-8")
+    assert migrated_note == migrated_note_text
+    generated_link = next(
+        line for line in migrated_note.splitlines() if line.startswith("![Clipped region](")
+    )
+    generated_destination = generated_link.removeprefix("![Clipped region](").removesuffix(")")
+    assert (migrated_note_path.parent / generated_destination).resolve() == clip_path.resolve()
     assert clip_path.read_bytes() == PNG_PIXEL
     assert not inbox.exists()
 
-    client = TestClient(app)
     listed = client.get("/library")
 
     assert listed.status_code == 200
@@ -474,7 +511,7 @@ def test_backend_migrates_prior_nested_library_before_serving_canonical_endpoint
         }
     ]
     assert client.get(f"/pdf/{key}").content == sample_pdf_bytes
-    assert client.get(f"/notes/{key}").json()["text"] == note_text
+    assert client.get(f"/notes/{key}").json()["text"] == migrated_note_text
     assert client.get(f"/notes/{key}/assets/clip-01.png").content == PNG_PIXEL
 
 

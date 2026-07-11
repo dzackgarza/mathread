@@ -79,7 +79,8 @@ type CaptureScenario =
   | "direct-pdf-tab"
   | "direct-pdf-without-extension"
   | "large-numdam-pdf"
-  | "arxiv-pdf";
+  | "arxiv-pdf"
+  | "legacy-arxiv-pdf";
 
 type CaptureArtifacts = {
   root: string;
@@ -352,6 +353,30 @@ test("reader exposes arXiv source links as a dedicated toolbar button", async ()
     const popup = await popupPromise;
     await popup.waitForLoadState("domcontentloaded");
     expect(popup.url()).toBe("https://arxiv.org/abs/2301.12345");
+    await popup.close();
+  });
+}, 120_000);
+
+test("reader opens pre-2007 arXiv provenance with its full archive identifier", async () => {
+  await withExtensionReader(async ({ backendPort, courseServer, extensionId, page }) => {
+    const key = await preCapturePdfThroughBackend(
+      backendPort,
+      courseServer,
+      "legacy-arxiv-pdf",
+    );
+    await page.goto(readerPageUrl(extensionId, key), {
+      waitUntil: "domcontentloaded",
+    });
+    await waitForCanvasCount(page, 1);
+
+    const arxivButton = page.locator("#open-arxiv");
+    expect(await arxivButton.isVisible()).toBe(true);
+
+    const popupPromise = page.context().waitForEvent("page");
+    await arxivButton.click();
+    const popup = await popupPromise;
+    await popup.waitForLoadState("domcontentloaded");
+    expect(popup.url()).toBe("https://arxiv.org/abs/math.GT/0309136v2");
     await popup.close();
   });
 }, 120_000);
@@ -1238,16 +1263,37 @@ async function preCapturePdfThroughBackend(
     await waitForBackendLibraryKey(backendPort, key);
     return key;
   }
+  if (scenario === "legacy-arxiv-pdf") {
+    const form = new FormData();
+    form.set("pdf_url", "https://arxiv.org/pdf/math.GT/0309136v2");
+    form.set("source_url", "https://arxiv.org/pdf/math.GT/0309136v2");
+    form.set("title_hint", "arXiv:math.GT/0309136v2");
+    form.set(
+      "pdf",
+      new Blob([pdfBytes], { type: "application/pdf" }),
+      "math.GT_0309136v2.pdf",
+    );
+    const response = await fetch(`http://127.0.0.1:${backendPort}/capture-bytes`, {
+      method: "POST",
+      body: form,
+    });
+    expect(response.ok).toBe(true);
+    const value: unknown = await response.json();
+    assert(isRecord(value) && typeof value.stored_path === "string");
+    const key = storedKeyFromPath(value.stored_path);
+    await waitForBackendLibraryKey(backendPort, key);
+    return key;
+  }
   const pdfUrl = `${courseServer.url.origin}${pdfPathForScenario(scenario)}`;
   const pdfResponse = await fetch(pdfUrl, {
     headers: { cookie: `${cookieName}=${cookieValue}` },
   });
   expect(pdfResponse.ok).toBe(true);
-  const pdfBytes = await pdfResponse.arrayBuffer();
+  const responsePdfBytes = await pdfResponse.arrayBuffer();
   const form = new FormData();
   form.append(
     "pdf",
-    new Blob([pdfBytes], { type: "application/pdf" }),
+    new Blob([responsePdfBytes], { type: "application/pdf" }),
     pdfPathForScenario(scenario).split("/").pop() ?? "document.pdf",
   );
   form.append("pdf_url", pdfUrl);
@@ -2071,6 +2117,9 @@ function pdfPathForScenario(scenario: CaptureScenario): string {
   }
   if (scenario === "arxiv-pdf") {
     return "/arxiv/pdf/2301.12345";
+  }
+  if (scenario === "legacy-arxiv-pdf") {
+    return "/arxiv/pdf/math.GT/0309136v2";
   }
   if (scenario === "direct-pdf-without-extension") {
     return "/pdf/2301.12345";
