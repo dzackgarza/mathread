@@ -439,6 +439,8 @@ Preserve this argument verbatim: ../clips/legacy-paper/clip-01.png
 
 `![Inline code](../clips/legacy-paper/clip-01.png)`
 
+    ![Indented code](../clips/legacy-paper/clip-01.png)
+
 ```markdown
 ![Fenced code](../clips/legacy-paper/clip-01.png)
 ```
@@ -454,6 +456,8 @@ Preserve this argument verbatim: ../clips/legacy-paper/clip-01.png
 ![Clipped region](clips/legacy-paper/clip-01.png)
 
 `![Inline code](../clips/legacy-paper/clip-01.png)`
+
+    ![Indented code](../clips/legacy-paper/clip-01.png)
 
 ```markdown
 ![Fenced code](../clips/legacy-paper/clip-01.png)

@@ -376,7 +376,7 @@ test("reader opens pre-2007 arXiv provenance with its full archive identifier", 
     await arxivButton.click();
     const popup = await popupPromise;
     await popup.waitForLoadState("domcontentloaded");
-    expect(popup.url()).toBe("https://arxiv.org/abs/math.GT/0309136v2");
+    expect(popup.url()).toBe("https://arxiv.org/abs/math/0309136v1");
     await popup.close();
   });
 }, 120_000);
@@ -1265,13 +1265,13 @@ async function preCapturePdfThroughBackend(
   }
   if (scenario === "legacy-arxiv-pdf") {
     const form = new FormData();
-    form.set("pdf_url", "https://arxiv.org/pdf/math.GT/0309136v2");
-    form.set("source_url", "https://arxiv.org/pdf/math.GT/0309136v2");
-    form.set("title_hint", "arXiv:math.GT/0309136v2");
+    form.set("pdf_url", "https://arxiv.org/pdf/math/0309136v1");
+    form.set("source_url", "https://arxiv.org/pdf/math/0309136v1");
+    form.set("title_hint", "arXiv:math/0309136v1");
     form.set(
       "pdf",
       new Blob([pdfBytes], { type: "application/pdf" }),
-      "math.GT_0309136v2.pdf",
+      "math_0309136v1.pdf",
     );
     const response = await fetch(`http://127.0.0.1:${backendPort}/capture-bytes`, {
       method: "POST",
@@ -2119,7 +2119,7 @@ function pdfPathForScenario(scenario: CaptureScenario): string {
     return "/arxiv/pdf/2301.12345";
   }
   if (scenario === "legacy-arxiv-pdf") {
-    return "/arxiv/pdf/math.GT/0309136v2";
+    return "/arxiv/pdf/math/0309136v1";
   }
   if (scenario === "direct-pdf-without-extension") {
     return "/pdf/2301.12345";
