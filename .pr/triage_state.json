@@ -2,7 +2,7 @@
  "repo": "dzackgarza/mathread",
  "pr": 23,
  "counts": {
-  "CLOSED": 8
+  "CLOSED": 9
  },
  "converged": true,
  "records": [
@@ -123,6 +123,21 @@
     "verdict": "accepted as written",
     "has_verification": true,
     "commit": "47c6f3d",
+    "by": "dzackgarza"
+   }
+  },
+  {
+   "key": "ct:2c326a849532322a",
+   "thread_id": "PRRT_kwDOTLXA2c6QJGiu",
+   "path": "extension/build.ts",
+   "line": 44,
+   "resolved": true,
+   "outdated": false,
+   "state": "CLOSED",
+   "disp": {
+    "verdict": "rejected",
+    "has_verification": false,
+    "commit": null,
     "by": "dzackgarza"
    }
   }
