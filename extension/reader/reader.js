@@ -49,7 +49,10 @@ const bootParams = new URLSearchParams(location.search);
 const libraryKey = bootParams.get("key");
 // View restore: reader-swap forwards mrpage/mrzoom from the source URL as page/zoom.
 const initialPage = Number(bootParams.get("page"));
-const initialZoom = Number(bootParams.get("zoom"));
+const initialZoomParam = bootParams.get("zoom");
+const initialZoom = initialZoomParam === null ? null : Number(initialZoomParam);
+const hasExplicitInitialZoom =
+  initialZoom !== null && Number.isFinite(initialZoom) && initialZoom > 0;
 // Legacy localStorage highlight store; read once to migrate into the notes file.
 const legacyStorageKey = `mathread-legacy-highlights:${libraryKey}`;
 
@@ -101,7 +104,7 @@ const clipOverlayEl = $("clip-overlay");
 const clipRectEl = $("clip-rect");
 
 let highlights = []; // parsed from the note doc; refreshAnnotations() is the only writer
-let scale = Number.isFinite(initialZoom) && initialZoom > 0 ? initialZoom : 1;
+let scale = hasExplicitInitialZoom ? initialZoom : 1;
 let rotation = 0;
 let pdfDoc = null;
 let pdfData = null;
@@ -447,7 +450,7 @@ async function mountPdfDocument() {
   pdfViewer.setDocument(pdfDoc);
   await pagesInitialized;
   syncPageContainers();
-  pdfViewer.currentScaleValue = settings.fitWidthOnOpen && !Number.isFinite(initialZoom)
+  pdfViewer.currentScaleValue = settings.fitWidthOnOpen && !hasExplicitInitialZoom
     ? "page-width"
     : String(scale);
   if (Number.isFinite(initialPage) && initialPage >= 1) {

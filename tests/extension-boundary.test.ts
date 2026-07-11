@@ -375,21 +375,32 @@ test("reader renders all pages of a large PDF with real content", async () => {
         waitUntil: "domcontentloaded",
       });
 
-      // The reader renders every page as a stacked canvas; a fully rendered 6-page
-      // document has 6 canvases and the last one has real ink - proof that late pages
-      // don't silently stay blank.
-      await waitForCanvasCount(page, 6);
-      const rendered = await canvasPixelEvidence(page, 5);
-      expect(rendered.canvasSize).toBeGreaterThan(10_000);
-      expect(rendered.nonWhitePixels).toBeGreaterThan(250);
       await expectElementText(
         page.locator("#zoom-level"),
-        (text) => text === "72%",
+        (text) => text === "90%",
       );
       await expectInputValue(
         page.locator("#page-input"),
         (value) => value === "3",
       );
+
+      // PDF.js bounds simultaneous canvas ownership. Navigate through the real reader
+      // control so the late page enters that rendering window, then prove its canvas
+      // contains the expected substantive ink rather than a blank placeholder.
+      const pageInput = page.locator("#page-input");
+      await pageInput.fill("6");
+      await pageInput.press("Enter");
+      await expectInputValue(pageInput, (value) => value === "6");
+      const latePageCanvasIndex = await page
+        .locator('#pdf-viewer .page[data-page-number="6"] canvas')
+        .evaluate((latePageCanvas) =>
+          Array.from(document.querySelectorAll("#viewer canvas")).indexOf(
+            latePageCanvas,
+          ),
+        );
+      const rendered = await canvasPixelEvidence(page, latePageCanvasIndex);
+      expect(rendered.canvasSize).toBeGreaterThan(10_000);
+      expect(rendered.nonWhitePixels).toBeGreaterThan(250);
     },
   );
 }, 60_000);

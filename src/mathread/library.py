@@ -61,6 +61,53 @@ class InvalidNoteImageError(Exception):
 class NoteVersionConflictError(Exception):
     """Note has been modified elsewhere; version mismatch."""
 
+
+def migrate_prior_nested_layout(root: Path) -> None:
+    """Move the former ``root/inbox`` PDF and note ownership into ``root`` once."""
+    inbox = root / "inbox"
+    if not inbox.exists():
+        return
+
+    assert inbox.is_dir(), (
+        "Prior MathRead library path must be a real directory before migration; "
+        f"path={inbox}"
+    )
+    sources = sorted(inbox.iterdir())
+    invalid_sources = [
+        source
+        for source in sources
+        if not source.is_file()
+        or source.suffix.lower() not in {".pdf", ".md"}
+    ]
+    assert not invalid_sources, (
+        "Prior MathRead inbox contains ownership outside the PDF/note transition; "
+        f"unexpected={invalid_sources}; move or remove these entries before starting MathRead"
+    )
+
+    pdf_names = {source.name for source in sources if source.suffix.lower() == ".pdf"}
+    orphan_notes = [
+        source
+        for source in sources
+        if source.suffix.lower() == ".md" and source.with_suffix(".pdf").name not in pdf_names
+    ]
+    assert not orphan_notes, (
+        "Prior MathRead inbox contains notes without their owned PDFs; "
+        f"orphan_notes={orphan_notes}; restore the matching PDFs before starting MathRead"
+    )
+
+    moves = [(source, root / source.name) for source in sources]
+    collisions = [(source, destination) for source, destination in moves if destination.exists()]
+    if collisions:
+        raise FileExistsError(
+            "Prior MathRead inbox migration would overwrite canonical library artifacts; "
+            f"collisions={collisions}"
+        )
+
+    for source, destination in moves:
+        source.rename(destination)
+    inbox.rmdir()
+
+
 def history_path(root: Path) -> Path:
     return root / "library.json"
 
@@ -237,7 +284,7 @@ def write_note_image(root: Path, key: str, png_bytes: bytes) -> str:
         try:
             with image_path.open("xb") as output:
                 output.write(png_bytes)
-            return f"../clips/{paper_key}/{image_path.name}"
+            return f"clips/{paper_key}/{image_path.name}"
         except FileExistsError:
             continue
 
