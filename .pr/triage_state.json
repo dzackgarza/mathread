@@ -2,7 +2,7 @@
  "repo": "dzackgarza/mathread",
  "pr": 23,
  "counts": {
-  "CLOSED": 6
+  "CLOSED": 8
  },
  "converged": true,
  "records": [
@@ -55,7 +55,7 @@
    "key": "ct:e7cdf578730268e2",
    "thread_id": "PRRT_kwDOTLXA2c6QIrSM",
    "path": "src/mathread/library.py",
-   "line": 143,
+   "line": 280,
    "resolved": true,
    "outdated": false,
    "state": "CLOSED",
@@ -70,7 +70,7 @@
    "key": "ct:287edf1d3edfe37c",
    "thread_id": "PRRT_kwDOTLXA2c6QIrSN",
    "path": "src/mathread/library.py",
-   "line": 131,
+   "line": 268,
    "resolved": true,
    "outdated": false,
    "state": "CLOSED",
@@ -93,6 +93,36 @@
     "verdict": "accepted as written",
     "has_verification": true,
     "commit": "711dbeb",
+    "by": "dzackgarza"
+   }
+  },
+  {
+   "key": "ct:06b73c1eb1d0f74e",
+   "thread_id": "PRRT_kwDOTLXA2c6QI6zY",
+   "path": "src/mathread/library.py",
+   "line": 244,
+   "resolved": true,
+   "outdated": false,
+   "state": "CLOSED",
+   "disp": {
+    "verdict": "accepted as written",
+    "has_verification": true,
+    "commit": "47c6f3d",
+    "by": "dzackgarza"
+   }
+  },
+  {
+   "key": "ct:f045368cfb53f4e4",
+   "thread_id": "PRRT_kwDOTLXA2c6QI6zZ",
+   "path": "extension/reader/reader.js",
+   "line": null,
+   "resolved": true,
+   "outdated": true,
+   "state": "CLOSED",
+   "disp": {
+    "verdict": "accepted as written",
+    "has_verification": true,
+    "commit": "47c6f3d",
     "by": "dzackgarza"
    }
   }
