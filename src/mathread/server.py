@@ -6,11 +6,17 @@ from typing import Annotated
 
 from fastapi import FastAPI, Form, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import HttpUrl
 
 from mathread import __version__
-from mathread.capture import InvalidPdfCaptureError, capture_bytes, capture_url
-from mathread.library import DEFAULT_OPEN_ROOT_COMMAND, InvalidNoteImageError, OpenRootCommand, UnknownLibraryKeyError
+from mathread.capture import InvalidPdfCaptureError, capture_bytes
+from mathread.library import (
+    DEFAULT_OPEN_ROOT_COMMAND,
+    InvalidNoteImageError,
+    OpenRootCommand,
+    UnknownLibraryKeyError,
+)
 from mathread.models import (
     BackendCapabilities,
     BackendServiceStatus,
@@ -18,7 +24,6 @@ from mathread.models import (
     BackendStorageStatus,
     CaptureBytesRequest,
     CaptureResult,
-    CaptureUrlRequest,
 )
 from mathread.portal import create_portal_router
 
@@ -61,11 +66,20 @@ def create_app(
     ) -> Response:
         return Response(status_code=400)
 
-    app.include_router(create_portal_router(root, open_root_command))
+    @app.exception_handler(Exception)
+    def unhandled_exception_handler(
+        _request: Request,
+        error: Exception,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": type(error).__name__,
+                "message": str(error),
+            },
+        )
 
-    @app.post("/capture-url", response_model=CaptureResult)
-    def capture_url_endpoint(request: CaptureUrlRequest) -> CaptureResult:
-        return capture_url(root, request)
+    app.include_router(create_portal_router(root, open_root_command))
 
     @app.get("/status", response_model=BackendStatus)
     def status_endpoint(request: Request) -> BackendStatus:

@@ -7,7 +7,7 @@
 // synchronously at document_start leaves Chrome's native PDF viewer painting over the
 // swapped DOM.
 import {
-  type CaptureUrlRequest,
+  type CaptureRequest,
   type ExtensionLocalStorage,
   isBackendServedPdfUrl,
   libraryKeyFromBackendPdfUrl,
@@ -30,7 +30,7 @@ declare const chrome: {
 };
 
 document.addEventListener("DOMContentLoaded", () => {
-  void interceptPdfDocument().catch(error => {
+  void interceptPdfDocument().catch((error) => {
     mountCaptureError(String(error));
   });
 });
@@ -54,7 +54,9 @@ async function interceptPdfDocument(): Promise<void> {
   }
 
   const response = parseRuntimeCaptureResponse(
-    await chrome.runtime.sendMessage(runtimeCaptureMessage(await captureRequest(pdfUrl))),
+    await chrome.runtime.sendMessage(
+      runtimeCaptureMessage(await captureRequest(pdfUrl)),
+    ),
   );
   if (!response.ok) {
     mountCaptureError(response.error);
@@ -63,9 +65,9 @@ async function interceptPdfDocument(): Promise<void> {
   mountReader(libraryKeyFromStoredPath(response.result.stored_path));
 }
 
-async function captureRequest(pdfUrl: string): Promise<CaptureUrlRequest> {
+async function captureRequest(pdfUrl: string): Promise<CaptureRequest> {
   const storedOrigin = await storedPdfLinkOrigin(chrome.storage.local, pdfUrl);
-  const request: CaptureUrlRequest = {
+  const request: CaptureRequest = {
     pdf_url: pdfUrl,
     source_url: storedOrigin?.source_url ?? referrerSourceUrl(pdfUrl),
   };
@@ -85,9 +87,9 @@ function referrerSourceUrl(pdfUrl: string): string {
     const referrerUrl = new URL(referrer);
     const pdfDocumentUrl = new URL(pdfUrl);
     if (
-      referrerUrl.href !== pdfDocumentUrl.href
-      && referrerUrl.pathname !== "/"
-      && referrer !== `${pdfDocumentUrl.origin}/`
+      referrerUrl.href !== pdfDocumentUrl.href &&
+      referrerUrl.pathname !== "/" &&
+      referrer !== `${pdfDocumentUrl.origin}/`
     ) {
       return referrer;
     }
@@ -123,8 +125,9 @@ function mountReader(key: string): void {
   newBody.style.cssText = "margin:0; padding:0; height:100vh; overflow:hidden;";
 
   const reader = document.createElement("iframe");
-  reader.src = `${chrome.runtime.getURL("reader/reader.html")}?key=${encodeURIComponent(key)}`
-    + viewRestoreParams(window.location.href);
+  reader.src =
+    `${chrome.runtime.getURL("reader/reader.html")}?key=${encodeURIComponent(key)}` +
+    viewRestoreParams(window.location.href);
   reader.name = "mathreadReaderFrame";
   // Cross-origin iframes only get async-clipboard access when the embedder delegates it.
   reader.allow = "clipboard-write";
@@ -157,10 +160,18 @@ function mountCaptureError(error: string): void {
 
   const detail = document.createElement("pre");
   detail.textContent = error;
-  detail.style.cssText = "white-space:pre-wrap; color:#f2b8b5; background:#2a2a2a; padding:12px; border-radius:8px;";
+  detail.style.cssText =
+    "white-space:pre-wrap; color:#f2b8b5; background:#2a2a2a; padding:12px; border-radius:8px;";
 
   const hint = document.createElement("p");
-  hint.textContent = "Is the MathRead backend running? Start it with `just serve`, then reload this tab.";
+  const isBackendDown =
+    /^MathRead backend rejected capture: 5\d\d/.test(error) ||
+    /Failed to fetch.*127\.0\.0\.1/.test(error) ||
+    /NetworkError.*127\.0\.0\.1/.test(error) ||
+    /fetch.*failed/i.test(error);
+  hint.textContent = isBackendDown
+    ? "Is the MathRead backend running? Start it with `just serve`, then reload this tab."
+    : "The PDF could not be fetched or stored. Check the error above for details.";
 
   panel.append(heading, detail, hint);
   newBody.appendChild(panel);

@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import partial
 from hashlib import sha256
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from os import environ
 from pathlib import Path
-from threading import Thread
 from typing import TextIO
 
 import httpx
@@ -28,19 +25,6 @@ class RunningMathReadService:
     root: Path
 
 
-@dataclass
-class PdfServerRequest:
-    path: str
-    referer: str | None
-    cookie: str | None
-
-
-@dataclass
-class RunningPdfServer:
-    pdf_url: str
-    requests: list[PdfServerRequest]
-
-
 @pytest.fixture
 def sample_pdf_bytes() -> bytes:
     output = BytesIO()
@@ -48,73 +32,6 @@ def sample_pdf_bytes() -> bytes:
     pdf.add_blank_page(page_size=(72, 72))
     pdf.save(output)
     return output.getvalue()
-
-
-@pytest.fixture
-def pdf_server(
-    tmp_path: Path,
-    sample_pdf_bytes: bytes,
-) -> Iterator[str]:
-    webroot = tmp_path / "web"
-    webroot.mkdir()
-    (webroot / "notes.pdf").write_bytes(sample_pdf_bytes)
-
-    handler = partial(SimpleHTTPRequestHandler, directory=str(webroot))
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-
-    yield f"http://127.0.0.1:{server.server_port}/notes.pdf"
-
-    server.shutdown()
-    thread.join()
-
-
-@pytest.fixture
-def authenticated_pdf_server(
-    sample_pdf_bytes: bytes,
-) -> Iterator[RunningPdfServer]:
-    requests: list[PdfServerRequest] = []
-
-    class AuthenticatedPdfHandler(SimpleHTTPRequestHandler):
-        def do_GET(self) -> None:
-            requests.append(
-                PdfServerRequest(
-                    path=self.path,
-                    referer=self.headers.get("referer"),
-                    cookie=self.headers.get("cookie"),
-                )
-            )
-            if self.path != "/notes.pdf":
-                self.send_response(404)
-                self.end_headers()
-                return
-
-            if self.headers.get("referer") != "https://example.edu/course/" or self.headers.get("cookie") != "mathread_session=service-test":
-                self.send_response(403)
-                self.end_headers()
-                return
-
-            self.send_response(200)
-            self.send_header("content-type", "application/pdf")
-            self.send_header("content-disposition", 'attachment; filename="notes.pdf"')
-            self.end_headers()
-            self.wfile.write(sample_pdf_bytes)
-
-        def log_message(self, format: str, *args: object) -> None:
-            return
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), AuthenticatedPdfHandler)
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-
-    yield RunningPdfServer(
-        pdf_url=f"http://127.0.0.1:{server.server_port}/notes.pdf",
-        requests=requests,
-    )
-
-    server.shutdown()
-    thread.join()
 
 
 @pytest.fixture
@@ -153,39 +70,9 @@ def mathread_service(
     return RunningMathReadService(base_url=base_url, root=root)
 
 
-def test_capture_url_downloads_pdf_and_embeds_provenance(
+def test_status_reports_ready_storage_contract_for_existing_root(
     tmp_path: Path,
-    pdf_server: str,
 ) -> None:
-    reading_root = tmp_path / "reading-root"
-    reading_root.mkdir()
-    client = TestClient(create_app(reading_root))
-
-    response = client.post(
-        "/capture-url",
-        json={
-            "pdf_url": pdf_server,
-            "source_url": "https://example.edu/course/",
-            "title_hint": "Course page",
-            "headers": {"referer": "https://example.edu/course/"},
-        },
-    )
-
-    assert response.status_code == 200
-    result = response.json()
-    stored_path = Path(result["stored_path"])
-    metadata = pdf_docinfo(stored_path)
-
-    assert result["capture"] == "capture-url"
-    assert result["source_url"] == "https://example.edu/course/"
-    assert result["pdf_url"] == pdf_server
-    assert metadata["/MathReadSourceURL"] == "https://example.edu/course/"
-    assert metadata["/MathReadPDFURL"] == pdf_server
-    assert metadata["/MathReadCapture"] == "capture-url"
-    assert metadata["/MathReadOriginalSHA256"] == result["original_sha256"]
-
-
-def test_status_reports_ready_storage_contract_for_existing_root(tmp_path: Path) -> None:
     reading_root = tmp_path / "reading-root"
     reading_root.mkdir()
     client = TestClient(create_app(reading_root), base_url="http://127.0.0.1:8765")
@@ -216,7 +103,9 @@ def test_status_reports_ready_storage_contract_for_existing_root(tmp_path: Path)
     assert not any(reading_root.iterdir())
 
 
-def test_status_reports_missing_root_as_not_ready_without_creating_storage(tmp_path: Path) -> None:
+def test_status_reports_missing_root_as_not_ready_without_creating_storage(
+    tmp_path: Path,
+) -> None:
     reading_root = tmp_path / "missing-reading-root"
     client = TestClient(create_app(reading_root), base_url="http://127.0.0.1:8765")
 
@@ -273,50 +162,6 @@ def test_capture_bytes_stores_browser_authenticated_pdf_bytes(
     assert metadata["/MathReadSourceURL"] == "https://example.edu/private/course/"
     assert metadata["/MathReadPDFURL"] == "https://example.edu/private/notes.pdf"
     assert metadata["/MathReadCapture"] == "capture-bytes"
-
-
-def test_cli_capture_url_forwards_headers_and_stores_pdf_with_provenance(
-    mathread_service: RunningMathReadService,
-    authenticated_pdf_server: RunningPdfServer,
-    sample_pdf_bytes: bytes,
-) -> None:
-    response = httpx.post(
-        f"{mathread_service.base_url}/capture-url",
-        json={
-            "pdf_url": authenticated_pdf_server.pdf_url,
-            "source_url": "https://example.edu/course/",
-            "title_hint": "Course page",
-            "headers": {
-                "referer": "https://example.edu/course/",
-                "cookie": "mathread_session=service-test",
-            },
-        },
-    )
-
-    assert response.status_code == 200
-    result = response.json()
-    stored_path = Path(result["stored_path"])
-    metadata = pdf_docinfo(stored_path)
-
-    assert authenticated_pdf_server.requests == [
-        PdfServerRequest(
-            path="/notes.pdf",
-            referer="https://example.edu/course/",
-            cookie="mathread_session=service-test",
-        )
-    ]
-    assert stored_path == mathread_service.root / "notes.pdf"
-    assert result["original_sha256"] == sha256(sample_pdf_bytes).hexdigest()
-    assert result["stored_sha256"] == sha256(stored_path.read_bytes()).hexdigest()
-    assert result["capture"] == "capture-url"
-    assert result["source_url"] == "https://example.edu/course/"
-    assert result["pdf_url"] == authenticated_pdf_server.pdf_url
-    assert result["title_hint"] == "Course page"
-    assert metadata["/MathReadSourceURL"] == "https://example.edu/course/"
-    assert metadata["/MathReadPDFURL"] == authenticated_pdf_server.pdf_url
-    assert metadata["/MathReadCapture"] == "capture-url"
-    assert metadata["/MathReadOriginalSHA256"] == result["original_sha256"]
-    assert metadata["/MathReadTitleHint"] == result["title_hint"]
 
 
 def test_cli_service_uses_mathread_root_and_accepts_real_http_capture(
@@ -406,6 +251,67 @@ def test_cli_service_rejects_invalid_pdf_input_without_storing_success_artifact(
 
     assert list(mathread_service.root.glob("*.pdf")) == []
     assert 400 <= response.status_code < 500
+
+
+def test_cli_serve_exits_successfully_when_matching_mathread_service_already_runs(
+    mathread_service: RunningMathReadService,
+) -> None:
+    uv = Path.home() / ".local/bin/uv"
+    completed = subprocess.run(
+        [
+            str(uv),
+            "run",
+            "--project",
+            str(REPO_ROOT),
+            "mathread",
+            "serve",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            mathread_service.base_url.rsplit(":", 1)[1],
+            "--root",
+            str(mathread_service.root),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert f"MathRead service already running at {mathread_service.base_url}" in completed.stdout
+
+
+def test_cli_serve_rejects_mathread_service_for_different_root(
+    mathread_service: RunningMathReadService,
+    tmp_path: Path,
+) -> None:
+    uv = Path.home() / ".local/bin/uv"
+    other_root = tmp_path / "other-root"
+    completed = subprocess.run(
+        [
+            str(uv),
+            "run",
+            "--project",
+            str(REPO_ROOT),
+            "mathread",
+            "serve",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            mathread_service.base_url.rsplit(":", 1)[1],
+            "--root",
+            str(other_root),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert completed.returncode != 0
+    assert str(mathread_service.root) in completed.stderr
+    assert str(other_root) in completed.stderr
 
 
 def wait_for_http_service(url: str, log: TextIO) -> None:

@@ -12,7 +12,10 @@ type MathReadPdfViewerApplication = {
   initializedPromise: Promise<unknown>;
   page: number;
   eventBus?: {
-    on(eventName: "pagechanging", listener: (event: { pageNumber: number }) => void): void;
+    on(
+      eventName: "pagechanging",
+      listener: (event: { pageNumber: number }) => void,
+    ): void;
   };
   pdfViewer: {
     currentPageNumber: number;
@@ -77,8 +80,7 @@ type CaptureResult = {
 };
 
 type RuntimeCaptureResponse =
-  | { ok: true; result: CaptureResult }
-  | { ok: false; error: string };
+  { ok: true; result: CaptureResult } | { ok: false; error: string };
 
 type BackendState =
   | { kind: "checking" }
@@ -115,14 +117,21 @@ const viewerPageHistory = {
 void initCaptureUi();
 
 function getPdfUrlFromPage(): string | undefined {
-  const fromLocation = pdfUrlFromLocation(window.location.search, window.location.pathname);
+  const fromLocation = pdfUrlFromLocation(
+    window.location.search,
+    window.location.pathname,
+  );
   if (fromLocation !== undefined) {
-    return isBackendServedPdfUrl(fromLocation, chrome.runtime.getManifest()) ? undefined : fromLocation;
+    return isBackendServedPdfUrl(fromLocation, chrome.runtime.getManifest())
+      ? undefined
+      : fromLocation;
   }
 
   const app = window.PDFViewerApplication;
   if (app !== undefined && isLikelyOriginalPdfUrl(app.url)) {
-    return isBackendServedPdfUrl(app.url, chrome.runtime.getManifest()) ? undefined : app.url;
+    return isBackendServedPdfUrl(app.url, chrome.runtime.getManifest())
+      ? undefined
+      : app.url;
   }
 
   return undefined;
@@ -141,9 +150,9 @@ async function getCaptureSourceUrl(pdfUrl: string): Promise<string> {
       const pdfDocumentUrl = new URL(pdfUrl);
       const referrerPathname = referrerUrl.pathname;
       if (
-        referrerUrl.href !== pdfDocumentUrl.href
-        && referrerPathname !== "/"
-        && referrer !== `${pdfDocumentUrl.origin}/`
+        referrerUrl.href !== pdfDocumentUrl.href &&
+        referrerPathname !== "/" &&
+        referrer !== `${pdfDocumentUrl.origin}/`
       ) {
         return referrer;
       }
@@ -154,7 +163,9 @@ async function getCaptureSourceUrl(pdfUrl: string): Promise<string> {
   return pdfUrl;
 }
 
-async function resolveCaptureUrls(): Promise<{ pdfUrl: string; sourceUrl: string } | undefined> {
+async function resolveCaptureTarget(): Promise<
+  { pdfUrl: string; sourceUrl: string } | undefined
+> {
   const pdfUrl = getPdfUrlFromPage();
   if (pdfUrl === undefined || pdfUrl.length === 0) {
     return undefined;
@@ -198,12 +209,19 @@ async function initCaptureUi(): Promise<void> {
   synchronizeCopyLinkButtons();
 }
 
-async function resolveCaptureUrlsWithRetries(): Promise<{
-  pdfUrl: string;
-  sourceUrl: string;
-} | undefined> {
-  for (let attempt = 0; attempt < captureUiConfig.urlResolutionMaxRetries; attempt += 1) {
-    const resolved = await resolveCaptureUrls();
+async function resolveCaptureTargetWithRetries(): Promise<
+  | {
+      pdfUrl: string;
+      sourceUrl: string;
+    }
+  | undefined
+> {
+  for (
+    let attempt = 0;
+    attempt < captureUiConfig.urlResolutionMaxRetries;
+    attempt += 1
+  ) {
+    const resolved = await resolveCaptureTarget();
     if (resolved !== undefined && resolved.pdfUrl.length > 0) {
       return resolved;
     }
@@ -213,11 +231,15 @@ async function resolveCaptureUrlsWithRetries(): Promise<{
 }
 
 function wait(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function initializeCaptureButton(): Promise<void> {
-  for (let attempt = 0; attempt < captureUiConfig.urlResolutionMaxRetries; attempt += 1) {
+  for (
+    let attempt = 0;
+    attempt < captureUiConfig.urlResolutionMaxRetries;
+    attempt += 1
+  ) {
     if (synchronizeCaptureButton()) {
       if (isCurrentPageBackendServedPdf()) {
         renderLibraryReopenState();
@@ -235,14 +257,20 @@ async function initializeCaptureButton(): Promise<void> {
 }
 
 function isCurrentPageBackendServedPdf(): boolean {
-  const raw = pdfUrlFromLocation(window.location.search, window.location.pathname)
-    ?? rawViewerApplicationUrl();
-  return raw !== undefined && isBackendServedPdfUrl(raw, chrome.runtime.getManifest());
+  const raw =
+    pdfUrlFromLocation(window.location.search, window.location.pathname) ??
+    rawViewerApplicationUrl();
+  return (
+    raw !== undefined &&
+    isBackendServedPdfUrl(raw, chrome.runtime.getManifest())
+  );
 }
 
 function rawViewerApplicationUrl(): string | undefined {
   const app = window.PDFViewerApplication;
-  return app !== undefined && isLikelyOriginalPdfUrl(app.url) ? app.url : undefined;
+  return app !== undefined && isLikelyOriginalPdfUrl(app.url)
+    ? app.url
+    : undefined;
 }
 
 function renderLibraryReopenState(): void {
@@ -260,7 +288,7 @@ function renderLibraryReopenState(): void {
 }
 
 async function triggerCapture(captureBtn: HTMLButtonElement): Promise<void> {
-  const resolved = await resolveCaptureUrlsWithRetries();
+  const resolved = await resolveCaptureTargetWithRetries();
   if (resolved === undefined) {
     captureState = { kind: "failure", error: "PDF URL unavailable" };
     renderCaptureButton(captureBtn);
@@ -269,14 +297,19 @@ async function triggerCapture(captureBtn: HTMLButtonElement): Promise<void> {
   await captureResolvedPdf(captureBtn, resolved);
 }
 
-async function triggerAutomaticCapture(captureBtn: HTMLButtonElement): Promise<void> {
-  if (backendState.kind !== "ready" || !backendState.status.capabilities.capture) {
+async function triggerAutomaticCapture(
+  captureBtn: HTMLButtonElement,
+): Promise<void> {
+  if (
+    backendState.kind !== "ready" ||
+    !backendState.status.capabilities.capture
+  ) {
     return;
   }
   if (captureState.kind !== "idle") {
     return;
   }
-  const resolved = await resolveCaptureUrlsWithRetries();
+  const resolved = await resolveCaptureTargetWithRetries();
   if (resolved === undefined) {
     captureState = { kind: "failure", error: "PDF URL unavailable" };
     renderCaptureButton(captureBtn);
@@ -296,7 +329,7 @@ async function captureResolvedPdf(
   captureState = { kind: "in-flight" };
   renderCaptureButton(captureBtn);
   const response = await chrome.runtime.sendMessage({
-    type: "mathread:capture-url",
+    type: "mathread:capture",
     request: {
       pdf_url: resolved.pdfUrl,
       source_url: resolved.sourceUrl,
@@ -329,9 +362,9 @@ function synchronizeCaptureButton(): boolean {
   captureBtn.classList.add("mathreadToolbarTextButton");
   if (captureBtn.dataset.mathreadCaptureBound !== "true") {
     captureBtn.dataset.mathreadCaptureBound = "true";
-    captureBtn.addEventListener("click", event => {
+    captureBtn.addEventListener("click", (event) => {
       event.preventDefault();
-      void triggerCapture(captureBtn).catch(error => {
+      void triggerCapture(captureBtn).catch((error) => {
         captureState = { kind: "failure", error: String(error) };
         renderCaptureButton(captureBtn);
       });
@@ -342,12 +375,16 @@ function synchronizeCaptureButton(): boolean {
 }
 
 function synchronizeCopyLinkButtons(): void {
-  const plainLinkButton = document.getElementById("mathreadCopyPlainLinkButton");
+  const plainLinkButton = document.getElementById(
+    "mathreadCopyPlainLinkButton",
+  );
   if (plainLinkButton instanceof HTMLButtonElement) {
     synchronizeCopyLinkButton(plainLinkButton, "plain");
   }
 
-  const currentViewButton = document.getElementById("mathreadCopyCurrentViewLinkButton");
+  const currentViewButton = document.getElementById(
+    "mathreadCopyCurrentViewLinkButton",
+  );
   if (currentViewButton instanceof HTMLButtonElement) {
     synchronizeCopyLinkButton(currentViewButton, "current-view");
   }
@@ -363,9 +400,9 @@ function synchronizeCopyLinkButton(
     return;
   }
   button.dataset.mathreadCopyLinkBound = "true";
-  button.addEventListener("click", event => {
+  button.addEventListener("click", (event) => {
     event.preventDefault();
-    void copyPdfLink(mode, button).catch(error => {
+    void copyPdfLink(mode, button).catch((error) => {
       renderCaptureStatus(`Copy link failed: ${String(error)}`);
     });
   });
@@ -382,7 +419,11 @@ async function copyPdfLink(
   const link = mode === "plain" ? pdfUrl : currentViewUrl(pdfUrl);
   await navigator.clipboard.writeText(link);
   button.disabled = false;
-  renderCaptureStatus(mode === "plain" ? "Copied original PDF link" : "Copied current PDF view link");
+  renderCaptureStatus(
+    mode === "plain"
+      ? "Copied original PDF link"
+      : "Copied current PDF view link",
+  );
 }
 
 function currentViewUrl(pdfUrl: string): string {
@@ -399,18 +440,20 @@ function currentViewUrl(pdfUrl: string): string {
   return url.href;
 }
 
-function installViewerHistoryNavigation(app: MathReadPdfViewerApplication): void {
+function installViewerHistoryNavigation(
+  app: MathReadPdfViewerApplication,
+): void {
   if (installedViewerHistoryNavigation) {
     return;
   }
   installedViewerHistoryNavigation = true;
   viewerPageHistory.currentPage = currentViewerPage(app);
-  app.eventBus?.on("pagechanging", event => {
+  app.eventBus?.on("pagechanging", (event) => {
     recordViewerPage(event.pageNumber);
   });
   window.addEventListener(
     "keydown",
-    event => {
+    (event) => {
       if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
         return;
       }
@@ -450,14 +493,20 @@ function navigateViewerHistory(direction: "back" | "forward"): void {
   if (app === undefined) {
     return;
   }
-  const sourceStack = direction === "back" ? viewerPageHistory.backStack : viewerPageHistory.forwardStack;
+  const sourceStack =
+    direction === "back"
+      ? viewerPageHistory.backStack
+      : viewerPageHistory.forwardStack;
   const targetPage = sourceStack.pop();
   if (targetPage === undefined) {
     return;
   }
   const currentPage = viewerPageHistory.currentPage ?? currentViewerPage(app);
   if (currentPage !== undefined) {
-    const destinationStack = direction === "back" ? viewerPageHistory.forwardStack : viewerPageHistory.backStack;
+    const destinationStack =
+      direction === "back"
+        ? viewerPageHistory.forwardStack
+        : viewerPageHistory.backStack;
     destinationStack.push(currentPage);
   }
   viewerPageHistory.navigating = true;
@@ -468,7 +517,9 @@ function navigateViewerHistory(direction: "back" | "forward"): void {
   }, 0);
 }
 
-function currentViewerPage(app: MathReadPdfViewerApplication): number | undefined {
+function currentViewerPage(
+  app: MathReadPdfViewerApplication,
+): number | undefined {
   const pageNumber = app.pdfViewer.currentPageNumber || app.page;
   if (!Number.isFinite(pageNumber) || pageNumber < 1) {
     return undefined;
@@ -478,9 +529,14 @@ function currentViewerPage(app: MathReadPdfViewerApplication): number | undefine
 
 async function refreshBackendStatus(): Promise<void> {
   try {
-    const response = await fetch(captureStatusEndpointFromManifest(chrome.runtime.getManifest()));
+    const response = await fetch(
+      captureStatusEndpointFromManifest(chrome.runtime.getManifest()),
+    );
     if (!response.ok) {
-      backendState = { kind: "unavailable", error: `${response.status} ${response.statusText}` };
+      backendState = {
+        kind: "unavailable",
+        error: `${response.status} ${response.statusText}`,
+      };
       synchronizeCaptureButton();
       return;
     }
@@ -493,7 +549,9 @@ async function refreshBackendStatus(): Promise<void> {
   }
 }
 
-function captureStatusEndpointFromManifest(manifest: { host_permissions?: string[] }): string {
+function captureStatusEndpointFromManifest(manifest: {
+  host_permissions?: string[];
+}): string {
   return `${backendOriginFromManifest(manifest)}/status`;
 }
 
@@ -506,7 +564,10 @@ function renderBackendChecking(captureBtn: HTMLButtonElement): void {
   renderCaptureStatus("MathRead: checking backend");
 }
 
-function renderBackendReady(captureBtn: HTMLButtonElement, status: BackendStatus): void {
+function renderBackendReady(
+  captureBtn: HTMLButtonElement,
+  status: BackendStatus,
+): void {
   setButtonPresentation(captureBtn, {
     disabled: !status.capabilities.capture,
     text: status.capabilities.capture ? "Capture" : "Storage",
@@ -517,7 +578,10 @@ function renderBackendReady(captureBtn: HTMLButtonElement, status: BackendStatus
   renderCaptureStatus(backendReadinessText(status));
 }
 
-function renderBackendUnavailable(captureBtn: HTMLButtonElement, error: string): void {
+function renderBackendUnavailable(
+  captureBtn: HTMLButtonElement,
+  error: string,
+): void {
   setButtonPresentation(captureBtn, {
     disabled: true,
     text: "Offline",
@@ -535,16 +599,26 @@ function renderCaptureInFlight(captureBtn: HTMLButtonElement): void {
   renderCaptureStatus("Capturing to MathRead...");
 }
 
-function renderCaptureSuccess(captureBtn: HTMLButtonElement, result: CaptureResult): void {
+function renderCaptureSuccess(
+  captureBtn: HTMLButtonElement,
+  result: CaptureResult,
+): void {
   setButtonPresentation(captureBtn, {
     disabled: false,
     text: result.existing ? "Already" : "Captured",
     title: result.stored_path,
   });
-  renderCaptureStatus(result.existing ? `Already captured at ${result.stored_path}` : `Captured to ${result.stored_path}`);
+  renderCaptureStatus(
+    result.existing
+      ? `Already captured at ${result.stored_path}`
+      : `Captured to ${result.stored_path}`,
+  );
 }
 
-function renderCaptureFailure(captureBtn: HTMLButtonElement, error: string): void {
+function renderCaptureFailure(
+  captureBtn: HTMLButtonElement,
+  error: string,
+): void {
   setButtonPresentation(captureBtn, {
     disabled: false,
     text: "Failed",
@@ -623,24 +697,51 @@ function parseBackendStatus(value: unknown): BackendStatus {
 function parseRuntimeCaptureResponse(value: unknown): RuntimeCaptureResponse {
   invariant(isRecord(value), "MathRead capture response must be an object");
   if (value.ok === true) {
-    invariant(isRecord(value.result), "MathRead capture success response must declare result");
+    invariant(
+      isRecord(value.result),
+      "MathRead capture success response must declare result",
+    );
     return { ok: true, result: parseCaptureResult(value.result) };
   }
   invariant(value.ok === false, "MathRead capture response must declare ok");
-  invariant(typeof value.error === "string", "MathRead capture failure response must declare error");
+  invariant(
+    typeof value.error === "string",
+    "MathRead capture failure response must declare error",
+  );
   return { ok: false, error: value.error };
 }
 
 function parseCaptureResult(value: unknown): CaptureResult {
   invariant(isRecord(value), "MathRead capture result must be an object");
   const capture = value.capture;
-  invariant(capture === "capture-url" || capture === "capture-bytes", "MathRead capture result must declare capture");
-  invariant(typeof value.stored_path === "string", "MathRead capture result must declare stored_path");
-  invariant(typeof value.original_sha256 === "string", "MathRead capture result must declare original_sha256");
-  invariant(typeof value.stored_sha256 === "string", "MathRead capture result must declare stored_sha256");
-  invariant(typeof value.pdf_url === "string", "MathRead capture result must declare pdf_url");
-  invariant(typeof value.source_url === "string", "MathRead capture result must declare source_url");
-  invariant(typeof value.existing === "boolean", "MathRead capture result must declare existing");
+  invariant(
+    capture === "capture-url" || capture === "capture-bytes",
+    "MathRead capture result must declare capture",
+  );
+  invariant(
+    typeof value.stored_path === "string",
+    "MathRead capture result must declare stored_path",
+  );
+  invariant(
+    typeof value.original_sha256 === "string",
+    "MathRead capture result must declare original_sha256",
+  );
+  invariant(
+    typeof value.stored_sha256 === "string",
+    "MathRead capture result must declare stored_sha256",
+  );
+  invariant(
+    typeof value.pdf_url === "string",
+    "MathRead capture result must declare pdf_url",
+  );
+  invariant(
+    typeof value.source_url === "string",
+    "MathRead capture result must declare source_url",
+  );
+  invariant(
+    typeof value.existing === "boolean",
+    "MathRead capture result must declare existing",
+  );
   return {
     stored_path: value.stored_path,
     original_sha256: value.original_sha256,
@@ -680,7 +781,9 @@ function setButtonPresentation(
 function backendReadinessText(status: BackendStatus): string {
   const storageState = status.ready ? "ready" : "not ready";
   return [
-    status.ready ? "MathRead backend ready" : "MathRead backend storage not ready",
+    status.ready
+      ? "MathRead backend ready"
+      : "MathRead backend storage not ready",
     `Backend: ${status.backend_url}`,
     `Library folder: ${status.root}`,
     `Storage: ${storageState}`,

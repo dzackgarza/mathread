@@ -36,8 +36,70 @@ export interface ParsedAnnotation extends Annotation {
   end: number;
 }
 
-const OPEN_RE = /^::: \{\.annotation ([^}]*)\}$/;
-const ATTR_RE = /(\w+)="([^"]*)"/g;
+export class AnnotationSyntaxError extends Error {
+  lineNumber: number;
+
+  constructor(lineNumber: number, message: string) {
+    super(`Annotation syntax error on line ${lineNumber}: ${message}`);
+    this.name = "AnnotationSyntaxError";
+    this.lineNumber = lineNumber;
+  }
+}
+
+export interface AnnotationParseResult {
+  annotations: ParsedAnnotation[];
+  error: AnnotationSyntaxError | null;
+}
+
+const OPEN_RE = /^::: \{\.annotation(?: ([^}]*))?\}$/;
+const ANNOTATION_OPEN_PREFIX_RE = /^::: \{\.annotation\b/;
+const ATTR_RE = /(\w+)="([^"]*)"/y;
+
+function escapeAttr(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/\n/g, "&#10;")
+    .replace(/\r/g, "&#13;");
+}
+
+function unescapeAttr(value: string): string {
+  return value
+    .replace(/&#13;/g, "\r")
+    .replace(/&#10;/g, "\n")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&");
+}
+
+function parseAttrs(source: string, lineNumber: number): { ok: true; attrs: Record<string, string> } | { ok: false; error: AnnotationSyntaxError } {
+  const attrs: Record<string, string> = {};
+  let cursor = 0;
+  while (cursor < source.length) {
+    while (cursor < source.length && /\s/.test(source[cursor]!)) {
+      cursor += 1;
+    }
+    if (cursor >= source.length) {
+      break;
+    }
+
+    ATTR_RE.lastIndex = cursor;
+    const match = ATTR_RE.exec(source);
+    if (match === null) {
+      return { ok: false, error: new AnnotationSyntaxError(lineNumber, `could not parse attribute near "${source.slice(cursor, cursor + 24)}"`) };
+    }
+
+    const name = match[1]!;
+    if (attrs[name] !== undefined) {
+      return { ok: false, error: new AnnotationSyntaxError(lineNumber, `duplicate attribute "${name}"`) };
+    }
+    attrs[name] = unescapeAttr(match[2]!);
+    cursor = ATTR_RE.lastIndex;
+    if (cursor < source.length && !/\s/.test(source[cursor]!)) {
+      return { ok: false, error: new AnnotationSyntaxError(lineNumber, `could not parse attribute near "${source.slice(cursor, cursor + 24)}"`) };
+    }
+  }
+  return { ok: true, attrs };
+}
 
 function formatRects(rects: AnnotationRect[]): string {
   return rects
@@ -59,10 +121,10 @@ function parseRects(value: string): AnnotationRect[] | null {
 
 export function serializeAnnotation(annotation: Annotation): string {
   const attrs = [
-    `id="${annotation.id}"`,
+    `id="${escapeAttr(annotation.id)}"`,
     `page="${annotation.pageNumber}"`,
-    `color="${annotation.color}"`,
-    `created="${annotation.created}"`,
+    `color="${escapeAttr(annotation.color)}"`,
+    `created="${escapeAttr(annotation.created)}"`,
     `rects="${formatRects(annotation.rects)}"`,
   ].join(" ");
   const quoted = annotation.text.split("\n").map(line => `> ${line}`);
@@ -76,80 +138,111 @@ export function serializeAnnotation(annotation: Annotation): string {
   return lines.join("\n");
 }
 
-export function parseAnnotations(markdown: string): ParsedAnnotation[] {
-  const annotations: ParsedAnnotation[] = [];
-  const lines = markdown.split("\n");
-  // Offset of each line start, so parsed blocks report exact source spans.
+function lineStartOffsets(lines: string[]): number[] {
   const offsets: number[] = [0];
   for (const line of lines) {
     offsets.push(offsets[offsets.length - 1]! + line.length + 1);
   }
+  return offsets;
+}
+
+function closingFenceIndex(lines: string[], firstBodyLine: number): number {
+  for (let i = firstBodyLine; i < lines.length; i += 1) {
+    if (/^:::\s*$/.test(lines[i]!)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function parseAnnotationBody(body: string[]): { text: string; comment: string } {
+  let textEnd = 0;
+  while (textEnd < body.length && body[textEnd]!.startsWith("> ")) {
+    textEnd += 1;
+  }
+  const text = body
+    .slice(0, textEnd)
+    .map(line => line.slice(2))
+    .join("\n");
+  const commentLines = body.slice(textEnd);
+  const commentStart = commentLines[0] === "" ? 1 : 0;
+  return { text, comment: commentLines.slice(commentStart).join("\n") };
+}
+
+function parseAnnotationFields(
+  attrs: Record<string, string>,
+  lineNumber: number,
+): { ok: true; fields: Pick<Annotation, "id" | "pageNumber" | "color" | "created" | "rects"> } | { ok: false; error: AnnotationSyntaxError } {
+  const { id, color, created } = attrs;
+  if (id === undefined) {
+    return { ok: false, error: new AnnotationSyntaxError(lineNumber, "annotation block is missing id") };
+  }
+  if (color === undefined) {
+    return { ok: false, error: new AnnotationSyntaxError(lineNumber, `annotation "${id}" is missing color`) };
+  }
+  if (created === undefined) {
+    return { ok: false, error: new AnnotationSyntaxError(lineNumber, `annotation "${id}" is missing created`) };
+  }
+  const pageNumber = Number(attrs.page);
+  if (!Number.isInteger(pageNumber) || pageNumber < 1) {
+    return { ok: false, error: new AnnotationSyntaxError(lineNumber, `annotation "${id}" has invalid page`) };
+  }
+  const rects = attrs.rects === undefined ? null : parseRects(attrs.rects);
+  if (rects === null) {
+    return { ok: false, error: new AnnotationSyntaxError(lineNumber, `annotation "${id}" has invalid rects`) };
+  }
+  return { ok: true, fields: { id, pageNumber, color, created, rects } };
+}
+
+export function parseAnnotationDocument(markdown: string): AnnotationParseResult {
+  const annotations: ParsedAnnotation[] = [];
+  const lines = markdown.split("\n");
+  const offsets = lineStartOffsets(lines);
 
   for (let i = 0; i < lines.length; i += 1) {
     const open = OPEN_RE.exec(lines[i]!);
     if (open === null) {
-      continue;
-    }
-    const attrs: Record<string, string> = {};
-    for (const match of open[1]!.matchAll(ATTR_RE)) {
-      attrs[match[1]!] = match[2]!;
-    }
-
-    let close = -1;
-    for (let j = i + 1; j < lines.length; j += 1) {
-      if (/^:::\s*$/.test(lines[j]!)) {
-        close = j;
-        break;
+      if (ANNOTATION_OPEN_PREFIX_RE.test(lines[i]!)) {
+        return { annotations: [], error: new AnnotationSyntaxError(i + 1, "malformed annotation opening fence") };
       }
-    }
-    if (close === -1) {
       continue;
     }
-
-    const body = lines.slice(i + 1, close);
-    let textEnd = 0;
-    while (textEnd < body.length && body[textEnd]!.startsWith("> ")) {
-      textEnd += 1;
+    if (open[1] === undefined) {
+      return { annotations: [], error: new AnnotationSyntaxError(i + 1, "annotation opening fence has no attributes") };
     }
-    const text = body
-      .slice(0, textEnd)
-      .map(line => line.slice(2))
-      .join("\n");
-    const commentLines = body.slice(textEnd);
-    if (commentLines[0] === "") {
-      commentLines.shift();
+    const attrsResult = parseAttrs(open[1], i + 1);
+    if (!attrsResult.ok) {
+      return { annotations: [], error: attrsResult.error };
     }
-    const comment = commentLines.join("\n");
+    const attrs = attrsResult.attrs;
 
-    const pageNumber = Number(attrs.page);
-    const rects = attrs.rects !== undefined ? parseRects(attrs.rects) : null;
-    const { id, color, created } = attrs;
-    if (
-      id === undefined ||
-      color === undefined ||
-      created === undefined ||
-      !Number.isInteger(pageNumber) ||
-      pageNumber < 1 ||
-      rects === null
-    ) {
-      i = close;
-      continue; // malformed hand-edited block: skip, never crash the reader
+    const close = closingFenceIndex(lines, i + 1);
+    if (close === -1) {
+      return { annotations: [], error: new AnnotationSyntaxError(i + 1, "annotation block has no closing fence") };
+    }
+
+    const fieldsResult = parseAnnotationFields(attrs, i + 1);
+    if (!fieldsResult.ok) {
+      return { annotations: [], error: fieldsResult.error };
     }
 
     annotations.push({
-      id,
-      pageNumber,
-      color,
-      created,
-      rects,
-      text,
-      comment,
+      ...fieldsResult.fields,
+      ...parseAnnotationBody(lines.slice(i + 1, close)),
       start: offsets[i]!,
       end: offsets[close]! + lines[close]!.length,
     });
     i = close;
   }
-  return annotations;
+  return { annotations, error: null };
+}
+
+export function parseAnnotations(markdown: string): ParsedAnnotation[] {
+  const result = parseAnnotationDocument(markdown);
+  if (result.error !== null) {
+    throw result.error;
+  }
+  return result.annotations;
 }
 
 /** Replace the block with a matching id in place, or append at the end. */

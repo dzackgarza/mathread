@@ -19,6 +19,7 @@ import {
   deleteLibraryEntry,
   getLibrary,
   getNote,
+  overwriteNote,
   putNote,
   postReadEvent,
   pdfUrl,
@@ -39,6 +40,7 @@ export default function App() {
   const [savedNote, setSavedNote] = useState('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [noteVersion, setNoteVersion] = useState('');
   const [editorCollapsed, setEditorCollapsed] = useState(
     () => localStorage.getItem(EDITOR_COLLAPSED_KEY) === 'true',
   );
@@ -76,11 +78,50 @@ export default function App() {
     if (selectedKey === null) return;
     const text = note;
     setSaving(true);
-    putNote(selectedKey, text)
-      .then(() => setSavedNote(text))
-      .catch((err) => failPortal('note save failed', err))
+    putNote(selectedKey, text, noteVersion)
+      .then((res) => {
+        setSavedNote(text);
+        if (res.version) {
+          setNoteVersion(res.version);
+        } else {
+          setNoteVersion('');
+        }
+      })
+      .catch((err) => {
+        if (String(err).includes('409')) {
+          const overwrite = window.confirm(
+            "Conflict: Note modified elsewhere. Click OK to overwrite disk, or Cancel to reload note from disk."
+          );
+          if (overwrite) {
+            overwriteNote(selectedKey, text)
+              .then((res) => {
+                setSavedNote(text);
+                if (res.version) {
+                  setNoteVersion(res.version);
+                } else {
+                  setNoteVersion('');
+                }
+              })
+              .catch((err2) => failPortal('note save failed', err2));
+          } else {
+            getNote(selectedKey)
+              .then((res) => {
+                setNote(res.text);
+                setSavedNote(res.text);
+                if (res.version) {
+                  setNoteVersion(res.version);
+                } else {
+                  setNoteVersion('');
+                }
+              })
+              .catch((err2) => failPortal('note reload failed', err2));
+          }
+        } else {
+          failPortal('note save failed', err);
+        }
+      })
       .finally(() => setSaving(false));
-  }, [note, selectedKey]);
+  }, [note, selectedKey, noteVersion]);
 
   // Debounced autosave of the markdown note.
   useEffect(() => {
@@ -111,19 +152,29 @@ export default function App() {
 
   const openEntry = useCallback(async (key: string) => {
     if (dirty && selectedKey !== null) {
-      await putNote(selectedKey, note); // flush before switching
+      const res = await putNote(selectedKey, note, noteVersion); // flush before switching
       setSavedNote(note);
+      if (res.version) {
+        setNoteVersion(res.version);
+      } else {
+        setNoteVersion('');
+      }
     }
-    const text = await getNote(key);
+    const res = await getNote(key);
     setSelectedKey(key);
-    setNote(text);
-    setSavedNote(text);
+    setNote(res.text);
+    setSavedNote(res.text);
+    if (res.version) {
+      setNoteVersion(res.version);
+    } else {
+      setNoteVersion('');
+    }
     setIsSidebarOpen(false);
     const entry = library.find((e) => e.key === key);
     postReadEvent(key, entry ? entry.last_position : 0)
       .then(refreshLibrary)
       .catch((err) => failPortal('read event failed', err));
-  }, [dirty, selectedKey, note, library, refreshLibrary]);
+  }, [dirty, selectedKey, note, noteVersion, library, refreshLibrary]);
 
   // Poll for capture completion when a PDF URL is being captured.
   useEffect(() => {

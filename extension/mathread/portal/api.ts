@@ -19,15 +19,23 @@ const API_BASE = backendOriginFromManifest(chrome.runtime.getManifest());
 export interface LibraryEntry {
   key: string;
   stored_path: string;
-  pdf_url: string;
-  source_url: string;
-  capture: 'capture-url' | 'capture-bytes';
-  original_sha256: string;
+  pdf_url?: string | undefined;
+  source_url?: string | undefined;
+  capture?: 'capture-url' | 'capture-bytes' | undefined;
+  original_sha256?: string | undefined;
   title: string;
   has_note: boolean;
   first_read: string; // ISO 8601
   last_read: string; // ISO 8601
   last_position: number; // scroll fraction 0..1, 0 = first page
+  invalid?: boolean | undefined;
+  error_message?: string | undefined;
+}
+
+export interface NoteContent {
+  key: string;
+  text: string;
+  version?: string | undefined;
 }
 
 export interface BackendStatus {
@@ -68,32 +76,58 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+function nullableStringField(value: Record<string, unknown>, field: string, context: string): string | undefined {
+  const candidate = value[field];
+  if (candidate === undefined || candidate === null) {
+    return undefined;
+  }
+  invariant(typeof candidate === 'string', `${context} ${field} must be a string`);
+  return candidate;
+}
+
+function nullableBooleanField(value: Record<string, unknown>, field: string, context: string): boolean | undefined {
+  const candidate = value[field];
+  if (candidate === undefined || candidate === null) {
+    return undefined;
+  }
+  invariant(typeof candidate === 'boolean', `${context} ${field} must be a boolean`);
+  return candidate;
+}
+
+function nullableCaptureMode(value: Record<string, unknown>): LibraryEntry['capture'] {
+  const candidate = value.capture;
+  if (candidate === undefined || candidate === null) {
+    return undefined;
+  }
+  invariant(candidate === 'capture-url' || candidate === 'capture-bytes', 'MathRead library entry capture mode is invalid');
+  return candidate;
+}
+
 function parseLibraryEntry(value: unknown): LibraryEntry {
   invariant(isRecord(value), 'MathRead library entry must be an object');
   invariant(typeof value.key === 'string', 'MathRead library entry must declare key');
   invariant(typeof value.stored_path === 'string', 'MathRead library entry must declare stored_path');
-  invariant(typeof value.pdf_url === 'string', 'MathRead library entry must declare pdf_url');
-  invariant(typeof value.source_url === 'string', 'MathRead library entry must declare source_url');
-  const capture = value.capture;
-  invariant(capture === 'capture-url' || capture === 'capture-bytes', 'MathRead library entry must declare capture');
-  invariant(typeof value.original_sha256 === 'string', 'MathRead library entry must declare original_sha256');
+
   invariant(typeof value.title === 'string', 'MathRead library entry must declare title');
   invariant(typeof value.has_note === 'boolean', 'MathRead library entry must declare has_note');
   invariant(typeof value.first_read === 'string', 'MathRead library entry must declare first_read');
   invariant(typeof value.last_read === 'string', 'MathRead library entry must declare last_read');
   invariant(typeof value.last_position === 'number', 'MathRead library entry must declare last_position');
+
   return {
     key: value.key,
     stored_path: value.stored_path,
-    pdf_url: value.pdf_url,
-    source_url: value.source_url,
-    capture,
-    original_sha256: value.original_sha256,
+    pdf_url: nullableStringField(value, 'pdf_url', 'MathRead library entry'),
+    source_url: nullableStringField(value, 'source_url', 'MathRead library entry'),
+    capture: nullableCaptureMode(value),
+    original_sha256: nullableStringField(value, 'original_sha256', 'MathRead library entry'),
     title: value.title,
     has_note: value.has_note,
     first_read: value.first_read,
     last_read: value.last_read,
     last_position: value.last_position,
+    invalid: nullableBooleanField(value, 'invalid', 'MathRead library entry'),
+    error_message: nullableStringField(value, 'error_message', 'MathRead library entry'),
   };
 }
 
@@ -144,10 +178,19 @@ function parseBackendStatus(value: unknown): BackendStatus {
   };
 }
 
-function parseNoteResponse(value: unknown): string {
+function parseNoteResponse(value: unknown): NoteContent {
   invariant(isRecord(value), 'MathRead note response must be an object');
+  invariant(typeof value.key === 'string', 'MathRead note response must declare key');
   invariant(typeof value.text === 'string', 'MathRead note response must declare text');
-  return value.text;
+  const version = value.version;
+  if (version !== undefined && version !== null) {
+    invariant(typeof version === 'string', 'MathRead note version must be a string');
+  }
+  return {
+    key: value.key,
+    text: value.text,
+    version: version ?? undefined,
+  };
 }
 
 function parseImageUploadResponse(value: unknown): string {
@@ -170,22 +213,34 @@ export async function openLibraryRoot(): Promise<void> {
   await ok(await fetch(`${API_BASE}/library/open-root`, { method: 'POST' }));
 }
 
-export async function getNote(key: string): Promise<string> {
+export async function getNote(key: string): Promise<NoteContent> {
   const response = await ok(await fetch(`${API_BASE}/notes/${encodeURIComponent(key)}`));
   return parseNoteResponse(await response.json());
 }
 
-export async function putNote(key: string, text: string): Promise<void> {
-  await ok(
+export async function putNote(key: string, text: string, version?: string): Promise<NoteContent> {
+  const response = await ok(
     await fetch(`${API_BASE}/notes/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key, text, version }),
+    }),
+  );
+  return parseNoteResponse(await response.json());
+}
+
+export async function overwriteNote(key: string, text: string): Promise<NoteContent> {
+  const response = await ok(
+    await fetch(`${API_BASE}/notes/${encodeURIComponent(key)}/overwrite`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ key, text }),
     }),
   );
+  return parseNoteResponse(await response.json());
 }
 
-/** Upload a captured region PNG; returns its note-relative path (e.g. "foo.assets/clip-01.png"). */
+/** Upload a captured region PNG; returns its note-relative path (e.g. "../clips/<paper-key>/clip-01.png"). */
 export async function postNoteImage(key: string, png: Blob): Promise<string> {
   const form = new FormData();
   form.append('image', png, 'clip.png');
