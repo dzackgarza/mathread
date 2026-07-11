@@ -781,6 +781,52 @@ test("reader delegates stable responsive navigation to the PDF.js viewer", async
   );
 }, 120_000);
 
+test("persisted fit-width setting controls ordinary reader opens without a zoom override", async () => {
+  await withExtensionReader(
+    async ({ artifacts, backendPort, context, courseServer, extensionId, page }) => {
+      const key = await preCapturePdfThroughBackend(
+        backendPort,
+        courseServer,
+        "large-numdam-pdf",
+      );
+      await persistFitWidthOnOpen(context);
+      const ordinaryOpenUrl = readerPageUrl(extensionId, key);
+      expect(new URL(ordinaryOpenUrl).searchParams.has("zoom")).toBe(false);
+
+      await page.setViewportSize({ width: 600, height: 760 });
+      await page.goto(ordinaryOpenUrl, { waitUntil: "domcontentloaded" });
+      await page.locator("#pdf-viewer .page").first().waitFor();
+      const narrow = await waitForFitWidthConvergence(
+        page,
+        "persisted-setting-narrow",
+      );
+      await page.screenshot({
+        path: join(artifacts.root, "persisted-fit-width-narrow.png"),
+      });
+
+      await page.setViewportSize({ width: 1000, height: 760 });
+      const wide = await waitForFitWidthConvergence(
+        page,
+        "persisted-setting-wide",
+      );
+      await page.screenshot({
+        path: join(artifacts.root, "persisted-fit-width-wide.png"),
+      });
+      expect(wide.clientWidth).toBeGreaterThan(narrow.clientWidth + 300);
+      expect(wide.pageWidth).toBeGreaterThan(narrow.pageWidth + 300);
+
+      await page.setViewportSize({ width: 600, height: 760 });
+      const narrowAgain = await waitForFitWidthConvergence(
+        page,
+        "persisted-setting-narrow-again",
+      );
+      expect(
+        Math.abs(narrowAgain.pageWidth - narrow.pageWidth),
+      ).toBeLessThanOrEqual(1);
+    },
+  );
+}, 120_000);
+
 test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", async () => {
   await withExtensionReader(
     async ({ context, extensionId, page, readingRoot }) => {
@@ -1644,6 +1690,33 @@ async function legacyHighlightsRaw(
     (key) => localStorage.getItem(`mathread-legacy-highlights:${key}`),
     key,
   );
+}
+
+async function persistFitWidthOnOpen(context: BrowserContext): Promise<void> {
+  const serviceWorker = context
+    .serviceWorkers()
+    .find((worker) => worker.url().startsWith("chrome-extension://"));
+  assert(serviceWorker !== undefined);
+  await serviceWorker.evaluate(async () => {
+    const chromeApi = (
+      globalThis as typeof globalThis & {
+        chrome: {
+          storage: {
+            local: {
+              set(items: Record<string, unknown>): Promise<void>;
+            };
+          };
+        };
+      }
+    ).chrome;
+    await chromeApi.storage.local.set({
+      "mathread.settings": {
+        autosaveMs: 800,
+        fitWidthOnOpen: true,
+        lineNumbers: true,
+      },
+    });
+  });
 }
 
 async function waitForStablePageDom(

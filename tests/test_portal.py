@@ -167,15 +167,28 @@ def test_note_image_written_relative_to_note_and_png_validated(
 ) -> None:
     key = capture(client, sample_pdf_bytes)
     root = tmp_path / "reading-root"
+    note_path = root / "notes.md"
     clips_dir = root / "clips" / CAPTURED_PAPER_KEY
+    note_text = "# Durable reading note\n"
+    saved_note = client.put(
+        f"/notes/{key}",
+        json={"key": key, "text": note_text},
+    )
+    assert saved_note.status_code == 200
+    assert note_path.read_text(encoding="utf-8") == note_text
 
     first = client.post(f"/notes/{key}/image", files={"image": ("clip.png", PNG_PIXEL, "image/png")})
     assert first.status_code == 200
-    assert first.json()["relative_path"] == f"../clips/{CAPTURED_PAPER_KEY}/clip-01.png"
-    assert (clips_dir / "clip-01.png").read_bytes() == PNG_PIXEL
+    first_relative_path = first.json()["relative_path"]
+    first_image = clips_dir / "clip-01.png"
+    assert (note_path.parent / first_relative_path).resolve() == first_image.resolve()
+    assert first_image.read_bytes() == PNG_PIXEL
 
     second = client.post(f"/notes/{key}/image", files={"image": ("clip.png", PNG_PIXEL, "image/png")})
-    assert second.json()["relative_path"] == f"../clips/{CAPTURED_PAPER_KEY}/clip-02.png"
+    second_relative_path = second.json()["relative_path"]
+    second_image = clips_dir / "clip-02.png"
+    assert (note_path.parent / second_relative_path).resolve() == second_image.resolve()
+    assert second_image.read_bytes() == PNG_PIXEL
 
     not_png = client.post(f"/notes/{key}/image", files={"image": ("x.png", b"not a png", "image/png")})
     assert not_png.status_code == 400
@@ -196,11 +209,10 @@ def test_note_image_uses_paper_keyed_tree_and_never_overwrites_existing_clips(
     assert second.status_code == 200
     first_path = first.json()["relative_path"]
     second_path = second.json()["relative_path"]
-    assert first_path.startswith("../clips/")
-    assert second_path.startswith("../clips/")
     assert first_path != second_path
-    assert (root / first_path.removeprefix("../")).read_bytes() == PNG_PIXEL
-    assert (root / second_path.removeprefix("../")).read_bytes() == PNG_PIXEL
+    note_parent = (root / key).with_suffix(".md").parent
+    assert (note_parent / first_path).resolve().read_bytes() == PNG_PIXEL
+    assert (note_parent / second_path).resolve().read_bytes() == PNG_PIXEL
 
 
 def test_note_asset_served_back_for_preview_and_traversal_rejected(
@@ -409,6 +421,94 @@ def test_library_json_migration_rejects_malformed_legacy_history(tmp_path: Path)
     assert json_path.is_file()
 
 
+def test_backend_migrates_prior_nested_library_before_serving_canonical_endpoints(
+    sample_pdf_bytes: bytes,
+    tmp_path: Path,
+) -> None:
+    import json
+
+    root = tmp_path / "reading-root"
+    inbox = root / "inbox"
+    inbox.mkdir(parents=True)
+    key = "legacy-paper.pdf"
+    note_text = "# Prior-layout note\n\nPreserve this argument verbatim.\n"
+    (inbox / key).write_bytes(sample_pdf_bytes)
+    (inbox / "legacy-paper.md").write_text(note_text, encoding="utf-8")
+    clip_path = root / "clips" / "legacy-paper" / "clip-01.png"
+    clip_path.parent.mkdir(parents=True)
+    clip_path.write_bytes(PNG_PIXEL)
+    history = {
+        key: {
+            "first_read": "2026-06-01T02:03:04+00:00",
+            "last_read": "2026-06-02T03:04:05+00:00",
+            "last_position": 0.625,
+        }
+    }
+    (root / "library.json").write_text(json.dumps(history), encoding="utf-8")
+
+    app = create_app(root)
+
+    assert (root / key).read_bytes() == sample_pdf_bytes
+    assert (root / "legacy-paper.md").read_text(encoding="utf-8") == note_text
+    assert clip_path.read_bytes() == PNG_PIXEL
+    assert not inbox.exists()
+
+    client = TestClient(app)
+    listed = client.get("/library")
+
+    assert listed.status_code == 200
+    assert [
+        {
+            "key": entry["key"],
+            "has_note": entry["has_note"],
+            "first_read": entry["first_read"],
+            "last_read": entry["last_read"],
+            "last_position": entry["last_position"],
+        }
+        for entry in listed.json()
+    ] == [
+        {
+            "key": key,
+            "has_note": True,
+            **history[key],
+        }
+    ]
+    assert client.get(f"/pdf/{key}").content == sample_pdf_bytes
+    assert client.get(f"/notes/{key}").json()["text"] == note_text
+    assert client.get(f"/notes/{key}/assets/clip-01.png").content == PNG_PIXEL
+
+
+def test_prior_nested_library_collision_fails_before_moving_any_artifact(
+    sample_pdf_bytes: bytes,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "reading-root"
+    inbox = root / "inbox"
+    inbox.mkdir(parents=True)
+    safe_pdf = inbox / "a-safe.pdf"
+    safe_note = inbox / "a-safe.md"
+    conflicting_source = inbox / "z-conflict.pdf"
+    conflicting_note = inbox / "z-conflict.md"
+    conflicting_destination = root / "z-conflict.pdf"
+    safe_pdf.write_bytes(sample_pdf_bytes)
+    safe_note.write_text("safe nested note\n", encoding="utf-8")
+    conflicting_source.write_bytes(sample_pdf_bytes)
+    conflicting_note.write_text("nested conflict note\n", encoding="utf-8")
+    destination_bytes = b"different destination bytes"
+    conflicting_destination.write_bytes(destination_bytes)
+
+    with pytest.raises(FileExistsError):
+        create_app(root)
+
+    assert safe_pdf.read_bytes() == sample_pdf_bytes
+    assert safe_note.read_text(encoding="utf-8") == "safe nested note\n"
+    assert conflicting_source.read_bytes() == sample_pdf_bytes
+    assert conflicting_note.read_text(encoding="utf-8") == "nested conflict note\n"
+    assert conflicting_destination.read_bytes() == destination_bytes
+    assert not (root / "a-safe.pdf").exists()
+    assert not (root / "a-safe.md").exists()
+
+
 def test_delete_unknown_key_is_404(client: TestClient) -> None:
     assert client.delete("/library/ghost.pdf").status_code == 404
 
@@ -559,8 +659,10 @@ def test_note_image_for_provenance_less_pdf_uses_file_stem_clip_tree(
     response = client.post("/notes/local.pdf/image", files={"image": ("clip.png", PNG_PIXEL, "image/png")})
 
     assert response.status_code == 200
-    assert response.json()["relative_path"] == "../clips/local/clip-01.png"
-    assert (root / "clips" / "local" / "clip-01.png").read_bytes() == PNG_PIXEL
+    image_path = root / "clips" / "local" / "clip-01.png"
+    note_path = root / "local.md"
+    assert (note_path.parent / response.json()["relative_path"]).resolve() == image_path.resolve()
+    assert image_path.read_bytes() == PNG_PIXEL
 
 
 def test_note_image_existing_clip_filename_increments_without_overwrite(
@@ -578,9 +680,11 @@ def test_note_image_existing_clip_filename_increments_without_overwrite(
     response = client.post(f"/notes/{key}/image", files={"image": ("clip.png", PNG_PIXEL, "image/png")})
 
     assert response.status_code == 200
-    assert response.json()["relative_path"] == f"../clips/{CAPTURED_PAPER_KEY}/clip-02.png"
+    note_path = root / "notes.md"
+    second_image = clips_dir / "clip-02.png"
+    assert (note_path.parent / response.json()["relative_path"]).resolve() == second_image.resolve()
     assert (clips_dir / "clip-01.png").read_bytes() == existing
-    assert (clips_dir / "clip-02.png").read_bytes() == PNG_PIXEL
+    assert second_image.read_bytes() == PNG_PIXEL
 
 
 def test_concurrent_http_clip_uploads(
