@@ -123,7 +123,7 @@ export default function App() {
       .finally(() => setSaving(false));
   }, [note, selectedKey, noteVersion]);
 
-  // Debounced autosave of the sidecar note.
+  // Debounced autosave of the markdown note.
   useEffect(() => {
     if (!dirty || selectedKey === null) return;
     const timer = setTimeout(saveNote, 800);

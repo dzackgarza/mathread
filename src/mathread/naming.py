@@ -8,11 +8,11 @@ from mathread.metadata import read_original_sha256
 
 
 def destination_for_pdf(
-    inbox: Path,
+    library_root: Path,
     filename: str,
     original_sha256: str,
 ) -> tuple[Path, bool]:
-    direct_path = inbox / filename
+    direct_path = library_root / filename
     if not direct_path.exists():
         return direct_path, False
 
@@ -21,7 +21,7 @@ def destination_for_pdf(
 
     stem = direct_path.stem
     suffix = direct_path.suffix
-    return inbox / f"{stem}--{original_sha256[:12]}{suffix}", False
+    return library_root / f"{stem}--{original_sha256[:12]}{suffix}", False
 
 
 def normalized_pdf_filename(filename: str) -> str:

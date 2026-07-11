@@ -78,7 +78,8 @@ type CaptureScenario =
   | "clicked-link"
   | "direct-pdf-tab"
   | "direct-pdf-without-extension"
-  | "large-numdam-pdf";
+  | "large-numdam-pdf"
+  | "arxiv-pdf";
 
 type CaptureArtifacts = {
   root: string;
@@ -149,7 +150,7 @@ test("reader Library panel lists, opens, and trashes captured items against the 
         "large-numdam-pdf",
       );
       writeFileSync(
-        join(readingRoot, "inbox", firstKey.replace(/\.pdf$/, ".md")),
+        join(readingRoot, firstKey.replace(/\.pdf$/, ".md")),
         "existing note\n",
       );
 
@@ -159,13 +160,14 @@ test("reader Library panel lists, opens, and trashes captured items against the 
       await page.locator('.nav-expand-btn[data-tab="library"]').click();
       await waitForLibraryEntryCount(page, 2);
       await expectElementText(
-        page.locator('[data-testid="library-root-path"]'),
+        page.locator('[data-testid="library-folder-path"]'),
         (text) => text === readingRoot,
       );
       await expectElementText(
-        page.locator('[data-testid="library-inbox-path"]'),
-        (text) => text === join(readingRoot, "inbox"),
+        page.locator('[data-testid="library-location-label"]'),
+        (text) => text === "Library folder",
       );
+      expect(await page.locator('[data-testid="library-inbox-path"]').count()).toBe(0);
       expect(
         await page.locator('[data-testid="library-open-root"]').isEnabled(),
       ).toBe(true);
@@ -221,18 +223,16 @@ test("reader Library panel lists, opens, and trashes captured items against the 
       await Bun.sleep(500);
       await waitForLibraryEntryCount(reader, 2);
 
-      // ...accepting removes the PDF and its sidecar from disk and from the list.
+      // ...accepting removes the PDF and its note from disk and from the list.
       page.once("dialog", (dialog) => void dialog.accept());
       await reader
         .locator('[data-testid="library-entry"]', { hasText: "notes" })
         .locator('[data-testid="library-entry-trash"]')
         .click();
       await waitForLibraryEntryCount(reader, 1);
-      expect(existsSync(join(readingRoot, "inbox", firstKey))).toBe(false);
+      expect(existsSync(join(readingRoot, firstKey))).toBe(false);
       expect(
-        existsSync(
-          join(readingRoot, "inbox", firstKey.replace(/\.pdf$/, ".md")),
-        ),
+        existsSync(join(readingRoot, firstKey.replace(/\.pdf$/, ".md"))),
       ).toBe(false);
     },
   );
@@ -240,8 +240,7 @@ test("reader Library panel lists, opens, and trashes captured items against the 
 
 test("reader Library panel opens provenance-less local PDFs from the backend copy", async () => {
   await withExtensionReader(async ({ extensionId, page, readingRoot }) => {
-    mkdirSync(join(readingRoot, "inbox"), { recursive: true });
-    writeFileSync(join(readingRoot, "inbox", "local.pdf"), pdfBytes);
+    writeFileSync(join(readingRoot, "local.pdf"), pdfBytes);
 
     await page.goto(`chrome-extension://${extensionId}/reader/reader.html`, {
       waitUntil: "domcontentloaded",
@@ -337,6 +336,26 @@ test("built extension auto-captures an application/pdf URL without a .pdf suffix
   );
 }, 30_000);
 
+test("reader exposes arXiv source links as a dedicated toolbar button", async () => {
+  await withExtensionReader(async ({ backendPort, courseServer, extensionId, page }) => {
+    const key = await preCapturePdfThroughBackend(backendPort, courseServer, "arxiv-pdf");
+    await page.goto(readerPageUrl(extensionId, key), { waitUntil: "domcontentloaded" });
+    await waitForCanvasCount(page, 1);
+
+    const arxivButton = page.locator("#open-arxiv");
+    await expectElementText(arxivButton, (text) => text.trim() === "");
+    expect(await arxivButton.isVisible()).toBe(true);
+    expect(await arxivButton.getAttribute("title")).toBe("Open arXiv page");
+
+    const popupPromise = page.context().waitForEvent("page");
+    await arxivButton.click();
+    const popup = await popupPromise;
+    await popup.waitForLoadState("domcontentloaded");
+    expect(popup.url()).toBe("https://arxiv.org/abs/2301.12345");
+    await popup.close();
+  });
+}, 120_000);
+
 test("built extension renders every page of a large captured PDF in the reader", async () => {
   const evidence = await runExtensionCapture("large-numdam-pdf");
   assertReaderFrameUrl(evidence.readerFrameUrl, evidence.key);
@@ -379,7 +398,7 @@ test("built extension fails loudly when the capture backend is down", async () =
   await runBackendUnavailable();
 }, 60_000);
 
-test("reader Key Points panel persists notes to the on-disk sidecar and renders a live preview", async () => {
+test("reader Notes panel persists notes to the on-disk markdown file and renders a live preview", async () => {
   await withExtensionReader(
     async ({ backendPort, courseServer, extensionId, page, readingRoot }) => {
       const key = await preCapturePdfThroughBackend(
@@ -393,6 +412,10 @@ test("reader Key Points panel persists notes to the on-disk sidecar and renders 
       await waitForCanvasCount(page, 1);
 
       await page.locator('.nav-expand-btn[data-tab="keypoints"]').click();
+      await expectElementText(
+        page.locator("#notes-path"),
+        (text) => text === key.replace(/\.pdf$/, ".md"),
+      );
       const editor = page.locator("#ai-editor .cm-content");
       await editor.click();
       await page.keyboard.type("# Heading\n\nSome **bold** text.");
@@ -406,12 +429,8 @@ test("reader Key Points panel persists notes to the on-disk sidecar and renders 
         key,
         (text) => text.includes("# Heading") && text.includes("**bold**"),
       );
-      const sidecarPath = join(
-        readingRoot,
-        "inbox",
-        key.replace(/\.pdf$/, ".md"),
-      );
-      expect(readFileSync(sidecarPath, "utf8")).toBe(noteText);
+      const notePath = join(readingRoot, key.replace(/\.pdf$/, ".md"));
+      expect(readFileSync(notePath, "utf8")).toBe(noteText);
       await expectElementText(
         page.locator("#notes-status"),
         (text) => text === "Saved",
@@ -447,11 +466,7 @@ test("reader Key Points panel blocks stale autosave and resolves disk conflicts"
         courseServer,
         "direct-pdf-tab",
       );
-      const sidecarPath = join(
-        readingRoot,
-        "inbox",
-        key.replace(/\.pdf$/, ".md"),
-      );
+      const sidecarPath = join(readingRoot, key.replace(/\.pdf$/, ".md"));
 
       await page.goto(readerPageUrl(extensionId, key), {
         waitUntil: "domcontentloaded",
@@ -1082,6 +1097,23 @@ async function preCapturePdfThroughBackend(
   courseServer: RunningCourseServer,
   scenario: CaptureScenario,
 ): Promise<string> {
+  if (scenario === "arxiv-pdf") {
+    const form = new FormData();
+    form.set("pdf_url", "https://arxiv.org/pdf/2301.12345");
+    form.set("source_url", "https://arxiv.org/abs/2301.12345");
+    form.set("title_hint", "arXiv:2301.12345");
+    form.set("pdf", new Blob([pdfBytes], { type: "application/pdf" }), "2301.12345.pdf");
+    const response = await fetch(`http://127.0.0.1:${backendPort}/capture-bytes`, {
+      method: "POST",
+      body: form,
+    });
+    expect(response.ok).toBe(true);
+    const value: unknown = await response.json();
+    assert(isRecord(value) && typeof value.stored_path === "string");
+    const key = storedKeyFromPath(value.stored_path);
+    await waitForBackendLibraryKey(backendPort, key);
+    return key;
+  }
   const pdfUrl = `${courseServer.url.origin}${pdfPathForScenario(scenario)}`;
   const pdfResponse = await fetch(pdfUrl, {
     headers: { cookie: `${cookieName}=${cookieValue}` },
@@ -1697,7 +1729,8 @@ function startCourseServer(eventsLogPath: string): RunningCourseServer {
       if (
         url.pathname === "/notes.pdf" ||
         url.pathname === "/pdf/2301.12345" ||
-        url.pathname === "/item/AST_1992__211__1_0.pdf"
+        url.pathname === "/item/AST_1992__211__1_0.pdf" ||
+        url.pathname === "/arxiv/pdf/2301.12345"
       ) {
         if (
           courseRequest.cookie?.includes(`${cookieName}=${cookieValue}`) !==
@@ -1818,6 +1851,9 @@ function pdfPathForScenario(scenario: CaptureScenario): string {
   if (scenario === "large-numdam-pdf") {
     return "/item/AST_1992__211__1_0.pdf";
   }
+  if (scenario === "arxiv-pdf") {
+    return "/arxiv/pdf/2301.12345";
+  }
   if (scenario === "direct-pdf-without-extension") {
     return "/pdf/2301.12345";
   }
@@ -1917,22 +1953,19 @@ async function waitForHttpService(url: string): Promise<void> {
 }
 
 async function waitForStoredPdf(readingRoot: string): Promise<string> {
-  const inbox = join(readingRoot, "inbox");
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (existsSync(inbox)) {
-      const pdfs = readdirSync(inbox)
-        .filter((filename) => filename.endsWith(".pdf"))
-        .map((filename) => join(inbox, filename));
-      if (pdfs.length > 0) {
-        assert.equal(pdfs.length, 1);
-        const storedPath = pdfs[0];
-        assert(storedPath !== undefined);
-        return storedPath;
-      }
+    const pdfs = readdirSync(readingRoot)
+      .filter((filename) => filename.endsWith(".pdf"))
+      .map((filename) => join(readingRoot, filename));
+    if (pdfs.length > 0) {
+      assert.equal(pdfs.length, 1);
+      const storedPath = pdfs[0];
+      assert(storedPath !== undefined);
+      return storedPath;
     }
     await Bun.sleep(100);
   }
-  throw new Error(`MathRead backend did not store a PDF under ${inbox}`);
+  throw new Error(`MathRead backend did not store a PDF under ${readingRoot}`);
 }
 
 function pdfDocinfo(storedPath: string): Record<string, string> {

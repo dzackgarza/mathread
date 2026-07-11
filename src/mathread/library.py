@@ -1,10 +1,13 @@
 """Reading-portal data plane over the folder-backed library.
 
-PDFs live in ``<root>/inbox``. Extension-captured PDFs carry MathRead provenance in
-their docinfo; user-dropped PDFs may have no provenance and are still first-class local
-library entries. Markdown sidecar notes live beside the PDF. Captured note images live
-under ``<root>/clips/<paper-key>/`` so a paper's clips can be browsed without opening
-the note file. Read history and clip allocation state live in ``<root>/library.db``.
+The capture pipeline (`capture.py`) owns writing PDFs into the configured library
+root with provenance embedded in each PDF. User-dropped PDFs may have no
+provenance and are still first-class local library entries. Markdown notes live
+beside each PDF. Captured note images live under ``<root>/clips/<paper-key>/``.
+Read history and clip allocation state live in ``<root>/library.db``.
+
+Layout for ``<root>/<name>.pdf``:
+    <root>/<name>.md          -- note
 """
 
 from __future__ import annotations
@@ -48,7 +51,7 @@ DEFAULT_OPEN_ROOT_COMMAND: OpenRootCommand = ("xdg-open",)
 
 
 class UnknownLibraryKeyError(Exception):
-    """Requested key does not resolve to a stored PDF in the inbox."""
+    """Requested key does not resolve to a stored PDF in the library folder."""
 
 
 class InvalidNoteImageError(Exception):
@@ -57,11 +60,6 @@ class InvalidNoteImageError(Exception):
 
 class NoteVersionConflictError(Exception):
     """Note has been modified elsewhere; version mismatch."""
-
-
-def inbox_dir(root: Path) -> Path:
-    return root / "inbox"
-
 
 def history_path(root: Path) -> Path:
     return root / "library.json"
@@ -74,7 +72,7 @@ def open_library_root(root: Path, command: OpenRootCommand = DEFAULT_OPEN_ROOT_C
     subprocess.run([*command, str(root)], check=True)
 
 
-def sidecar_paths(pdf_path: Path) -> tuple[Path, Path]:
+def note_paths(pdf_path: Path) -> tuple[Path, Path]:
     """Return (markdown note path, assets directory) co-located with the PDF."""
     return pdf_path.with_suffix(".md"), pdf_path.with_suffix(".assets")
 
@@ -83,7 +81,7 @@ def resolve_pdf(root: Path, key: str) -> Path:
     """Map a library key to its stored PDF, rejecting traversal and missing keys."""
     if key != Path(key).name or key in {"", ".", ".."} or not key.endswith(".pdf"):
         raise UnknownLibraryKeyError(key)
-    path = inbox_dir(root) / key
+    path = root / key
     if not path.is_file():
         raise UnknownLibraryKeyError(key)
     return path
@@ -91,13 +89,12 @@ def resolve_pdf(root: Path, key: str) -> Path:
 
 def list_library(root: Path) -> list[LibraryEntry]:
     history = _load_history(root)
-    inbox = inbox_dir(root)
-    if not inbox.is_dir():
+    if not root.is_dir():
         return []
 
     entries: list[LibraryEntry] = []
-    for pdf in sorted(inbox.glob("*.pdf")):
-        note_path, _ = sidecar_paths(pdf)
+    for pdf in sorted(root.glob("*.pdf")):
+        note_path, _ = note_paths(pdf)
         read_state = _read_state(pdf, history)
         try:
             provenance = read_optional_capture_provenance(pdf)
@@ -188,14 +185,14 @@ def _calculate_note_version(note_path: Path) -> str:
 
 
 def read_note(root: Path, key: str) -> tuple[str, str]:
-    note_path, _ = sidecar_paths(resolve_pdf(root, key))
+    note_path, _ = note_paths(resolve_pdf(root, key))
     if note_path.is_file():
         return note_path.read_text(encoding="utf-8"), _calculate_note_version(note_path)
     return "", ""
 
 
 def write_note(root: Path, key: str, text: str, version: str | None = None) -> str:
-    note_path, _ = sidecar_paths(resolve_pdf(root, key))
+    note_path, _ = note_paths(resolve_pdf(root, key))
     if note_path.is_file():
         current_version = _calculate_note_version(note_path)
         if version != current_version:
@@ -205,7 +202,7 @@ def write_note(root: Path, key: str, text: str, version: str | None = None) -> s
 
 
 def overwrite_note(root: Path, key: str, text: str) -> str:
-    note_path, _ = sidecar_paths(resolve_pdf(root, key))
+    note_path, _ = note_paths(resolve_pdf(root, key))
     note_path.write_text(text, encoding="utf-8")
     return _calculate_note_version(note_path)
 
@@ -279,10 +276,10 @@ def resolve_note_asset(root: Path, key: str, filename: str) -> Path:
 
 
 def delete_library_entry(root: Path, key: str) -> None:
-    """Remove a stored PDF together with its sidecar note, assets/clips dir, and read-history."""
+    """Remove a stored PDF together with its note, clips, and read history."""
     pdf = resolve_pdf(root, key)
     paper_key = paper_key_for_cleanup(pdf)
-    note_path, assets_dir = sidecar_paths(pdf)
+    note_path, assets_dir = note_paths(pdf)
     pdf.unlink()
     note_path.unlink(missing_ok=True)
     if assets_dir.is_dir():

@@ -46,11 +46,9 @@ def capture(client: TestClient, sample_pdf_bytes: bytes, filename: str = "notes.
 
 
 def stored_pdf_path(root: Path, key: str) -> Path:
-    candidates = [root / key, root / "inbox" / key]
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
-    raise AssertionError(f"Stored PDF for {key} was not found in the library root or inbox")
+    path = root / key
+    assert path.is_file(), f"Stored PDF for {key} was not found in the library root"
+    return path
 
 
 def note_sidecar_path(root: Path, key: str) -> Path:
@@ -103,7 +101,7 @@ def test_library_title_falls_back_to_stem_when_title_hint_is_blank(
     assert entries[0]["title"] == "1703.05882"
 
 
-def test_note_round_trip_writes_sidecar_next_to_pdf(
+def test_note_round_trip_writes_markdown_file_next_to_pdf(
     client: TestClient,
     sample_pdf_bytes: bytes,
     tmp_path: Path,
@@ -113,8 +111,8 @@ def test_note_round_trip_writes_sidecar_next_to_pdf(
     put = client.put(f"/notes/{key}", json={"key": key, "text": "# Reading notes\n\nlattice stuff"})
     assert put.status_code == 200
 
-    sidecar = tmp_path / "reading-root" / "inbox" / "notes.md"
-    assert sidecar.read_text(encoding="utf-8") == "# Reading notes\n\nlattice stuff"
+    note_path = tmp_path / "reading-root" / "notes.md"
+    assert note_path.read_text(encoding="utf-8") == "# Reading notes\n\nlattice stuff"
 
     get = client.get(f"/notes/{key}")
     assert get.status_code == 200
@@ -301,11 +299,10 @@ def test_concurrent_read_events_persist_all_key_updates(
 ) -> None:
     import concurrent.futures
 
-    inbox = tmp_path / "reading-root" / "inbox"
-    inbox.mkdir(parents=True, exist_ok=True)
+    root = tmp_path / "reading-root"
     keys = [f"paper-{index}.pdf" for index in range(12)]
     for key in keys:
-        (inbox / key).write_bytes(sample_pdf_bytes)
+        (root / key).write_bytes(sample_pdf_bytes)
 
     def record(index: int) -> None:
         response = client.post("/read-event", json={"key": keys[index], "position": index / 10})
@@ -322,7 +319,7 @@ def test_concurrent_read_events_persist_all_key_updates(
         assert positions[key] == pytest.approx(index / 10)
 
 
-def test_delete_removes_pdf_sidecar_assets_and_history(
+def test_delete_removes_pdf_note_clips_and_history(
     client: TestClient,
     sample_pdf_bytes: bytes,
     tmp_path: Path,
@@ -330,15 +327,14 @@ def test_delete_removes_pdf_sidecar_assets_and_history(
     import sqlite3
 
     key = capture(client, sample_pdf_bytes)
-    inbox = tmp_path / "reading-root" / "inbox"
     root = tmp_path / "reading-root"
     clips_dir = root / "clips" / CAPTURED_PAPER_KEY
 
     client.put(f"/notes/{key}", json={"key": key, "text": "notes"})
     client.post(f"/notes/{key}/image", files={"image": ("clip.png", PNG_PIXEL, "image/png")})
     client.post("/read-event", json={"key": key, "position": 0.4})
-    assert (inbox / "notes.pdf").is_file()
-    assert (inbox / "notes.md").is_file()
+    assert (root / "notes.pdf").is_file()
+    assert (root / "notes.md").is_file()
     assert (clips_dir / "clip-01.png").is_file()
 
     db_path = tmp_path / "reading-root" / "library.db"
@@ -351,8 +347,8 @@ def test_delete_removes_pdf_sidecar_assets_and_history(
     response = client.delete(f"/library/{key}")
 
     assert response.status_code == 204
-    assert not (inbox / "notes.pdf").exists()
-    assert not (inbox / "notes.md").exists()
+    assert not (root / "notes.pdf").exists()
+    assert not (root / "notes.md").exists()
     assert not clips_dir.exists()
 
     conn = sqlite3.connect(str(db_path))
@@ -445,11 +441,10 @@ def test_list_library_handles_provenance_less_pdf(
     sample_pdf_bytes: bytes,
     tmp_path: Path,
 ) -> None:
-    inbox = tmp_path / "reading-root" / "inbox"
-    inbox.mkdir(parents=True, exist_ok=True)
+    root = tmp_path / "reading-root"
 
-    # Save a PDF directly to inbox without any provenance metadata
-    (inbox / "local.pdf").write_bytes(sample_pdf_bytes)
+    # Save a PDF directly to the library root without provenance metadata.
+    (root / "local.pdf").write_bytes(sample_pdf_bytes)
 
     response = client.get("/library")
     assert response.status_code == 200
@@ -470,11 +465,10 @@ def test_list_library_handles_corrupted_pdf(
     client: TestClient,
     tmp_path: Path,
 ) -> None:
-    inbox = tmp_path / "reading-root" / "inbox"
-    inbox.mkdir(parents=True, exist_ok=True)
+    root = tmp_path / "reading-root"
 
     # Save a corrupted file with .pdf extension
-    (inbox / "corrupted.pdf").write_bytes(b"not a valid PDF content")
+    (root / "corrupted.pdf").write_bytes(b"not a valid PDF content")
 
     response = client.get("/library")
     assert response.status_code == 200
@@ -492,11 +486,11 @@ def test_atomic_pdf_write_leaves_no_tmp_files(
     tmp_path: Path,
 ) -> None:
     capture(client, sample_pdf_bytes, "notes.pdf")
-    inbox = tmp_path / "reading-root" / "inbox"
+    root = tmp_path / "reading-root"
 
     # Verify the target PDF is written and no .tmp files exist
-    assert (inbox / "notes.pdf").is_file()
-    tmp_files = list(inbox.glob("*.tmp"))
+    assert (root / "notes.pdf").is_file()
+    tmp_files = list(root.glob("*.tmp"))
     assert len(tmp_files) == 0
 
 
@@ -560,9 +554,7 @@ def test_note_image_for_provenance_less_pdf_uses_file_stem_clip_tree(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "reading-root"
-    inbox = root / "inbox"
-    inbox.mkdir(parents=True, exist_ok=True)
-    (inbox / "local.pdf").write_bytes(sample_pdf_bytes)
+    (root / "local.pdf").write_bytes(sample_pdf_bytes)
 
     response = client.post("/notes/local.pdf/image", files={"image": ("clip.png", PNG_PIXEL, "image/png")})
 

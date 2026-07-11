@@ -709,6 +709,7 @@ body {
 }
 
 .nav-expand-btn {
+  width: 40px;
   padding: 8px;
   overflow: hidden;
   border: 1px solid #5e5e5e;
@@ -717,12 +718,13 @@ body {
   background: #444; /* --nav-expand-enabled-bg-color (dark) */
   color: #ddd;
   cursor: pointer;
-  transform: translateX(calc(40px - 100%)); /* only ~40px (the icon) peeks out */
+  transform: translateX(0); /* collapsed: icon only */
   transition: transform 0.15s ease-in-out;
 }
 
 .nav-expand-btn:hover,
 .nav-expand-btn:focus {
+  width: auto;
   transform: translateX(0); /* slide out to reveal the label */
   transition-delay: 0.3s;
   outline: none;
@@ -731,7 +733,7 @@ body {
 .nav-expand-btn-content {
   display: flex;
   align-items: center;
-  transform: translateX(calc(100% - 23px));
+  transform: translateX(0);
   transition: transform 0.15s ease-in-out;
 }
 
@@ -752,6 +754,12 @@ body {
   font-size: 15px;
   padding-inline: 8px 4px;
   white-space: nowrap;
+  visibility: hidden;
+}
+
+.nav-expand-btn:hover .nav-expand-btn-text,
+.nav-expand-btn:focus .nav-expand-btn-text {
+  visibility: visible;
 }
 
 /* ---------- Right Highlights panel (overlay, slides in from the right) ---------- */
@@ -832,6 +840,15 @@ body {
 /* AI outline editor (CodeMirror lives here) */
 .ai-editor {
   padding: 0;
+}
+
+.notes-path {
+  padding: 8px 12px;
+  color: #cfcfcf;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .ai-editor .cm-editor {
@@ -1100,7 +1117,7 @@ body {
   border-radius: 50%;
 }
 
-/* ---------- Key Points: sidecar notes editor + preview ---------- */
+/* ---------- Notes editor + preview ---------- */
 .keypoints-panel {
   flex-direction: column;
 }

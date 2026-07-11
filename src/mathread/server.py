@@ -83,20 +83,15 @@ def create_app(
 
     @app.get("/status", response_model=BackendStatus)
     def status_endpoint(request: Request) -> BackendStatus:
-        inbox = root / "inbox"
         root_writable = root.is_dir() and access(root, W_OK)
-        inbox_writable = inbox.is_dir() and access(inbox, W_OK)
         return BackendStatus(
             backend_url=str(request.base_url).rstrip("/"),
             portal_url=portal_url,
             root=root,
-            inbox=inbox,
             service=BackendServiceStatus(name="mathread", version=__version__),
             storage=BackendStorageStatus(
                 root_exists=root.exists(),
                 root_writable=root_writable,
-                inbox_exists=inbox.exists(),
-                inbox_writable=inbox_writable,
             ),
             capabilities=BackendCapabilities(
                 capture=root_writable,
