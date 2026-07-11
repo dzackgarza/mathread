@@ -62,6 +62,138 @@ class NoteVersionConflictError(Exception):
     """Note has been modified elsewhere; version mismatch."""
 
 
+def _is_markdown_escaped(text: str, index: int) -> bool:
+    backslashes = 0
+    index -= 1
+    while index >= 0 and text[index] == "\\":
+        backslashes += 1
+        index -= 1
+    return backslashes % 2 == 1
+
+
+def _closing_markdown_delimiter(
+    text: str,
+    start: int,
+    opening: str,
+    closing: str,
+) -> int | None:
+    depth = 1
+    index = start
+    while index < len(text):
+        character = text[index]
+        if not _is_markdown_escaped(text, index):
+            if character == opening:
+                depth += 1
+            elif character == closing:
+                depth -= 1
+                if depth == 0:
+                    return index
+        index += 1
+    return None
+
+
+def _bare_markdown_destination_end(line: str, start: int) -> int | None:
+    depth = 0
+    index = start
+    while index < len(line):
+        character = line[index]
+        if _is_markdown_escaped(line, index):
+            index += 1
+            continue
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            if depth == 0:
+                return index
+            depth -= 1
+        elif character.isspace():
+            return None
+        index += 1
+    return None
+
+
+def _inline_image_destination(line: str, image_start: int) -> tuple[int, int] | None:
+    label_end = _closing_markdown_delimiter(line, image_start + 2, "[", "]")
+    if label_end is None or label_end + 1 >= len(line) or line[label_end + 1] != "(":
+        return None
+
+    destination_start = label_end + 2
+    if destination_start >= len(line):
+        return None
+    destination_end = _bare_markdown_destination_end(line, destination_start)
+    return None if destination_end is None else (destination_start, destination_end)
+
+
+def _markdown_image_destination_spans(markdown: str) -> Iterator[tuple[int, int]]:
+    fence: tuple[str, int] | None = None
+    offset = 0
+    for line in markdown.splitlines(keepends=True):
+        content = line.rstrip("\r\n")
+        leading_spaces = len(content) - len(content.lstrip(" "))
+        stripped = content[leading_spaces:]
+        fence_character = stripped[:1]
+        fence_length = (
+            len(stripped) - len(stripped.lstrip(fence_character))
+            if fence_character in {"`", "~"}
+            else 0
+        )
+        if fence is not None:
+            closes_fence = (
+                fence_character == fence[0]
+                and fence_length >= fence[1]
+                and not stripped[fence_length:].strip()
+            )
+            if closes_fence:
+                fence = None
+            offset += len(line)
+            continue
+        if leading_spaces <= 3 and fence_length >= 3:
+            fence = (fence_character, fence_length)
+            offset += len(line)
+            continue
+        if leading_spaces >= 4:
+            offset += len(line)
+            continue
+
+        index = 0
+        while index < len(content):
+            if content[index] == "`":
+                code_length = len(content[index:]) - len(content[index:].lstrip("`"))
+                closing_code = content.find("`" * code_length, index + code_length)
+                if closing_code == -1:
+                    index += code_length
+                else:
+                    index = closing_code + code_length
+                continue
+            if content.startswith("![", index) and not _is_markdown_escaped(content, index):
+                destination = _inline_image_destination(content, index)
+                if destination is not None:
+                    yield offset + destination[0], offset + destination[1]
+                    index = destination[1] + 1
+                    continue
+            index += 1
+        offset += len(line)
+
+
+def _rewrite_migrated_clip_destinations(
+    root: Path,
+    note_path: Path,
+    markdown: str,
+) -> str:
+    clips_root = (root / "clips").resolve()
+    edits: list[tuple[int, int, str]] = []
+    for start, end in _markdown_image_destination_spans(markdown):
+        old_destination = markdown[start:end]
+        clip_path = (note_path.parent / old_destination).resolve()
+        if clip_path.is_relative_to(clips_root) and clip_path.suffix.lower() == ".png":
+            edits.append((start, end, clip_path.relative_to(root.resolve()).as_posix()))
+
+    migrated = markdown
+    for start, end, destination in reversed(edits):
+        migrated = f"{migrated[:start]}{destination}{migrated[end:]}"
+    return migrated
+
+
 def migrate_prior_nested_layout(root: Path) -> None:
     """Move the former ``root/inbox`` PDF and note ownership into ``root`` once."""
     inbox = root / "inbox"
@@ -104,6 +236,11 @@ def migrate_prior_nested_layout(root: Path) -> None:
         )
 
     for source, destination in moves:
+        if source.suffix.lower() == ".md":
+            note = source.read_text(encoding="utf-8", newline="")
+            migrated_note = _rewrite_migrated_clip_destinations(root, source, note)
+            if migrated_note != note:
+                source.write_text(migrated_note, encoding="utf-8", newline="")
         source.rename(destination)
     inbox.rmdir()
 

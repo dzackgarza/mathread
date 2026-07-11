@@ -1451,21 +1451,35 @@ function openArxivPage() {
   }
 }
 
+const arxivSourcePath = new RegExp(
+  "^/(?:pdf|abs)/" +
+    "(" +
+    "(?:" +
+    "(?:07(?:0[4-9]|1[0-2])|(?:0[89]|1[0-4])(?:0[1-9]|1[0-2]))\\.(?!0000)\\d{4}" +
+    "|(?:1[5-9]|[2-9]\\d)(?:0[1-9]|1[0-2])\\.(?!00000)\\d{5}" +
+    "|[a-z][a-z0-9-]*(?:\\.[A-Z]{2})?/(?!0000000)\\d{7}" +
+    ")" +
+    "(?:v[1-9]\\d*)?" +
+    ")" +
+    "(?:\\.pdf)?$",
+);
+
 function arxivAbstractUrl(url) {
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
+  if (!URL.canParse(url)) {
+    return null;
+  }
+  const parsed = new URL(url);
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
     return null;
   }
   if (parsed.hostname !== "arxiv.org" && parsed.hostname !== "www.arxiv.org") {
     return null;
   }
-  const match = parsed.pathname.match(/^\/(?:pdf|abs)\/([^/?#]+)(?:\.pdf)?$/i);
+  const match = parsed.pathname.match(arxivSourcePath);
   if (match === null || match[1] === undefined) {
     return null;
   }
-  return `https://arxiv.org/abs/${match[1].replace(/\.pdf$/i, "")}`;
+  return `https://arxiv.org/abs/${match[1]}`;
 }
 
 // Scholar links dropdown (grad-cap button): Cited by / Related / All versions.
