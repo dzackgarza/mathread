@@ -52,11 +52,8 @@ def store_pdf(
         raise InvalidPdfCaptureError from None
 
     original_sha256 = sha256(pdf_bytes).hexdigest()
-    inbox = root / "inbox"
-    inbox.mkdir(parents=True, exist_ok=True)
-
     destination, existing = destination_for_pdf(
-        inbox,
+        root,
         normalized_pdf_filename(filename),
         original_sha256,
     )

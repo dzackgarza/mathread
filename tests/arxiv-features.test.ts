@@ -1,6 +1,6 @@
 // Full-feature pass of the reader against real math arXiv PDFs: capture through
 // the backend, render, text-selection highlight, annotation persisted as a pandoc
-// fenced div in the on-disk markdown sidecar, re-render after reload, re-render of
+// fenced div in the on-disk markdown file, re-render after reload, re-render of
 // a hand-authored block, comment editing, deletion, notes preview, and search.
 //
 // The PDFs are real arXiv papers, downloaded once into tests/fixtures/arxiv/ and
@@ -60,7 +60,7 @@ interface Harness {
   backendPort: number;
   readingRoot: string;
   key: string;
-  sidecarPath: string;
+  notePath: string;
 }
 
 async function withArxivReader(
@@ -132,11 +132,7 @@ async function withArxivReader(
     );
     const storedPath = (captured as { stored_path: string }).stored_path;
     const key = storedPath.split("/").pop()!;
-    const sidecarPath = join(
-      readingRoot,
-      "inbox",
-      key.replace(/\.pdf$/, ".md"),
-    );
+    const notePath = join(readingRoot, key.replace(/\.pdf$/, ".md"));
 
     // Feature: the capture is listed in the backend library.
     const library: unknown = await (
@@ -174,7 +170,7 @@ async function withArxivReader(
       `chrome-extension://${extensionId}/reader/reader.html?key=${encodeURIComponent(key)}`,
     );
 
-    await run({ page, backendPort, readingRoot, key, sidecarPath });
+    await run({ page, backendPort, readingRoot, key, notePath });
     expect(pageFailures).toEqual([]);
     await page.close();
   } finally {
@@ -190,11 +186,11 @@ async function withArxivReader(
 
 for (const arxivId of ARXIV_IDS) {
   test(
-    `arXiv ${arxivId}: annotations persist as fenced divs in the sidecar and re-render from it`,
+    `arXiv ${arxivId}: annotations persist as fenced divs in the note file and re-render from it`,
     async () => {
       await withArxivReader(
         arxivId,
-        async ({ page, backendPort, key, sidecarPath }) => {
+        async ({ page, backendPort, key, notePath }) => {
           // Feature: every page of the real paper renders with a live text layer.
           const pageTotal = await waitForNonEmptyText(page, "#page-total");
           const pageCount = Number(pageTotal);
@@ -248,15 +244,15 @@ for (const arxivId of ARXIV_IDS) {
           );
 
           // Feature: autosave persists the annotation as a pandoc fenced div in the
-          // on-disk markdown sidecar, carrying page/color/rects/quoted text.
+          // on-disk markdown file, carrying page/color/rects/quoted text.
           await waitFor(
             () =>
-              existsSync(sidecarPath) &&
-              readFileSync(sidecarPath, "utf8").includes("::: {.annotation"),
+              existsSync(notePath) &&
+              readFileSync(notePath, "utf8").includes("::: {.annotation"),
             15_000,
           );
-          const sidecar = readFileSync(sidecarPath, "utf8");
-          const stored = parseAnnotations(sidecar);
+          const note = readFileSync(notePath, "utf8");
+          const stored = parseAnnotations(note);
           expect(stored.length).toBe(1);
           expect(stored[0]!.pageNumber).toBe(1);
           expect(stored[0]!.color).toBe("#91edd0");
@@ -269,11 +265,11 @@ for (const arxivId of ARXIV_IDS) {
           await commentBox.fill("checked against Nikulin");
           await commentBox.blur();
           await waitFor(() => {
-            const parsed = parseAnnotations(readFileSync(sidecarPath, "utf8"));
+            const parsed = parseAnnotations(readFileSync(notePath, "utf8"));
             return parsed[0]?.comment === "checked against Nikulin";
           }, 15_000);
 
-          // Feature: a reload re-renders the highlight purely from the sidecar markdown.
+          // Feature: a reload re-renders the highlight purely from the note file markdown.
           await page.reload();
           await waitFor(
             async () => (await page.locator(".highlight-mark").count()) > 0,
@@ -287,7 +283,7 @@ for (const arxivId of ARXIV_IDS) {
 
           // Feature: a hand-authored annotation block (written straight to the note,
           // never through the UI) re-renders on the fly like any other.
-          const current = parseAnnotations(readFileSync(sidecarPath, "utf8"));
+          const current = parseAnnotations(readFileSync(notePath, "utf8"));
           const handBlock = serializeAnnotation({
             id: "hand-authored",
             pageNumber: 2,
@@ -304,7 +300,7 @@ for (const arxivId of ARXIV_IDS) {
               headers: { "content-type": "application/json" },
               body: JSON.stringify({
                 key,
-                text: `${readFileSync(sidecarPath, "utf8")}\n${handBlock}\n`,
+                text: `${readFileSync(notePath, "utf8")}\n${handBlock}\n`,
               }),
             },
           );
@@ -335,11 +331,11 @@ for (const arxivId of ARXIV_IDS) {
           expect(previewText.includes(":::")).toBe(false);
           expect(previewText.includes("hand-written annotation")).toBe(true);
 
-          // Feature: deleting from the sidebar removes the fenced div from the sidecar.
+          // Feature: deleting from the sidebar removes the fenced div from the note file.
           await page.locator(".highlight-item .remove-btn").first().click();
           await waitFor(
             () =>
-              parseAnnotations(readFileSync(sidecarPath, "utf8")).length === 1,
+              parseAnnotations(readFileSync(notePath, "utf8")).length === 1,
             15_000,
           );
 

@@ -78,7 +78,9 @@ type CaptureScenario =
   | "clicked-link"
   | "direct-pdf-tab"
   | "direct-pdf-without-extension"
-  | "large-numdam-pdf";
+  | "large-numdam-pdf"
+  | "arxiv-pdf"
+  | "legacy-arxiv-pdf";
 
 type CaptureArtifacts = {
   root: string;
@@ -149,7 +151,7 @@ test("reader Library panel lists, opens, and trashes captured items against the 
         "large-numdam-pdf",
       );
       writeFileSync(
-        join(readingRoot, "inbox", firstKey.replace(/\.pdf$/, ".md")),
+        join(readingRoot, firstKey.replace(/\.pdf$/, ".md")),
         "existing note\n",
       );
 
@@ -159,13 +161,14 @@ test("reader Library panel lists, opens, and trashes captured items against the 
       await page.locator('.nav-expand-btn[data-tab="library"]').click();
       await waitForLibraryEntryCount(page, 2);
       await expectElementText(
-        page.locator('[data-testid="library-root-path"]'),
+        page.locator('[data-testid="library-folder-path"]'),
         (text) => text === readingRoot,
       );
       await expectElementText(
-        page.locator('[data-testid="library-inbox-path"]'),
-        (text) => text === join(readingRoot, "inbox"),
+        page.locator('[data-testid="library-location-label"]'),
+        (text) => text === "Library folder",
       );
+      expect(await page.locator('[data-testid="library-inbox-path"]').count()).toBe(0);
       expect(
         await page.locator('[data-testid="library-open-root"]').isEnabled(),
       ).toBe(true);
@@ -206,7 +209,7 @@ test("reader Library panel lists, opens, and trashes captured items against the 
       await reader.locator('.menu-item[data-action="copy-view-link"]').click();
       const expectedViewUrl = new URL(page.url());
       expectedViewUrl.searchParams.set("mrpage", "1");
-      expectedViewUrl.searchParams.set("mrzoom", "1.25");
+      expectedViewUrl.searchParams.set("mrzoom", "1.00");
       await waitForClipboardText(page, (text) => text === expectedViewUrl.href);
 
       await reader.locator('.nav-expand-btn[data-tab="library"]').click();
@@ -221,18 +224,16 @@ test("reader Library panel lists, opens, and trashes captured items against the 
       await Bun.sleep(500);
       await waitForLibraryEntryCount(reader, 2);
 
-      // ...accepting removes the PDF and its sidecar from disk and from the list.
+      // ...accepting removes the PDF and its note from disk and from the list.
       page.once("dialog", (dialog) => void dialog.accept());
       await reader
         .locator('[data-testid="library-entry"]', { hasText: "notes" })
         .locator('[data-testid="library-entry-trash"]')
         .click();
       await waitForLibraryEntryCount(reader, 1);
-      expect(existsSync(join(readingRoot, "inbox", firstKey))).toBe(false);
+      expect(existsSync(join(readingRoot, firstKey))).toBe(false);
       expect(
-        existsSync(
-          join(readingRoot, "inbox", firstKey.replace(/\.pdf$/, ".md")),
-        ),
+        existsSync(join(readingRoot, firstKey.replace(/\.pdf$/, ".md"))),
       ).toBe(false);
     },
   );
@@ -240,8 +241,7 @@ test("reader Library panel lists, opens, and trashes captured items against the 
 
 test("reader Library panel opens provenance-less local PDFs from the backend copy", async () => {
   await withExtensionReader(async ({ extensionId, page, readingRoot }) => {
-    mkdirSync(join(readingRoot, "inbox"), { recursive: true });
-    writeFileSync(join(readingRoot, "inbox", "local.pdf"), pdfBytes);
+    writeFileSync(join(readingRoot, "local.pdf"), pdfBytes);
 
     await page.goto(`chrome-extension://${extensionId}/reader/reader.html`, {
       waitUntil: "domcontentloaded",
@@ -337,6 +337,50 @@ test("built extension auto-captures an application/pdf URL without a .pdf suffix
   );
 }, 30_000);
 
+test("reader exposes arXiv source links as a dedicated toolbar button", async () => {
+  await withExtensionReader(async ({ backendPort, courseServer, extensionId, page }) => {
+    const key = await preCapturePdfThroughBackend(backendPort, courseServer, "arxiv-pdf");
+    await page.goto(readerPageUrl(extensionId, key), { waitUntil: "domcontentloaded" });
+    await waitForCanvasCount(page, 1);
+
+    const arxivButton = page.locator("#open-arxiv");
+    await expectElementText(arxivButton, (text) => text.trim() === "");
+    expect(await arxivButton.isVisible()).toBe(true);
+    expect(await arxivButton.getAttribute("title")).toBe("Open arXiv page");
+
+    const popupPromise = page.context().waitForEvent("page");
+    await arxivButton.click();
+    const popup = await popupPromise;
+    await popup.waitForLoadState("domcontentloaded");
+    expect(popup.url()).toBe("https://arxiv.org/abs/2301.12345");
+    await popup.close();
+  });
+}, 120_000);
+
+test("reader opens pre-2007 arXiv provenance with its full archive identifier", async () => {
+  await withExtensionReader(async ({ backendPort, courseServer, extensionId, page }) => {
+    const key = await preCapturePdfThroughBackend(
+      backendPort,
+      courseServer,
+      "legacy-arxiv-pdf",
+    );
+    await page.goto(readerPageUrl(extensionId, key), {
+      waitUntil: "domcontentloaded",
+    });
+    await waitForCanvasCount(page, 1);
+
+    const arxivButton = page.locator("#open-arxiv");
+    expect(await arxivButton.isVisible()).toBe(true);
+
+    const popupPromise = page.context().waitForEvent("page");
+    await arxivButton.click();
+    const popup = await popupPromise;
+    await popup.waitForLoadState("domcontentloaded");
+    expect(popup.url()).toBe("https://arxiv.org/abs/math/0309136v1");
+    await popup.close();
+  });
+}, 120_000);
+
 test("built extension renders every page of a large captured PDF in the reader", async () => {
   const evidence = await runExtensionCapture("large-numdam-pdf");
   assertReaderFrameUrl(evidence.readerFrameUrl, evidence.key);
@@ -356,21 +400,32 @@ test("reader renders all pages of a large PDF with real content", async () => {
         waitUntil: "domcontentloaded",
       });
 
-      // The reader renders every page as a stacked canvas; a fully rendered 6-page
-      // document has 6 canvases and the last one has real ink - proof that late pages
-      // don't silently stay blank.
-      await waitForCanvasCount(page, 6);
-      const rendered = await canvasPixelEvidence(page, 5);
-      expect(rendered.canvasSize).toBeGreaterThan(10_000);
-      expect(rendered.nonWhitePixels).toBeGreaterThan(250);
       await expectElementText(
         page.locator("#zoom-level"),
-        (text) => text === "72%",
+        (text) => text === "90%",
       );
       await expectInputValue(
         page.locator("#page-input"),
         (value) => value === "3",
       );
+
+      // PDF.js bounds simultaneous canvas ownership. Navigate through the real reader
+      // control so the late page enters that rendering window, then prove its canvas
+      // contains the expected substantive ink rather than a blank placeholder.
+      const pageInput = page.locator("#page-input");
+      await pageInput.fill("6");
+      await pageInput.press("Enter");
+      await expectInputValue(pageInput, (value) => value === "6");
+      const latePageCanvasIndex = await page
+        .locator('#pdf-viewer .page[data-page-number="6"] canvas')
+        .evaluate((latePageCanvas) =>
+          Array.from(document.querySelectorAll("#viewer canvas")).indexOf(
+            latePageCanvas,
+          ),
+        );
+      const rendered = await canvasPixelEvidence(page, latePageCanvasIndex);
+      expect(rendered.canvasSize).toBeGreaterThan(10_000);
+      expect(rendered.nonWhitePixels).toBeGreaterThan(250);
     },
   );
 }, 60_000);
@@ -379,7 +434,7 @@ test("built extension fails loudly when the capture backend is down", async () =
   await runBackendUnavailable();
 }, 60_000);
 
-test("reader Key Points panel persists notes to the on-disk sidecar and renders a live preview", async () => {
+test("reader Notes panel persists notes to the on-disk markdown file and renders a live preview", async () => {
   await withExtensionReader(
     async ({ backendPort, courseServer, extensionId, page, readingRoot }) => {
       const key = await preCapturePdfThroughBackend(
@@ -393,6 +448,10 @@ test("reader Key Points panel persists notes to the on-disk sidecar and renders 
       await waitForCanvasCount(page, 1);
 
       await page.locator('.nav-expand-btn[data-tab="keypoints"]').click();
+      await expectElementText(
+        page.locator("#notes-path"),
+        (text) => text === key.replace(/\.pdf$/, ".md"),
+      );
       const editor = page.locator("#ai-editor .cm-content");
       await editor.click();
       await page.keyboard.type("# Heading\n\nSome **bold** text.");
@@ -406,12 +465,8 @@ test("reader Key Points panel persists notes to the on-disk sidecar and renders 
         key,
         (text) => text.includes("# Heading") && text.includes("**bold**"),
       );
-      const sidecarPath = join(
-        readingRoot,
-        "inbox",
-        key.replace(/\.pdf$/, ".md"),
-      );
-      expect(readFileSync(sidecarPath, "utf8")).toBe(noteText);
+      const notePath = join(readingRoot, key.replace(/\.pdf$/, ".md"));
+      expect(readFileSync(notePath, "utf8")).toBe(noteText);
       await expectElementText(
         page.locator("#notes-status"),
         (text) => text === "Saved",
@@ -447,11 +502,7 @@ test("reader Key Points panel blocks stale autosave and resolves disk conflicts"
         courseServer,
         "direct-pdf-tab",
       );
-      const sidecarPath = join(
-        readingRoot,
-        "inbox",
-        key.replace(/\.pdf$/, ".md"),
-      );
+      const sidecarPath = join(readingRoot, key.replace(/\.pdf$/, ".md"));
 
       await page.goto(readerPageUrl(extensionId, key), {
         waitUntil: "domcontentloaded",
@@ -646,9 +697,11 @@ test("reader disables document-only toolbar actions when no document key is open
   });
 }, 120_000);
 
-test("reader keeps exactly one coherent page set after rapid toolbar rerenders", async () => {
+test("reader delegates stable responsive navigation to the PDF.js viewer", async () => {
   await withExtensionReader(
-    async ({ backendPort, courseServer, extensionId, page }) => {
+    async ({ artifacts, backendPort, courseServer, extensionId, page }) => {
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(String(error)));
       const key = await preCapturePdfThroughBackend(
         backendPort,
         courseServer,
@@ -657,32 +710,280 @@ test("reader keeps exactly one coherent page set after rapid toolbar rerenders",
       await page.goto(readerPageUrl(extensionId, key), {
         waitUntil: "domcontentloaded",
       });
-      await waitForCanvasCount(page, 6);
-
+      const pages = page.locator("#pdf-viewer .page");
+      await pages.first().waitFor();
+      await expectElementText(page.locator("#page-total"), (text) => /^\d+$/.test(text));
       const pageTotal = Number(await page.locator("#page-total").textContent());
+      expect(await pages.count()).toBe(pageTotal);
+      expect(await page.getByRole("textbox", { name: "Page number" }).count()).toBe(1);
+
+      await pages.first().evaluate((element) => {
+        element.setAttribute("data-stability-witness", "original-page-view");
+      });
+      await page.locator("#zoom-in").click();
+      await page.locator("#rotate").click();
+      await page.locator("#zoom-out").click();
+      expect(await page.locator('[data-stability-witness="original-page-view"]').count()).toBe(1);
+
+      await page.locator("body").click({ position: { x: 700, y: 300 } });
+      await page.keyboard.press("PageDown");
+      await page.keyboard.press("PageDown");
+      expect(await page.locator("#page-input").inputValue()).toBe("3");
+      await page.screenshot({ path: join(artifacts.root, "viewer-desktop.png") });
+
+      await page.locator("#fit-width").click();
       await page.evaluate(() => {
-        const sequence = [
-          "zoom-in",
-          "zoom-out",
-          "rotate",
-          "fit-width",
-          "zoom-in",
-          "rotate",
-          "zoom-out",
-          "fit-width",
-        ];
-        for (let round = 0; round < 3; round += 1) {
-          for (const id of sequence) {
-            document.getElementById(id)?.click();
-          }
-        }
+        document.documentElement.dataset.resizeProofCount = "0";
+        window.addEventListener("resize", () => {
+          const current = Number(
+            document.documentElement.dataset.resizeProofCount,
+          );
+          document.documentElement.dataset.resizeProofCount = String(current + 1);
+        });
+        window.addEventListener("error", (event) => {
+          document.documentElement.dataset.resizeProofError = event.message;
+        });
       });
 
-      const dom = await waitForStablePageDom(page);
-      expect(dom.canvasCount).toBe(pageTotal);
-      expect(dom.pageNumbers).toEqual(
-        Array.from({ length: pageTotal }, (_, index) => String(index + 1)),
+      const collapsedNavGeometry = await waitForFitWidthConvergence(
+        page,
+        "nav-collapsed-initial",
       );
+      await page.locator('.nav-expand-btn[data-tab="library"]').click();
+      const expandedNavGeometry = await waitForFitWidthConvergence(
+        page,
+        "nav-expanded",
+      );
+      expect(expandedNavGeometry.clientWidth).toBeLessThan(
+        collapsedNavGeometry.clientWidth,
+      );
+      expect(expandedNavGeometry.scrollWidth).toBeLessThanOrEqual(
+        expandedNavGeometry.clientWidth + 1,
+      );
+      await page.locator("#nav-collapse").click();
+      const recollapsedNavGeometry = await waitForFitWidthConvergence(
+        page,
+        "nav-recollapsed",
+      );
+      expect(recollapsedNavGeometry.clientWidth).toBe(
+        collapsedNavGeometry.clientWidth,
+      );
+      expect(recollapsedNavGeometry.scrollWidth).toBeLessThanOrEqual(
+        recollapsedNavGeometry.clientWidth + 1,
+      );
+
+      const pageWidths: number[] = [];
+      for (const viewport of [
+        { width: 390, height: 844 },
+        { width: 1100, height: 720 },
+        { width: 480, height: 800 },
+        { width: 900, height: 700 },
+        { width: 390, height: 844 },
+      ]) {
+        const previousResizeCount = Number(
+          await page.locator("html").getAttribute("data-resize-proof-count"),
+        );
+        await page.setViewportSize(viewport);
+        await page.waitForFunction(
+          (previousCount) =>
+            Number(document.documentElement.dataset.resizeProofCount) >
+            previousCount,
+          previousResizeCount,
+        );
+        const geometry = await waitForFitWidthConvergence(
+          page,
+          `viewport-${viewport.width}x${viewport.height}`,
+        );
+        pageWidths.push(geometry.pageWidth);
+        expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+      }
+      expect(pageWidths[1]).toBeGreaterThan(pageWidths[0]);
+      expect(pageWidths[2]).toBeLessThan(pageWidths[1]);
+      expect(pageWidths[3]).toBeGreaterThan(pageWidths[2]);
+      expect(pageWidths[4]).toBeLessThan(pageWidths[3]);
+
+      await page.screenshot({ path: join(artifacts.root, "viewer-mobile.png") });
+      const toolbarGeometry = await page.locator(".toolbar").evaluate((toolbar) => ({
+        clientWidth: toolbar.clientWidth,
+        scrollWidth: toolbar.scrollWidth,
+      }));
+      expect(toolbarGeometry.scrollWidth).toBeLessThanOrEqual(toolbarGeometry.clientWidth);
+      expect(await page.locator("#fit-width").isVisible()).toBe(true);
+      expect(pageErrors).toEqual([]);
+      expect(
+        await page.locator("html").getAttribute("data-resize-proof-error"),
+      ).toBeNull();
+    },
+  );
+}, 120_000);
+
+test("persisted fit-width setting controls ordinary reader opens without a zoom override", async () => {
+  await withExtensionReader(
+    async ({ artifacts, backendPort, context, courseServer, extensionId, page }) => {
+      const key = await preCapturePdfThroughBackend(
+        backendPort,
+        courseServer,
+        "large-numdam-pdf",
+      );
+      await persistFitWidthOnOpen(context);
+      const ordinaryOpenUrl = readerPageUrl(extensionId, key);
+      expect(new URL(ordinaryOpenUrl).searchParams.has("zoom")).toBe(false);
+
+      await page.setViewportSize({ width: 600, height: 760 });
+      await page.goto(ordinaryOpenUrl, { waitUntil: "domcontentloaded" });
+      await page.locator("#pdf-viewer .page").first().waitFor();
+      const narrow = await waitForFitWidthConvergence(
+        page,
+        "persisted-setting-narrow",
+      );
+      await page.screenshot({
+        path: join(artifacts.root, "persisted-fit-width-narrow.png"),
+      });
+
+      await page.setViewportSize({ width: 1000, height: 760 });
+      const wide = await waitForFitWidthConvergence(
+        page,
+        "persisted-setting-wide",
+      );
+      await page.screenshot({
+        path: join(artifacts.root, "persisted-fit-width-wide.png"),
+      });
+      expect(wide.clientWidth).toBeGreaterThan(narrow.clientWidth + 300);
+      expect(wide.pageWidth).toBeGreaterThan(narrow.pageWidth + 300);
+
+      await page.setViewportSize({ width: 600, height: 760 });
+      const narrowAgain = await waitForFitWidthConvergence(
+        page,
+        "persisted-setting-narrow-again",
+      );
+      expect(
+        Math.abs(narrowAgain.pageWidth - narrow.pageWidth),
+      ).toBeLessThanOrEqual(1);
+    },
+  );
+}, 120_000);
+
+test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", async () => {
+  await withExtensionReader(
+    async ({ context, extensionId, page, readingRoot }) => {
+      const fixtureRoot = join("tests", "fixtures", "pdfjs");
+      const fixtureNames = [
+        "annotation-link-text-popup.pdf",
+        "hello_world_rotated.pdf",
+        "extract_link.pdf",
+        "copy_paste_ligatures.pdf",
+        "cross-span-search.pdf",
+        "bitmap-symbol-textcomposite.pdf",
+      ];
+      for (const fixtureName of fixtureNames) {
+        writeFileSync(
+          join(readingRoot, fixtureName),
+          readFileSync(join(fixtureRoot, fixtureName)),
+        );
+      }
+
+      const cdp = await context.newCDPSession(page);
+      await cdp.send("Emulation.setDeviceMetricsOverride", {
+        width: 900,
+        height: 900,
+        deviceScaleFactor: 2,
+        mobile: false,
+      });
+
+      await page.goto(readerPageUrl(extensionId, "hello_world_rotated.pdf"), {
+        waitUntil: "domcontentloaded",
+      });
+      const rotatedPage = page.locator('#pdf-viewer .page[data-page-number="1"]');
+      const rotatedCanvas = rotatedPage.locator("canvas");
+      await rotatedCanvas.waitFor();
+      const rotatedGeometry = await rotatedPage.evaluate((element) => ({
+        width: element.clientWidth,
+        height: element.clientHeight,
+      }));
+      expect(rotatedGeometry.width).toBeGreaterThan(rotatedGeometry.height);
+      const dprGeometry = await rotatedCanvas.evaluate((canvas) => ({
+        backingWidth: canvas.width,
+        cssWidth: canvas.getBoundingClientRect().width,
+        devicePixelRatio: window.devicePixelRatio,
+      }));
+      expect(dprGeometry.devicePixelRatio).toBe(2);
+      expect(Math.abs(dprGeometry.backingWidth - 2 * dprGeometry.cssWidth)).toBeLessThanOrEqual(2);
+
+      await page.goto(readerPageUrl(extensionId, "extract_link.pdf"), {
+        waitUntil: "domcontentloaded",
+      });
+      const internalLink = page.locator('#pdf-viewer .annotationLayer a').first();
+      await internalLink.waitFor();
+      await internalLink.click();
+      await page.waitForFunction(() => {
+        const input = document.getElementById("page-input");
+        return input instanceof HTMLInputElement && input.value === "2";
+      });
+      expect(await page.locator("#page-input").inputValue()).toBe("2");
+
+      await page.goto(readerPageUrl(extensionId, "annotation-link-text-popup.pdf"), {
+        waitUntil: "domcontentloaded",
+      });
+      const externalLink = page.locator('#pdf-viewer .annotationLayer a[href="http://www.mozilla.org/"]');
+      await externalLink.waitFor();
+      const externalPagePromise = context.waitForEvent("page");
+      await externalLink.click();
+      const externalPage = await externalPagePromise;
+      await externalPage.waitForLoadState("domcontentloaded");
+      expect(new URL(externalPage.url()).hostname).toBe("www.mozilla.org");
+      await externalPage.close();
+
+      for (const [fixtureName, query] of [
+        ["copy_paste_ligatures.pdf", "ffi"],
+        ["cross-span-search.pdf", "theorem 4.2"],
+      ] as const) {
+        await page.goto(readerPageUrl(extensionId, fixtureName), {
+          waitUntil: "domcontentloaded",
+        });
+        await page.locator("#search-toggle").click();
+        await page.locator("#search-input").fill(query);
+        await expectElementText(
+          page.locator("#search-count"),
+          (text) => /^1 \/ [1-9]\d*$/.test(text),
+        );
+      }
+
+      await page.goto(readerPageUrl(extensionId, "bitmap-symbol-textcomposite.pdf"), {
+        waitUntil: "domcontentloaded",
+      });
+      const jbig2Evidence = await canvasPixelEvidence(page, 0);
+      expect(jbig2Evidence.canvasSize).toBeGreaterThan(10_000);
+      expect(jbig2Evidence.nonWhitePixels).toBeGreaterThan(250);
+    },
+  );
+}, 120_000);
+
+test("intercepted reader owns shortcuts without escaping the Notes editor", async () => {
+  await withExtensionReader(
+    async ({ courseServer, page, readingRoot }) => {
+      await page.goto(`${courseServer.url.origin}/notes.pdf`);
+      const storedPath = await waitForStoredPdf(readingRoot);
+      const key = storedKeyFromPath(storedPath);
+      const reader = await waitForReaderFrame(page, key);
+      await reader.locator("#pdf-viewer .page canvas").first().waitFor();
+
+      const initialZoom = await reader.locator("#zoom-level").textContent();
+      await page.keyboard.press("Control+=");
+      await expectElementText(
+        reader.locator("#zoom-level"),
+        (text) => text !== initialZoom,
+      );
+      expect(await page.evaluate(() => window.devicePixelRatio)).toBe(1);
+
+      await reader.locator('.nav-expand-btn[data-tab="keypoints"]').click();
+      const editor = reader.locator("#ai-editor .cm-content");
+      await editor.waitFor();
+      await editor.click();
+      const pageBeforeEditorKeys = await reader.locator("#page-input").inputValue();
+      await page.keyboard.press("End");
+      await page.keyboard.press("Control+f");
+      expect(await reader.locator("#page-input").inputValue()).toBe(pageBeforeEditorKeys);
+      expect(await reader.locator("#search-bar").evaluate((bar) => bar.classList.contains("open"))).toBe(false);
     },
   );
 }, 120_000);
@@ -863,6 +1164,7 @@ async function runExtensionCapture(
 }
 
 type ExtensionReaderEvidence = {
+  artifacts: CaptureArtifacts;
   backend: RunningBackend;
   backendPort: number;
   context: BrowserContext;
@@ -917,6 +1219,7 @@ async function withExtensionReader(
     attachPageDiagnostics(page, artifacts, "direct-pdf-tab");
 
     await callback({
+      artifacts,
       backend,
       backendPort,
       context,
@@ -943,16 +1246,54 @@ async function preCapturePdfThroughBackend(
   courseServer: RunningCourseServer,
   scenario: CaptureScenario,
 ): Promise<string> {
+  if (scenario === "arxiv-pdf") {
+    const form = new FormData();
+    form.set("pdf_url", "https://arxiv.org/pdf/2301.12345");
+    form.set("source_url", "https://arxiv.org/abs/2301.12345");
+    form.set("title_hint", "arXiv:2301.12345");
+    form.set("pdf", new Blob([pdfBytes], { type: "application/pdf" }), "2301.12345.pdf");
+    const response = await fetch(`http://127.0.0.1:${backendPort}/capture-bytes`, {
+      method: "POST",
+      body: form,
+    });
+    expect(response.ok).toBe(true);
+    const value: unknown = await response.json();
+    assert(isRecord(value) && typeof value.stored_path === "string");
+    const key = storedKeyFromPath(value.stored_path);
+    await waitForBackendLibraryKey(backendPort, key);
+    return key;
+  }
+  if (scenario === "legacy-arxiv-pdf") {
+    const form = new FormData();
+    form.set("pdf_url", "https://arxiv.org/pdf/math/0309136v1");
+    form.set("source_url", "https://arxiv.org/pdf/math/0309136v1");
+    form.set("title_hint", "arXiv:math/0309136v1");
+    form.set(
+      "pdf",
+      new Blob([pdfBytes], { type: "application/pdf" }),
+      "math_0309136v1.pdf",
+    );
+    const response = await fetch(`http://127.0.0.1:${backendPort}/capture-bytes`, {
+      method: "POST",
+      body: form,
+    });
+    expect(response.ok).toBe(true);
+    const value: unknown = await response.json();
+    assert(isRecord(value) && typeof value.stored_path === "string");
+    const key = storedKeyFromPath(value.stored_path);
+    await waitForBackendLibraryKey(backendPort, key);
+    return key;
+  }
   const pdfUrl = `${courseServer.url.origin}${pdfPathForScenario(scenario)}`;
   const pdfResponse = await fetch(pdfUrl, {
     headers: { cookie: `${cookieName}=${cookieValue}` },
   });
   expect(pdfResponse.ok).toBe(true);
-  const pdfBytes = await pdfResponse.arrayBuffer();
+  const responsePdfBytes = await pdfResponse.arrayBuffer();
   const form = new FormData();
   form.append(
     "pdf",
-    new Blob([pdfBytes], { type: "application/pdf" }),
+    new Blob([responsePdfBytes], { type: "application/pdf" }),
     pdfPathForScenario(scenario).split("/").pop() ?? "document.pdf",
   );
   form.append("pdf_url", pdfUrl);
@@ -1408,6 +1749,33 @@ async function legacyHighlightsRaw(
   );
 }
 
+async function persistFitWidthOnOpen(context: BrowserContext): Promise<void> {
+  const serviceWorker = context
+    .serviceWorkers()
+    .find((worker) => worker.url().startsWith("chrome-extension://"));
+  assert(serviceWorker !== undefined);
+  await serviceWorker.evaluate(async () => {
+    const chromeApi = (
+      globalThis as typeof globalThis & {
+        chrome: {
+          storage: {
+            local: {
+              set(items: Record<string, unknown>): Promise<void>;
+            };
+          };
+        };
+      }
+    ).chrome;
+    await chromeApi.storage.local.set({
+      "mathread.settings": {
+        autosaveMs: 800,
+        fitWidthOnOpen: true,
+        lineNumbers: true,
+      },
+    });
+  });
+}
+
 async function waitForStablePageDom(
   page: Page,
 ): Promise<{ canvasCount: number; pageNumbers: string[] }> {
@@ -1434,6 +1802,73 @@ async function waitForStablePageDom(
     await Bun.sleep(100);
   }
   return lastDom;
+}
+
+type FitWidthGeometry = {
+  clientWidth: number;
+  pageWidth: number;
+  scrollWidth: number;
+};
+
+async function waitForFitWidthConvergence(
+  page: Page,
+  transition: string,
+): Promise<FitWidthGeometry> {
+  await page.evaluate(() => {
+    delete document.documentElement.dataset.fitWidthProof;
+  });
+
+  try {
+    const proof = await page.waitForFunction(
+      (transitionLabel) => {
+        const viewer = document.getElementById("viewer");
+        const firstPage = document.querySelector("#pdf-viewer .page");
+        if (!(viewer instanceof HTMLElement)) {
+          throw new TypeError("Expected the PDF viewer container");
+        }
+        if (!(firstPage instanceof HTMLElement)) {
+          throw new TypeError("Expected a rendered PDF page");
+        }
+
+        const geometry = {
+          clientWidth: viewer.clientWidth,
+          pageWidth: firstPage.getBoundingClientRect().width,
+          scrollWidth: viewer.scrollWidth,
+        };
+        const previous = JSON.parse(
+          document.documentElement.dataset.fitWidthProof ??
+            JSON.stringify({ signature: "", stableFrames: 0 }),
+        ) as { signature: string; stableFrames: number };
+        const signature = JSON.stringify(geometry);
+        const stableFrames =
+          geometry.scrollWidth <= geometry.clientWidth + 1 &&
+          signature === previous.signature
+            ? previous.stableFrames + 1
+            : 0;
+        const current = {
+          geometry,
+          signature,
+          stableFrames,
+          transition: transitionLabel,
+        };
+        document.documentElement.dataset.fitWidthProof = JSON.stringify(current);
+        return stableFrames >= 3 ? current : false;
+      },
+      transition,
+      { polling: "raf", timeout: 10_000 },
+    );
+    const result = (await proof.jsonValue()) as { geometry: FitWidthGeometry };
+    await proof.dispose();
+    return result.geometry;
+  } catch (error) {
+    const lastProof = await page
+      .locator("html")
+      .getAttribute("data-fit-width-proof");
+    throw new Error(
+      `Fit-width did not converge during ${transition}: ${lastProof ?? "no geometry sampled"}`,
+      { cause: error },
+    );
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1558,7 +1993,8 @@ function startCourseServer(eventsLogPath: string): RunningCourseServer {
       if (
         url.pathname === "/notes.pdf" ||
         url.pathname === "/pdf/2301.12345" ||
-        url.pathname === "/item/AST_1992__211__1_0.pdf"
+        url.pathname === "/item/AST_1992__211__1_0.pdf" ||
+        url.pathname === "/arxiv/pdf/2301.12345"
       ) {
         if (
           courseRequest.cookie?.includes(`${cookieName}=${cookieValue}`) !==
@@ -1679,6 +2115,12 @@ function pdfPathForScenario(scenario: CaptureScenario): string {
   if (scenario === "large-numdam-pdf") {
     return "/item/AST_1992__211__1_0.pdf";
   }
+  if (scenario === "arxiv-pdf") {
+    return "/arxiv/pdf/2301.12345";
+  }
+  if (scenario === "legacy-arxiv-pdf") {
+    return "/arxiv/pdf/math/0309136v1";
+  }
   if (scenario === "direct-pdf-without-extension") {
     return "/pdf/2301.12345";
   }
@@ -1778,22 +2220,19 @@ async function waitForHttpService(url: string): Promise<void> {
 }
 
 async function waitForStoredPdf(readingRoot: string): Promise<string> {
-  const inbox = join(readingRoot, "inbox");
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (existsSync(inbox)) {
-      const pdfs = readdirSync(inbox)
-        .filter((filename) => filename.endsWith(".pdf"))
-        .map((filename) => join(inbox, filename));
-      if (pdfs.length > 0) {
-        assert.equal(pdfs.length, 1);
-        const storedPath = pdfs[0];
-        assert(storedPath !== undefined);
-        return storedPath;
-      }
+    const pdfs = readdirSync(readingRoot)
+      .filter((filename) => filename.endsWith(".pdf"))
+      .map((filename) => join(readingRoot, filename));
+    if (pdfs.length > 0) {
+      assert.equal(pdfs.length, 1);
+      const storedPath = pdfs[0];
+      assert(storedPath !== undefined);
+      return storedPath;
     }
     await Bun.sleep(100);
   }
-  throw new Error(`MathRead backend did not store a PDF under ${inbox}`);
+  throw new Error(`MathRead backend did not store a PDF under ${readingRoot}`);
 }
 
 function pdfDocinfo(storedPath: string): Record<string, string> {

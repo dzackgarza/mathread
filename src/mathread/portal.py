@@ -1,7 +1,7 @@
-"""Reading-portal HTTP surface: library listing, sidecar notes, region images, reads.
+"""Reading-portal HTTP surface: library listing, notes, region images, reads.
 
 Mounted onto the capture app in `server.py`. The capture endpoints own writing PDFs;
-these own the reading side over the same `<root>/inbox` store.
+these own the reading side over the same library root.
 """
 
 from __future__ import annotations

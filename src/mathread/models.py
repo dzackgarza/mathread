@@ -51,8 +51,6 @@ class BackendStorageStatus(BaseModel):
 
     root_exists: bool
     root_writable: bool
-    inbox_exists: bool
-    inbox_writable: bool
 
 
 class BackendCapabilities(BaseModel):
@@ -70,7 +68,6 @@ class BackendStatus(BaseModel):
     backend_url: str
     portal_url: str
     root: Path
-    inbox: Path
     service: BackendServiceStatus
     storage: BackendStorageStatus
     capabilities: BackendCapabilities

@@ -16,6 +16,7 @@ from mathread.library import (
     InvalidNoteImageError,
     OpenRootCommand,
     UnknownLibraryKeyError,
+    migrate_prior_nested_layout,
 )
 from mathread.models import (
     BackendCapabilities,
@@ -35,6 +36,7 @@ def create_app(
     portal_url: str = DEFAULT_PORTAL_URL,
     open_root_command: OpenRootCommand = DEFAULT_OPEN_ROOT_COMMAND,
 ) -> FastAPI:
+    migrate_prior_nested_layout(root)
     app = FastAPI(title="MathRead")
 
     # Local reading portal (vite dev + <slug>.localhost) reaches the backend cross-origin.
@@ -83,20 +85,15 @@ def create_app(
 
     @app.get("/status", response_model=BackendStatus)
     def status_endpoint(request: Request) -> BackendStatus:
-        inbox = root / "inbox"
         root_writable = root.is_dir() and access(root, W_OK)
-        inbox_writable = inbox.is_dir() and access(inbox, W_OK)
         return BackendStatus(
             backend_url=str(request.base_url).rstrip("/"),
             portal_url=portal_url,
             root=root,
-            inbox=inbox,
             service=BackendServiceStatus(name="mathread", version=__version__),
             storage=BackendStorageStatus(
                 root_exists=root.exists(),
                 root_writable=root_writable,
-                inbox_exists=inbox.exists(),
-                inbox_writable=inbox_writable,
             ),
             capabilities=BackendCapabilities(
                 capture=root_writable,

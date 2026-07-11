@@ -44,7 +44,7 @@ test("capture-bytes endpoint is derived from the extension manifest host permiss
 test("capture-bytes POST sends multipart form and returns the backend stored-path result", async () => {
   const originalFetch = globalThis.fetch;
   const captureResult = {
-    stored_path: "/home/dzack/math-reading/inbox/notes.pdf",
+    stored_path: "/home/dzack/math-reading/notes.pdf",
     original_sha256: "0".repeat(64),
     stored_sha256: "1".repeat(64),
     pdf_url: "https://example.edu/notes.pdf",

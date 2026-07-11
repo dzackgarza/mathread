@@ -1,10 +1,13 @@
 """Reading-portal data plane over the folder-backed library.
 
-PDFs live in ``<root>/inbox``. Extension-captured PDFs carry MathRead provenance in
-their docinfo; user-dropped PDFs may have no provenance and are still first-class local
-library entries. Markdown sidecar notes live beside the PDF. Captured note images live
-under ``<root>/clips/<paper-key>/`` so a paper's clips can be browsed without opening
-the note file. Read history and clip allocation state live in ``<root>/library.db``.
+The capture pipeline (`capture.py`) owns writing PDFs into the configured library
+root with provenance embedded in each PDF. User-dropped PDFs may have no
+provenance and are still first-class local library entries. Markdown notes live
+beside each PDF. Captured note images live under ``<root>/clips/<paper-key>/``.
+Read history and clip allocation state live in ``<root>/library.db``.
+
+Layout for ``<root>/<name>.pdf``:
+    <root>/<name>.md          -- note
 """
 
 from __future__ import annotations
@@ -48,7 +51,7 @@ DEFAULT_OPEN_ROOT_COMMAND: OpenRootCommand = ("xdg-open",)
 
 
 class UnknownLibraryKeyError(Exception):
-    """Requested key does not resolve to a stored PDF in the inbox."""
+    """Requested key does not resolve to a stored PDF in the library folder."""
 
 
 class InvalidNoteImageError(Exception):
@@ -59,8 +62,187 @@ class NoteVersionConflictError(Exception):
     """Note has been modified elsewhere; version mismatch."""
 
 
-def inbox_dir(root: Path) -> Path:
-    return root / "inbox"
+def _is_markdown_escaped(text: str, index: int) -> bool:
+    backslashes = 0
+    index -= 1
+    while index >= 0 and text[index] == "\\":
+        backslashes += 1
+        index -= 1
+    return backslashes % 2 == 1
+
+
+def _closing_markdown_delimiter(
+    text: str,
+    start: int,
+    opening: str,
+    closing: str,
+) -> int | None:
+    depth = 1
+    index = start
+    while index < len(text):
+        character = text[index]
+        if not _is_markdown_escaped(text, index):
+            if character == opening:
+                depth += 1
+            elif character == closing:
+                depth -= 1
+                if depth == 0:
+                    return index
+        index += 1
+    return None
+
+
+def _bare_markdown_destination_end(line: str, start: int) -> int | None:
+    depth = 0
+    index = start
+    while index < len(line):
+        character = line[index]
+        if _is_markdown_escaped(line, index):
+            index += 1
+            continue
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            if depth == 0:
+                return index
+            depth -= 1
+        elif character.isspace():
+            return None
+        index += 1
+    return None
+
+
+def _inline_image_destination(line: str, image_start: int) -> tuple[int, int] | None:
+    label_end = _closing_markdown_delimiter(line, image_start + 2, "[", "]")
+    if label_end is None or label_end + 1 >= len(line) or line[label_end + 1] != "(":
+        return None
+
+    destination_start = label_end + 2
+    if destination_start >= len(line):
+        return None
+    destination_end = _bare_markdown_destination_end(line, destination_start)
+    return None if destination_end is None else (destination_start, destination_end)
+
+
+def _markdown_image_destination_spans(markdown: str) -> Iterator[tuple[int, int]]:
+    fence: tuple[str, int] | None = None
+    offset = 0
+    for line in markdown.splitlines(keepends=True):
+        content = line.rstrip("\r\n")
+        leading_spaces = len(content) - len(content.lstrip(" "))
+        stripped = content[leading_spaces:]
+        fence_character = stripped[:1]
+        fence_length = (
+            len(stripped) - len(stripped.lstrip(fence_character))
+            if fence_character in {"`", "~"}
+            else 0
+        )
+        if fence is not None:
+            closes_fence = (
+                fence_character == fence[0]
+                and fence_length >= fence[1]
+                and not stripped[fence_length:].strip()
+            )
+            if closes_fence:
+                fence = None
+            offset += len(line)
+            continue
+        if leading_spaces <= 3 and fence_length >= 3:
+            fence = (fence_character, fence_length)
+            offset += len(line)
+            continue
+        if leading_spaces >= 4:
+            offset += len(line)
+            continue
+
+        index = 0
+        while index < len(content):
+            if content[index] == "`":
+                code_length = len(content[index:]) - len(content[index:].lstrip("`"))
+                closing_code = content.find("`" * code_length, index + code_length)
+                if closing_code == -1:
+                    index += code_length
+                else:
+                    index = closing_code + code_length
+                continue
+            if content.startswith("![", index) and not _is_markdown_escaped(content, index):
+                destination = _inline_image_destination(content, index)
+                if destination is not None:
+                    yield offset + destination[0], offset + destination[1]
+                    index = destination[1] + 1
+                    continue
+            index += 1
+        offset += len(line)
+
+
+def _rewrite_migrated_clip_destinations(
+    root: Path,
+    note_path: Path,
+    markdown: str,
+) -> str:
+    clips_root = (root / "clips").resolve()
+    edits: list[tuple[int, int, str]] = []
+    for start, end in _markdown_image_destination_spans(markdown):
+        old_destination = markdown[start:end]
+        clip_path = (note_path.parent / old_destination).resolve()
+        if clip_path.is_relative_to(clips_root) and clip_path.suffix.lower() == ".png":
+            edits.append((start, end, clip_path.relative_to(root.resolve()).as_posix()))
+
+    migrated = markdown
+    for start, end, destination in reversed(edits):
+        migrated = f"{migrated[:start]}{destination}{migrated[end:]}"
+    return migrated
+
+
+def migrate_prior_nested_layout(root: Path) -> None:
+    """Move the former ``root/inbox`` PDF and note ownership into ``root`` once."""
+    inbox = root / "inbox"
+    if not inbox.exists():
+        return
+
+    assert inbox.is_dir(), (
+        "Prior MathRead library path must be a real directory before migration; "
+        f"path={inbox}"
+    )
+    sources = sorted(inbox.iterdir())
+    invalid_sources = [
+        source
+        for source in sources
+        if not source.is_file()
+        or source.suffix.lower() not in {".pdf", ".md"}
+    ]
+    assert not invalid_sources, (
+        "Prior MathRead inbox contains ownership outside the PDF/note transition; "
+        f"unexpected={invalid_sources}; move or remove these entries before starting MathRead"
+    )
+
+    pdf_names = {source.name for source in sources if source.suffix.lower() == ".pdf"}
+    orphan_notes = [
+        source
+        for source in sources
+        if source.suffix.lower() == ".md" and source.with_suffix(".pdf").name not in pdf_names
+    ]
+    assert not orphan_notes, (
+        "Prior MathRead inbox contains notes without their owned PDFs; "
+        f"orphan_notes={orphan_notes}; restore the matching PDFs before starting MathRead"
+    )
+
+    moves = [(source, root / source.name) for source in sources]
+    collisions = [(source, destination) for source, destination in moves if destination.exists()]
+    if collisions:
+        raise FileExistsError(
+            "Prior MathRead inbox migration would overwrite canonical library artifacts; "
+            f"collisions={collisions}"
+        )
+
+    for source, destination in moves:
+        if source.suffix.lower() == ".md":
+            note = source.read_text(encoding="utf-8", newline="")
+            migrated_note = _rewrite_migrated_clip_destinations(root, source, note)
+            if migrated_note != note:
+                source.write_text(migrated_note, encoding="utf-8", newline="")
+        source.rename(destination)
+    inbox.rmdir()
 
 
 def history_path(root: Path) -> Path:
@@ -74,7 +256,7 @@ def open_library_root(root: Path, command: OpenRootCommand = DEFAULT_OPEN_ROOT_C
     subprocess.run([*command, str(root)], check=True)
 
 
-def sidecar_paths(pdf_path: Path) -> tuple[Path, Path]:
+def note_paths(pdf_path: Path) -> tuple[Path, Path]:
     """Return (markdown note path, assets directory) co-located with the PDF."""
     return pdf_path.with_suffix(".md"), pdf_path.with_suffix(".assets")
 
@@ -83,7 +265,7 @@ def resolve_pdf(root: Path, key: str) -> Path:
     """Map a library key to its stored PDF, rejecting traversal and missing keys."""
     if key != Path(key).name or key in {"", ".", ".."} or not key.endswith(".pdf"):
         raise UnknownLibraryKeyError(key)
-    path = inbox_dir(root) / key
+    path = root / key
     if not path.is_file():
         raise UnknownLibraryKeyError(key)
     return path
@@ -91,13 +273,12 @@ def resolve_pdf(root: Path, key: str) -> Path:
 
 def list_library(root: Path) -> list[LibraryEntry]:
     history = _load_history(root)
-    inbox = inbox_dir(root)
-    if not inbox.is_dir():
+    if not root.is_dir():
         return []
 
     entries: list[LibraryEntry] = []
-    for pdf in sorted(inbox.glob("*.pdf")):
-        note_path, _ = sidecar_paths(pdf)
+    for pdf in sorted(root.glob("*.pdf")):
+        note_path, _ = note_paths(pdf)
         read_state = _read_state(pdf, history)
         try:
             provenance = read_optional_capture_provenance(pdf)
@@ -188,14 +369,14 @@ def _calculate_note_version(note_path: Path) -> str:
 
 
 def read_note(root: Path, key: str) -> tuple[str, str]:
-    note_path, _ = sidecar_paths(resolve_pdf(root, key))
+    note_path, _ = note_paths(resolve_pdf(root, key))
     if note_path.is_file():
         return note_path.read_text(encoding="utf-8"), _calculate_note_version(note_path)
     return "", ""
 
 
 def write_note(root: Path, key: str, text: str, version: str | None = None) -> str:
-    note_path, _ = sidecar_paths(resolve_pdf(root, key))
+    note_path, _ = note_paths(resolve_pdf(root, key))
     if note_path.is_file():
         current_version = _calculate_note_version(note_path)
         if version != current_version:
@@ -205,7 +386,7 @@ def write_note(root: Path, key: str, text: str, version: str | None = None) -> s
 
 
 def overwrite_note(root: Path, key: str, text: str) -> str:
-    note_path, _ = sidecar_paths(resolve_pdf(root, key))
+    note_path, _ = note_paths(resolve_pdf(root, key))
     note_path.write_text(text, encoding="utf-8")
     return _calculate_note_version(note_path)
 
@@ -240,7 +421,7 @@ def write_note_image(root: Path, key: str, png_bytes: bytes) -> str:
         try:
             with image_path.open("xb") as output:
                 output.write(png_bytes)
-            return f"../clips/{paper_key}/{image_path.name}"
+            return f"clips/{paper_key}/{image_path.name}"
         except FileExistsError:
             continue
 
@@ -279,10 +460,10 @@ def resolve_note_asset(root: Path, key: str, filename: str) -> Path:
 
 
 def delete_library_entry(root: Path, key: str) -> None:
-    """Remove a stored PDF together with its sidecar note, assets/clips dir, and read-history."""
+    """Remove a stored PDF together with its note, clips, and read history."""
     pdf = resolve_pdf(root, key)
     paper_key = paper_key_for_cleanup(pdf)
-    note_path, assets_dir = sidecar_paths(pdf)
+    note_path, assets_dir = note_paths(pdf)
     pdf.unlink()
     note_path.unlink(missing_ok=True)
     if assets_dir.is_dir():

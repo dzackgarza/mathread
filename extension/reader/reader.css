@@ -467,9 +467,17 @@ body {
   margin-inline-start: var(--nav-visible-width);
   margin-inline-end: var(--cp-visible-width);
   overflow: auto;
-  padding: 20px 0 80px;
   background: var(--desk-bg);
   transition: margin 0.15s ease-in-out;
+}
+
+.pdfViewer {
+  padding: 20px 0 80px;
+}
+
+.pdfViewer,
+.pdfViewer * {
+  box-sizing: content-box;
 }
 
 /* No transition while the width-adjuster is being dragged. */
@@ -515,6 +523,10 @@ body {
     0 1px 6px rgba(0, 0, 0, 0.24);
 }
 
+.pdfViewer .page {
+  margin: 0 auto 18px;
+}
+
 .page canvas {
   display: block;
 }
@@ -529,17 +541,6 @@ body {
   position: absolute;
   border-radius: 1px;
   mix-blend-mode: multiply;
-}
-
-.search-hit {
-  position: absolute;
-  background: rgba(255, 150, 50, 0.4);
-  border-radius: 1px;
-  pointer-events: none;
-}
-
-.search-hit.current {
-  background: rgba(255, 145, 0, 0.75);
 }
 
 /* ---------- Left sidebar: reproduction of Scholar Reader's .gsr-nav ----------
@@ -708,6 +709,7 @@ body {
 }
 
 .nav-expand-btn {
+  width: 40px;
   padding: 8px;
   overflow: hidden;
   border: 1px solid #5e5e5e;
@@ -716,12 +718,13 @@ body {
   background: #444; /* --nav-expand-enabled-bg-color (dark) */
   color: #ddd;
   cursor: pointer;
-  transform: translateX(calc(40px - 100%)); /* only ~40px (the icon) peeks out */
+  transform: translateX(0); /* collapsed: icon only */
   transition: transform 0.15s ease-in-out;
 }
 
 .nav-expand-btn:hover,
 .nav-expand-btn:focus {
+  width: auto;
   transform: translateX(0); /* slide out to reveal the label */
   transition-delay: 0.3s;
   outline: none;
@@ -730,7 +733,7 @@ body {
 .nav-expand-btn-content {
   display: flex;
   align-items: center;
-  transform: translateX(calc(100% - 23px));
+  transform: translateX(0);
   transition: transform 0.15s ease-in-out;
 }
 
@@ -751,6 +754,12 @@ body {
   font-size: 15px;
   padding-inline: 8px 4px;
   white-space: nowrap;
+  visibility: hidden;
+}
+
+.nav-expand-btn:hover .nav-expand-btn-text,
+.nav-expand-btn:focus .nav-expand-btn-text {
+  visibility: visible;
 }
 
 /* ---------- Right Highlights panel (overlay, slides in from the right) ---------- */
@@ -831,6 +840,15 @@ body {
 /* AI outline editor (CodeMirror lives here) */
 .ai-editor {
   padding: 0;
+}
+
+.notes-path {
+  padding: 8px 12px;
+  color: #cfcfcf;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .ai-editor .cm-editor {
@@ -1099,39 +1117,7 @@ body {
   border-radius: 50%;
 }
 
-/*
- * .textLayer rules below are pdf.js's own companion stylesheet for the
- * TextLayer class imported from vendor/pdfjs/pdf.min.mjs (pdfjs-dist,
- * Apache-2.0), trimmed to what our reader uses. Source:
- * node_modules/pdfjs-dist/web/pdf_viewer.css
- */
-.textLayer {
-  position: absolute;
-  inset: 0;
-  text-align: initial;
-  overflow: clip;
-  opacity: 1;
-  line-height: 1;
-  text-size-adjust: none;
-  transform-origin: 0 0;
-  z-index: 1;
-}
-
-.textLayer span,
-.textLayer br {
-  color: transparent;
-  position: absolute;
-  white-space: pre;
-  cursor: text;
-  transform-origin: 0% 0%;
-  user-select: text;
-}
-
-.textLayer ::selection {
-  background: rgba(120, 170, 255, 0.4);
-}
-
-/* ---------- Key Points: sidecar notes editor + preview ---------- */
+/* ---------- Notes editor + preview ---------- */
 .keypoints-panel {
   flex-direction: column;
 }
@@ -1447,4 +1433,25 @@ body {
   border: 2px solid #ffd166;
   background: rgba(255, 209, 102, 0.15);
   pointer-events: none;
+}
+
+@media (max-width: 767px) {
+  .toolbar {
+    padding-inline: 4px;
+  }
+
+  .tb-left,
+  .tb-right,
+  .tb-divider,
+  #prev-page,
+  #next-page,
+  #rotate,
+  #search-toggle {
+    display: none;
+  }
+
+  .tb-center {
+    width: 100%;
+    justify-content: center;
+  }
 }

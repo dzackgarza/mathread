@@ -32,7 +32,6 @@ const backendDot = element<HTMLSpanElement>("backend-dot");
 const backendSummary = element<HTMLSpanElement>("backend-summary");
 const backendDetail = element<HTMLDivElement>("backend-detail");
 const libraryRoot = element<HTMLSpanElement>("library-root");
-const libraryInbox = element<HTMLSpanElement>("library-inbox");
 const openLibraryRootButton = element<HTMLButtonElement>("open-library-root");
 const openLibraryRootStatus = element<HTMLSpanElement>("open-library-root-status");
 const autoCapturePdfsInput = element<HTMLInputElement>("auto-capture-pdfs");
@@ -46,7 +45,6 @@ async function refreshBackendStatus(): Promise<void> {
   backendDot.classList.remove("ok", "down");
   backendSummary.textContent = "Checking…";
   libraryRoot.textContent = "Checking…";
-  libraryInbox.textContent = "Checking…";
   openLibraryRootButton.disabled = true;
   const origin = backendOriginFromManifest(chrome.runtime.getManifest());
   const health = await backendHealth();
@@ -55,7 +53,6 @@ async function refreshBackendStatus(): Promise<void> {
   if (!health.ok) {
     backendDetail.textContent = `${health.detail}\nStart it with: just serve (in the mathread repo)`;
     libraryRoot.textContent = "Unavailable";
-    libraryInbox.textContent = "Unavailable";
     return;
   }
   const status = await getBackendStatus();
@@ -65,7 +62,6 @@ async function refreshBackendStatus(): Promise<void> {
     `Storage ready: ${status.ready ? "yes" : "no"}`,
   ].join("\n");
   libraryRoot.textContent = status.root;
-  libraryInbox.textContent = status.inbox;
   openLibraryRootButton.disabled = !status.capabilities.open_root;
 }
 
