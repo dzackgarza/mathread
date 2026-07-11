@@ -704,6 +704,7 @@ test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", 
       mkdirSync(inbox, { recursive: true });
       const fixtureRoot = join("tests", "fixtures", "pdfjs");
       const fixtureNames = [
+        "annotation-link-text-popup.pdf",
         "hello_world_rotated.pdf",
         "extract_link.pdf",
         "copy_paste_ligatures.pdf",
@@ -755,6 +756,18 @@ test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", 
         return input instanceof HTMLInputElement && input.value === "2";
       });
       expect(await page.locator("#page-input").inputValue()).toBe("2");
+
+      await page.goto(readerPageUrl(extensionId, "annotation-link-text-popup.pdf"), {
+        waitUntil: "domcontentloaded",
+      });
+      const externalLink = page.locator('#pdf-viewer .annotationLayer a[href="http://www.mozilla.org/"]');
+      await externalLink.waitFor();
+      const externalPagePromise = context.waitForEvent("page");
+      await externalLink.click();
+      const externalPage = await externalPagePromise;
+      await externalPage.waitForLoadState("domcontentloaded");
+      expect(new URL(externalPage.url()).hostname).toBe("www.mozilla.org");
+      await externalPage.close();
 
       for (const [fixtureName, query] of [
         ["copy_paste_ligatures.pdf", "ffi"],
