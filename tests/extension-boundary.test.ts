@@ -107,6 +107,7 @@ type ExtensionCaptureEvidence = {
   metadata: Record<string, string>;
   readerFrameUrl: string;
   storedPath: string;
+  visibleReaderUrl: string;
 };
 
 type RunningBackend = {
@@ -258,22 +259,22 @@ test("reader Library panel opens provenance-less local PDFs from the backend cop
   });
 }, 60_000);
 
-test("built extension captures a clicked PDF link and swaps in the reader without leaving the PDF URL", async () => {
+test("built extension intercepts a clicked PDF directly into an extension-owned reader", async () => {
   const evidence = await runExtensionCapture("clicked-link");
   const expectedCourseUrl = new URL("/course/", evidence.courseOrigin).href;
   const expectedPdfUrl = new URL("/notes.pdf", expectedCourseUrl).href;
 
-  // Reader identity (issue #1): the tab never navigates to an extension page - the
-  // reader mounts as an iframe inside the PDF document, so the address bar keeps the
-  // original source URL.
+  // Direct interception (issue #6): the source PDF response must be redirected before
+  // Chrome commits its native PDF document. The visible extension URL still carries the
+  // canonical source URL so capture provenance and shareable identity are preserved.
   expect(
     evidence.mainFrameNavigations.every(
-      (url) => !url.startsWith("chrome-extension:"),
+      (url) => url !== expectedPdfUrl,
     ),
   ).toBe(true);
-  expect(
-    evidence.mainFrameNavigations.some((url) => url === expectedPdfUrl),
-  ).toBe(true);
+  const visibleReaderUrl = new URL(evidence.visibleReaderUrl);
+  expect(visibleReaderUrl.protocol).toBe("chrome-extension:");
+  expect(visibleReaderUrl.searchParams.get("source")).toBe(expectedPdfUrl);
   assertReaderFrameUrl(evidence.readerFrameUrl, evidence.key);
 
   expect(evidence.metadata["/MathReadSourceURL"]).toBe(expectedCourseUrl);
@@ -1151,6 +1152,7 @@ async function runExtensionCapture(
       metadata,
       readerFrameUrl: readerFrame.url(),
       storedPath,
+      visibleReaderUrl: page.url(),
     };
   } finally {
     if (context !== undefined) {
