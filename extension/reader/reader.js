@@ -143,12 +143,19 @@ const pdfViewer = new PDFViewer({
   findController,
 });
 linkService.setViewer(pdfViewer);
-const viewerResizeObserver = new ResizeObserver(() => {
+
+function refreshFitWidth() {
   if (pdfViewer.currentScaleValue === "page-width") {
     pdfViewer.currentScaleValue = "page-width";
   }
+}
+
+window.addEventListener("resize", refreshFitWidth);
+viewerEl.addEventListener("transitionend", event => {
+  if (event.target === viewerEl) {
+    refreshFitWidth();
+  }
 });
-viewerResizeObserver.observe(viewerEl);
 
 const documentControlIds = [
   "prev-page",
@@ -266,6 +273,7 @@ function startNavResize(event) {
   const onMove = moveEvent => {
     const width = Math.max(220, Math.min(520, moveEvent.clientX));
     bodyEl.style.setProperty("--nav-w", `${width}px`);
+    refreshFitWidth();
   };
   const onUp = () => {
     bodyEl.classList.remove("resizing");

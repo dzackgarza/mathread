@@ -664,6 +664,8 @@ test("reader disables document-only toolbar actions when no document key is open
 test("reader delegates stable responsive navigation to the PDF.js viewer", async () => {
   await withExtensionReader(
     async ({ artifacts, backendPort, courseServer, extensionId, page }) => {
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(String(error)));
       const key = await preCapturePdfThroughBackend(
         backendPort,
         courseServer,
@@ -694,20 +696,87 @@ test("reader delegates stable responsive navigation to the PDF.js viewer", async
       await page.screenshot({ path: join(artifacts.root, "viewer-desktop.png") });
 
       await page.locator("#fit-width").click();
-      await page.setViewportSize({ width: 390, height: 844 });
-      await Bun.sleep(250);
+      await page.evaluate(() => {
+        document.documentElement.dataset.resizeProofCount = "0";
+        window.addEventListener("resize", () => {
+          const current = Number(
+            document.documentElement.dataset.resizeProofCount,
+          );
+          document.documentElement.dataset.resizeProofCount = String(current + 1);
+        });
+        window.addEventListener("error", (event) => {
+          document.documentElement.dataset.resizeProofError = event.message;
+        });
+      });
+
+      const collapsedNavGeometry = await waitForFitWidthConvergence(
+        page,
+        "nav-collapsed-initial",
+      );
+      await page.locator('.nav-expand-btn[data-tab="library"]').click();
+      const expandedNavGeometry = await waitForFitWidthConvergence(
+        page,
+        "nav-expanded",
+      );
+      expect(expandedNavGeometry.clientWidth).toBeLessThan(
+        collapsedNavGeometry.clientWidth,
+      );
+      expect(expandedNavGeometry.scrollWidth).toBeLessThanOrEqual(
+        expandedNavGeometry.clientWidth + 1,
+      );
+      await page.locator("#nav-collapse").click();
+      const recollapsedNavGeometry = await waitForFitWidthConvergence(
+        page,
+        "nav-recollapsed",
+      );
+      expect(recollapsedNavGeometry.clientWidth).toBe(
+        collapsedNavGeometry.clientWidth,
+      );
+      expect(recollapsedNavGeometry.scrollWidth).toBeLessThanOrEqual(
+        recollapsedNavGeometry.clientWidth + 1,
+      );
+
+      const pageWidths: number[] = [];
+      for (const viewport of [
+        { width: 390, height: 844 },
+        { width: 1100, height: 720 },
+        { width: 480, height: 800 },
+        { width: 900, height: 700 },
+        { width: 390, height: 844 },
+      ]) {
+        const previousResizeCount = Number(
+          await page.locator("html").getAttribute("data-resize-proof-count"),
+        );
+        await page.setViewportSize(viewport);
+        await page.waitForFunction(
+          (previousCount) =>
+            Number(document.documentElement.dataset.resizeProofCount) >
+            previousCount,
+          previousResizeCount,
+        );
+        const geometry = await waitForFitWidthConvergence(
+          page,
+          `viewport-${viewport.width}x${viewport.height}`,
+        );
+        pageWidths.push(geometry.pageWidth);
+        expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+      }
+      expect(pageWidths[1]).toBeGreaterThan(pageWidths[0]);
+      expect(pageWidths[2]).toBeLessThan(pageWidths[1]);
+      expect(pageWidths[3]).toBeGreaterThan(pageWidths[2]);
+      expect(pageWidths[4]).toBeLessThan(pageWidths[3]);
+
       await page.screenshot({ path: join(artifacts.root, "viewer-mobile.png") });
-      const geometry = await page.locator("#viewer").evaluate((viewer) => ({
-        clientWidth: viewer.clientWidth,
-        scrollWidth: viewer.scrollWidth,
-      }));
-      expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
       const toolbarGeometry = await page.locator(".toolbar").evaluate((toolbar) => ({
         clientWidth: toolbar.clientWidth,
         scrollWidth: toolbar.scrollWidth,
       }));
       expect(toolbarGeometry.scrollWidth).toBeLessThanOrEqual(toolbarGeometry.clientWidth);
       expect(await page.locator("#fit-width").isVisible()).toBe(true);
+      expect(pageErrors).toEqual([]);
+      expect(
+        await page.locator("html").getAttribute("data-resize-proof-error"),
+      ).toBeNull();
     },
   );
 }, 120_000);
@@ -715,8 +784,6 @@ test("reader delegates stable responsive navigation to the PDF.js viewer", async
 test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", async () => {
   await withExtensionReader(
     async ({ context, extensionId, page, readingRoot }) => {
-      const inbox = join(readingRoot, "inbox");
-      mkdirSync(inbox, { recursive: true });
       const fixtureRoot = join("tests", "fixtures", "pdfjs");
       const fixtureNames = [
         "annotation-link-text-popup.pdf",
@@ -728,7 +795,7 @@ test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", 
       ];
       for (const fixtureName of fixtureNames) {
         writeFileSync(
-          join(inbox, fixtureName),
+          join(readingRoot, fixtureName),
           readFileSync(join(fixtureRoot, fixtureName)),
         );
       }
@@ -1605,6 +1672,73 @@ async function waitForStablePageDom(
     await Bun.sleep(100);
   }
   return lastDom;
+}
+
+type FitWidthGeometry = {
+  clientWidth: number;
+  pageWidth: number;
+  scrollWidth: number;
+};
+
+async function waitForFitWidthConvergence(
+  page: Page,
+  transition: string,
+): Promise<FitWidthGeometry> {
+  await page.evaluate(() => {
+    delete document.documentElement.dataset.fitWidthProof;
+  });
+
+  try {
+    const proof = await page.waitForFunction(
+      (transitionLabel) => {
+        const viewer = document.getElementById("viewer");
+        const firstPage = document.querySelector("#pdf-viewer .page");
+        if (!(viewer instanceof HTMLElement)) {
+          throw new TypeError("Expected the PDF viewer container");
+        }
+        if (!(firstPage instanceof HTMLElement)) {
+          throw new TypeError("Expected a rendered PDF page");
+        }
+
+        const geometry = {
+          clientWidth: viewer.clientWidth,
+          pageWidth: firstPage.getBoundingClientRect().width,
+          scrollWidth: viewer.scrollWidth,
+        };
+        const previous = JSON.parse(
+          document.documentElement.dataset.fitWidthProof ??
+            JSON.stringify({ signature: "", stableFrames: 0 }),
+        ) as { signature: string; stableFrames: number };
+        const signature = JSON.stringify(geometry);
+        const stableFrames =
+          geometry.scrollWidth <= geometry.clientWidth + 1 &&
+          signature === previous.signature
+            ? previous.stableFrames + 1
+            : 0;
+        const current = {
+          geometry,
+          signature,
+          stableFrames,
+          transition: transitionLabel,
+        };
+        document.documentElement.dataset.fitWidthProof = JSON.stringify(current);
+        return stableFrames >= 3 ? current : false;
+      },
+      transition,
+      { polling: "raf", timeout: 10_000 },
+    );
+    const result = (await proof.jsonValue()) as { geometry: FitWidthGeometry };
+    await proof.dispose();
+    return result.geometry;
+  } catch (error) {
+    const lastProof = await page
+      .locator("html")
+      .getAttribute("data-fit-width-proof");
+    throw new Error(
+      `Fit-width did not converge during ${transition}: ${lastProof ?? "no geometry sampled"}`,
+      { cause: error },
+    );
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
