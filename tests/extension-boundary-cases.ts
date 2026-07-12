@@ -1068,6 +1068,100 @@ test("persisted fit-width setting controls ordinary reader opens without a zoom 
   );
 }, 120_000);
 
+test("reader preserves PDF-internal navigation history", async () => {
+  await withExtensionReader(
+    async ({ artifacts, extensionId, page, readingRoot }) => {
+      writeFileSync(
+        join(readingRoot, "extract_link.pdf"),
+        readFileSync(join("tests", "fixtures", "pdfjs", "extract_link.pdf")),
+      );
+
+      const readReaderLocation = () => page.evaluate(() => {
+        const pageInput = document.getElementById("page-input");
+        const zoomLevel = document.getElementById("zoom-level");
+        const viewer = document.getElementById("viewer");
+        const historyState = window.history.state;
+        const destination = historyState?.destination;
+
+        return {
+          page: pageInput instanceof HTMLInputElement ? pageInput.value : null,
+          zoom: zoomLevel?.textContent ?? null,
+          scrollTop: viewer instanceof HTMLElement ? viewer.scrollTop : null,
+          history: historyState && typeof historyState === "object"
+            ? {
+              fingerprint: typeof historyState.fingerprint === "string"
+                ? historyState.fingerprint
+                : null,
+              uid: typeof historyState.uid === "number" ? historyState.uid : null,
+              destination: destination && typeof destination === "object"
+                ? {
+                  page: typeof destination.page === "number" ? destination.page : null,
+                  hash: typeof destination.hash === "string" ? destination.hash : null,
+                  hasExplicitDestination: Array.isArray(destination.dest),
+                }
+                : null,
+            }
+            : null,
+        };
+      });
+
+      await page.goto(readerPageUrl(extensionId, "extract_link.pdf"), {
+        waitUntil: "domcontentloaded",
+      });
+      const internalLink = page.locator('#pdf-viewer .annotationLayer a').first();
+      await internalLink.waitFor();
+      await page.locator("#zoom-in").click();
+      const beforeLink = await readReaderLocation();
+      expect(beforeLink.page).toBe("1");
+      expect(beforeLink.zoom).not.toBeNull();
+      await page.screenshot({ path: join(artifacts.root, "pdf-history-before-link.png") });
+      assertPng(join(artifacts.root, "pdf-history-before-link.png"));
+
+      await internalLink.click();
+      await page.waitForFunction(() => {
+        const input = document.getElementById("page-input");
+        return input instanceof HTMLInputElement && input.value === "2";
+      });
+      const afterLink = await readReaderLocation();
+      expect(afterLink.page).toBe("2");
+      expect(afterLink.history?.fingerprint).not.toBeNull();
+      expect(afterLink.history?.destination?.page).toBe(2);
+      expect(afterLink.history?.destination?.hasExplicitDestination).toBe(true);
+      await page.screenshot({ path: join(artifacts.root, "pdf-history-after-link.png") });
+      assertPng(join(artifacts.root, "pdf-history-after-link.png"));
+
+      await page.keyboard.press("Alt+ArrowLeft");
+      await page.waitForFunction(() => {
+        const input = document.getElementById("page-input");
+        return input instanceof HTMLInputElement && input.value === "1";
+      });
+      const afterBack = await readReaderLocation();
+      expect(afterBack.page).toBe(beforeLink.page);
+      expect(afterBack.zoom).toBe(beforeLink.zoom);
+      expect(afterBack.history?.destination?.page).toBe(1);
+      expect(afterBack.history?.destination?.hash).toMatch(/(?:^|&)page=1(?:&|$)/);
+      expect(afterBack.history?.destination?.hash).toMatch(/(?:^|&)zoom=/);
+      expect(Math.abs((afterBack.scrollTop ?? 0) - (beforeLink.scrollTop ?? 0))).toBeLessThanOrEqual(2);
+      await page.screenshot({ path: join(artifacts.root, "pdf-history-after-back.png") });
+      assertPng(join(artifacts.root, "pdf-history-after-back.png"));
+
+      await page.keyboard.press("Alt+ArrowRight");
+      await page.waitForFunction(() => {
+        const input = document.getElementById("page-input");
+        return input instanceof HTMLInputElement && input.value === "2";
+      });
+      const afterForward = await readReaderLocation();
+      expect(afterForward.page).toBe(afterLink.page);
+      expect(afterForward.zoom).toBe(afterLink.zoom);
+      expect(afterForward.history?.destination?.page).toBe(2);
+      expect(afterForward.history?.destination?.hasExplicitDestination).toBe(true);
+      expect(Math.abs((afterForward.scrollTop ?? 0) - (afterLink.scrollTop ?? 0))).toBeLessThanOrEqual(2);
+      await page.screenshot({ path: join(artifacts.root, "pdf-history-after-forward.png") });
+      assertPng(join(artifacts.root, "pdf-history-after-forward.png"));
+    },
+  );
+}, 120_000);
+
 test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", async () => {
   await withExtensionReader(
     async ({ context, extensionId, page, readingRoot }) => {
