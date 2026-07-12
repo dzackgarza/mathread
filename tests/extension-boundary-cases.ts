@@ -63,6 +63,16 @@ const cookieName = "mathread_session";
 const cookieValue = "extension-test";
 const numdamRegressionPdfUrl =
   "https://www.numdam.org/item/AST_1992__211__1_0.pdf";
+const numdamFixtureDirectory = join(import.meta.dir, "fixtures", "numdam");
+const numdamFixturePath = join(
+  numdamFixtureDirectory,
+  "AST_1992__211__1_0.pdf",
+);
+const numdamFixtureByteLength = 15_648_724;
+const numdamFixtureSha256 =
+  "0b81cacbf796f3ea72d35ab0faaeec2215a8f390e050c9142d621cfd6922976e";
+const numdamFixtureChunkCount = 8;
+const numdamFixtureFetchAttempts = 4;
 const documentControlIds = [
   "prev-page",
   "next-page",
@@ -563,6 +573,7 @@ test("installed reader renders a nonblank late page of the canonical Numdam PDF"
       const key = await preCaptureExternalPdfThroughBackend(
         backendPort,
         numdamRegressionPdfUrl,
+        await numdamFixtureBytes(),
       );
       await page.goto(readerPageUrl(extensionId, key), {
         waitUntil: "domcontentloaded",
@@ -1077,45 +1088,71 @@ test("reader preserves PDF-internal navigation history", async () => {
       );
 
       const readReaderLocation = () => page.evaluate(() => {
-        const pageInput = document.getElementById("page-input");
-        const zoomLevel = document.getElementById("zoom-level");
-      const viewer = document.getElementById("viewer");
-      const historyState = window.history.state;
-      const destination = historyState?.destination;
+        function requireInput(id: string, label: string) {
+          const input = document.getElementById(id);
+          if (!(input instanceof HTMLInputElement)) {
+            throw new TypeError(`Expected the reader ${label}`);
+          }
+          return input;
+        }
 
-      if (!(pageInput instanceof HTMLInputElement)) {
-        throw new TypeError("Expected the reader page input");
-      }
-      if (!(zoomLevel instanceof HTMLElement)) {
-        throw new TypeError("Expected the reader zoom level");
-      }
-      if (!(viewer instanceof HTMLElement)) {
-        throw new TypeError("Expected the reader viewer");
-      }
-      const zoom = zoomLevel.textContent;
-      if (zoom === null) {
-        throw new TypeError("Expected reader zoom content");
-      }
+        function requireElement(id: string, label: string) {
+          const element = document.getElementById(id);
+          if (!(element instanceof HTMLElement)) {
+            throw new TypeError(`Expected the reader ${label}`);
+          }
+          return element;
+        }
 
-      return {
+        function readZoom() {
+          const zoom = requireElement("zoom-level", "zoom level").textContent;
+          if (zoom === null) {
+            throw new TypeError("Expected reader zoom content");
+          }
+          return zoom;
+        }
+
+        function readDestination(destination: unknown) {
+          if (destination === null || typeof destination !== "object") {
+            return null;
+          }
+          const candidate = destination as {
+            page?: unknown;
+            hash?: unknown;
+            dest?: unknown;
+          };
+          return {
+            page: typeof candidate.page === "number" ? candidate.page : null,
+            hash: typeof candidate.hash === "string" ? candidate.hash : null,
+            hasExplicitDestination: Array.isArray(candidate.dest),
+          };
+        }
+
+        function readHistory(historyState: unknown) {
+          if (historyState === null || typeof historyState !== "object") {
+            return null;
+          }
+          const candidate = historyState as {
+            fingerprint?: unknown;
+            uid?: unknown;
+            destination?: unknown;
+          };
+          return {
+            fingerprint: typeof candidate.fingerprint === "string"
+              ? candidate.fingerprint
+              : null,
+            uid: typeof candidate.uid === "number" ? candidate.uid : null,
+            destination: readDestination(candidate.destination),
+          };
+        }
+
+        const pageInput = requireInput("page-input", "page input");
+        const viewer = requireElement("viewer", "viewer");
+        return {
           page: pageInput.value,
-          zoom,
+          zoom: readZoom(),
           scrollTop: viewer.scrollTop,
-          history: historyState && typeof historyState === "object"
-            ? {
-              fingerprint: typeof historyState.fingerprint === "string"
-                ? historyState.fingerprint
-                : null,
-              uid: typeof historyState.uid === "number" ? historyState.uid : null,
-              destination: destination && typeof destination === "object"
-                ? {
-                  page: typeof destination.page === "number" ? destination.page : null,
-                  hash: typeof destination.hash === "string" ? destination.hash : null,
-                  hasExplicitDestination: Array.isArray(destination.dest),
-                }
-                : null,
-            }
-            : null,
+          history: readHistory(window.history.state),
         };
       });
 
@@ -1668,20 +1705,15 @@ async function preCapturePdfThroughBackend(
 async function preCaptureExternalPdfThroughBackend(
   backendPort: number,
   pdfUrl: string,
+  responsePdfBytes: Uint8Array,
 ): Promise<string> {
-  const pdfResponse = await fetch(pdfUrl);
-  expect(pdfResponse.ok).toBe(true);
-  expect(pdfResponse.headers.get("content-type")).toMatch(
-    /^application\/pdf(?:\s*;|$)/i,
-  );
-  const responsePdfBytes = await pdfResponse.arrayBuffer();
   const pdfFilename = new URL(pdfUrl).pathname.split("/").pop();
   assert(pdfFilename !== undefined && pdfFilename !== "");
 
   const form = new FormData();
   form.append(
     "pdf",
-    new Blob([responsePdfBytes], { type: "application/pdf" }),
+    new Blob([new Uint8Array(responsePdfBytes)], { type: "application/pdf" }),
     pdfFilename,
   );
   form.append("pdf_url", pdfUrl);
@@ -1699,6 +1731,72 @@ async function preCaptureExternalPdfThroughBackend(
   const key = storedKeyFromPath(value.stored_path);
   await waitForBackendLibraryKey(backendPort, key);
   return key;
+}
+
+async function numdamFixtureBytes(): Promise<Uint8Array> {
+  if (!existsSync(numdamFixturePath)) {
+    mkdirSync(numdamFixtureDirectory, { recursive: true });
+    const bytes = await downloadNumdamFixture();
+    assertNumdamFixture(bytes);
+    writeFileSync(numdamFixturePath, bytes);
+  }
+
+  const bytes = new Uint8Array(readFileSync(numdamFixturePath));
+  assertNumdamFixture(bytes);
+  return bytes;
+}
+
+async function downloadNumdamFixture(): Promise<Uint8Array> {
+  const chunks = await Promise.all(
+    Array.from({ length: numdamFixtureChunkCount }, (_, index) =>
+      downloadNumdamFixtureRange(index),
+    ),
+  );
+  const bytes = new Uint8Array(numdamFixtureByteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return bytes;
+}
+
+async function downloadNumdamFixtureRange(index: number): Promise<Uint8Array> {
+  const start = Math.floor(
+    (index * numdamFixtureByteLength) / numdamFixtureChunkCount,
+  );
+  const end = Math.floor(
+    ((index + 1) * numdamFixtureByteLength) / numdamFixtureChunkCount,
+  ) - 1;
+
+  for (let attempt = 0; attempt < numdamFixtureFetchAttempts; attempt += 1) {
+    try {
+      const response = await fetch(numdamRegressionPdfUrl, {
+        headers: {
+          range: `bytes=${start}-${end}`,
+          "user-agent": "mathread-tests (+https://github.com/dzackgarza)",
+        },
+      });
+      assert(response.status === 206);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      assert(bytes.length === end - start + 1);
+      return bytes;
+    } catch (error) {
+      if (attempt === numdamFixtureFetchAttempts - 1) {
+        throw error;
+      }
+    }
+  }
+
+  assert.fail("Unreachable Numdam fixture retry state");
+}
+
+function assertNumdamFixture(bytes: Uint8Array): void {
+  assert(bytes.length === numdamFixtureByteLength);
+  assert(new TextDecoder().decode(bytes.slice(0, 5)) === "%PDF-");
+  assert(
+    createHash("sha256").update(bytes).digest("hex") === numdamFixtureSha256,
+  );
 }
 
 async function waitForExtensionServiceWorker(context: BrowserContext) {
