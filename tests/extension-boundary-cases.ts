@@ -16,6 +16,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -102,6 +103,7 @@ type CourseRequest = {
 type ExtensionCaptureEvidence = {
   artifacts: CaptureArtifacts;
   backendCaptureRequestCount: number;
+  cleanup: () => void;
   courseOrigin: string;
   courseRequests: CourseRequest[];
   key: string;
@@ -304,6 +306,7 @@ test("built extension intercepts a clicked PDF directly into an extension-owned 
     evidence.storedPath,
     "clicked-link",
   );
+  evidence.cleanup();
 }, 60_000);
 
 test("built extension reuses a pre-existing capture and still mounts the reader", async () => {
@@ -325,6 +328,7 @@ test("built extension reuses a pre-existing capture and still mounts the reader"
     evidence.storedPath,
     "direct-pdf-tab",
   );
+  evidence.cleanup();
 }, 45_000);
 
 test("built extension auto-captures an application/pdf URL without a .pdf suffix", async () => {
@@ -343,6 +347,7 @@ test("built extension auto-captures an application/pdf URL without a .pdf suffix
     evidence.storedPath,
     "direct-pdf-without-extension",
   );
+  evidence.cleanup();
 }, 30_000);
 
 test("disabling automatic capture removes the PDF redirect rule", async () => {
@@ -421,6 +426,7 @@ test("reader opens pre-2007 arXiv provenance with its full archive identifier", 
 test("built extension renders every page of a large captured PDF in the reader", async () => {
   const evidence = await runExtensionCapture("large-numdam-pdf");
   assertReaderFrameUrl(evidence.readerFrameUrl, evidence.key);
+  evidence.cleanup();
 }, 60_000);
 
 test("reader renders all pages of a large PDF with real content", async () => {
@@ -1058,6 +1064,7 @@ async function runBackendUnavailable(): Promise<void> {
   const extensionPath = configuredExtensionCopy(testRoot, backendPort);
   const courseServer = startCourseServer(artifacts.eventsLogPath);
   let context: BrowserContext | undefined;
+  let completed = false;
 
   try {
     context = await chromium.launchPersistentContext(
@@ -1093,11 +1100,15 @@ async function runBackendUnavailable(): Promise<void> {
     await page.screenshot({ path: artifacts.screenshotAfterPath });
     assertPng(artifacts.screenshotAfterPath);
     await page.close();
+    completed = true;
   } finally {
     if (context !== undefined) {
       await context.close();
     }
     courseServer.stop(true);
+    if (completed) {
+      rmSync(testRoot, { recursive: true, force: true });
+    }
   }
 }
 
@@ -1212,6 +1223,7 @@ async function runExtensionCapture(
     return {
       artifacts,
       backendCaptureRequestCount,
+      cleanup: () => rmSync(testRoot, { recursive: true, force: true }),
       courseOrigin: courseServer.url.origin,
       courseRequests: courseServer.requests,
       key,
@@ -1259,6 +1271,7 @@ async function withExtensionReader(
   );
   const courseServer = startCourseServer(artifacts.eventsLogPath);
   let context: BrowserContext | undefined;
+  let completed = false;
 
   try {
     await waitForHttpService(`http://127.0.0.1:${backendPort}/openapi.json`);
@@ -1299,6 +1312,7 @@ async function withExtensionReader(
       readingRoot,
     });
     await page.close();
+    completed = true;
   } finally {
     if (context !== undefined) {
       await context.close();
@@ -1307,6 +1321,9 @@ async function withExtensionReader(
     backend.process.kill();
     await backend.process.exited;
     closeSync(backend.logFd);
+    if (completed) {
+      rmSync(testRoot, { recursive: true, force: true });
+    }
   }
 }
 

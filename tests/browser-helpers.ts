@@ -1,5 +1,3 @@
-import { execSync } from "node:child_process";
-
 /**
  * Resolves the system Chromium executable path for Playwright extension tests.
  *
@@ -9,8 +7,9 @@ import { execSync } from "node:child_process";
  * real Chromium binary on PATH at test runtime — no hard-coded path.
  */
 export function chromiumExecutablePath(): string {
-  return execSync("which chromium", {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  }).trim();
+  const executable = Bun.which("chromium");
+  if (executable === null) {
+    throw new Error("Chromium executable is required for extension boundary tests");
+  }
+  return executable;
 }
