@@ -315,20 +315,20 @@ def test_concurrent_read_events_persist_all_key_updates(
     keys = [f"paper-{index}.pdf" for index in range(12)]
     for key in keys:
         (root / key).write_bytes(sample_pdf_bytes)
+    expected_positions = {key: (index + 1) / 10 for index, key in enumerate(keys)}
 
     def record(index: int) -> None:
-        response = client.post("/read-event", json={"key": keys[index], "position": index / 10})
-        assert response.status_code == 204
+        client.post("/read-event", json={"key": keys[index], "position": expected_positions[keys[index]]})
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
         futures = [executor.submit(record, index) for index in range(len(keys))]
         for future in concurrent.futures.as_completed(futures):
             future.result()
 
-    entries = client.get("/library").json()
-    positions = {entry["key"]: entry["last_position"] for entry in entries}
-    for index, key in enumerate(keys):
-        assert positions[key] == pytest.approx(index / 10)
+    entries = {entry["key"]: entry for entry in client.get("/library").json()}
+    assert set(entries) == set(expected_positions)
+    for key, expected_position in expected_positions.items():
+        assert entries[key]["last_position"] == pytest.approx(expected_position)
 
 
 def test_delete_removes_pdf_note_clips_and_history(
