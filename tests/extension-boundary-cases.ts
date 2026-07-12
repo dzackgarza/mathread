@@ -596,8 +596,8 @@ test("installed reader renders a nonblank late page of the canonical Numdam PDF"
       await waitForClipboardText(page, (text) => text === expectedViewUrl.href);
 
       const screenshotPath = join(
-        tmpdir(),
-        "mathread-issue-7-numdam-page-6.png",
+        artifacts.root,
+        "numdam-page-6.png",
       );
       await page.screenshot({ path: screenshotPath });
       assertPng(screenshotPath);
@@ -1559,7 +1559,9 @@ async function preCaptureExternalPdfThroughBackend(
 ): Promise<string> {
   const pdfResponse = await fetch(pdfUrl);
   expect(pdfResponse.ok).toBe(true);
-  expect(pdfResponse.headers.get("content-type")).toBe("application/pdf");
+  expect(pdfResponse.headers.get("content-type")).toMatch(
+    /^application\/pdf(?:\s*;|$)/i,
+  );
   const responsePdfBytes = await pdfResponse.arrayBuffer();
   const pdfFilename = new URL(pdfUrl).pathname.split("/").pop();
   assert(pdfFilename !== undefined && pdfFilename !== "");
