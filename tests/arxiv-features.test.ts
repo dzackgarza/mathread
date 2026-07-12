@@ -16,6 +16,7 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
@@ -100,6 +101,7 @@ async function withArxivReader(
     },
   });
   let context: BrowserContext | undefined;
+  let completed = false;
 
   try {
     await waitForHttpService(`http://127.0.0.1:${backendPort}/openapi.json`);
@@ -158,9 +160,16 @@ async function withArxivReader(
     const extensionId = new URL(serviceWorker.url()).host;
     const page = await context.newPage();
     const pageFailures: string[] = [];
+    const pageEvents: string[] = [];
     page.on("pageerror", (error) =>
       pageFailures.push(`READER-PAGE-ERROR: ${error.message}`),
     );
+    page.on("crash", () => pageFailures.push("READER-PAGE-CRASH"));
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) {
+        pageEvents.push(`READER-NAVIGATION: ${frame.url()}`);
+      }
+    });
     page.on("console", (message) => {
       if (message.type() === "error") {
         pageFailures.push(`READER-CONSOLE-ERROR: ${message.text()}`);
@@ -170,9 +179,28 @@ async function withArxivReader(
       `chrome-extension://${extensionId}/reader/reader.html?key=${encodeURIComponent(key)}`,
     );
 
-    await run({ page, backendPort, readingRoot, key, notePath });
+    try {
+      await run({ page, backendPort, readingRoot, key, notePath });
+    } catch (error) {
+      const bodyText = page.isClosed()
+        ? "<closed>"
+        : await page
+            .locator("body")
+            .innerText({ timeout: 1_000 })
+            .catch((bodyError: unknown) => `<unavailable: ${String(bodyError)}>`);
+      throw new Error(
+        [
+          `arXiv reader failed at ${page.url()} (closed=${page.isClosed()})`,
+          ...pageEvents,
+          ...pageFailures,
+          `READER-BODY: ${bodyText.slice(0, 1_000)}`,
+        ].join("\n"),
+        { cause: error },
+      );
+    }
     expect(pageFailures).toEqual([]);
     await page.close();
+    completed = true;
   } finally {
     if (context !== undefined) {
       await context.close();
@@ -181,6 +209,9 @@ async function withArxivReader(
     backend.kill();
     await backend.exited;
     closeSync(logFd);
+    if (completed) {
+      rmSync(testRoot, { recursive: true, force: true });
+    }
   }
 }
 
