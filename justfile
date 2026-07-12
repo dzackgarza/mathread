@@ -36,3 +36,7 @@ serve:
 # Watch extension source and rebuild on change (load dist/extension/ as unpacked in Chrome)
 dev:
     @bun run dev
+
+[private]
+_test-bun *args:
+    @bun test {{args}}
