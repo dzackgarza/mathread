@@ -1079,14 +1079,28 @@ test("reader preserves PDF-internal navigation history", async () => {
       const readReaderLocation = () => page.evaluate(() => {
         const pageInput = document.getElementById("page-input");
         const zoomLevel = document.getElementById("zoom-level");
-        const viewer = document.getElementById("viewer");
-        const historyState = window.history.state;
-        const destination = historyState?.destination;
+      const viewer = document.getElementById("viewer");
+      const historyState = window.history.state;
+      const destination = historyState?.destination;
 
-        return {
-          page: pageInput instanceof HTMLInputElement ? pageInput.value : null,
-          zoom: zoomLevel?.textContent ?? null,
-          scrollTop: viewer instanceof HTMLElement ? viewer.scrollTop : null,
+      if (!(pageInput instanceof HTMLInputElement)) {
+        throw new TypeError("Expected the reader page input");
+      }
+      if (!(zoomLevel instanceof HTMLElement)) {
+        throw new TypeError("Expected the reader zoom level");
+      }
+      if (!(viewer instanceof HTMLElement)) {
+        throw new TypeError("Expected the reader viewer");
+      }
+      const zoom = zoomLevel.textContent;
+      if (zoom === null) {
+        throw new TypeError("Expected reader zoom content");
+      }
+
+      return {
+          page: pageInput.value,
+          zoom,
+          scrollTop: viewer.scrollTop,
           history: historyState && typeof historyState === "object"
             ? {
               fingerprint: typeof historyState.fingerprint === "string"
@@ -1141,7 +1155,9 @@ test("reader preserves PDF-internal navigation history", async () => {
       expect(afterBack.history?.destination?.page).toBe(1);
       expect(afterBack.history?.destination?.hash).toMatch(/(?:^|&)page=1(?:&|$)/);
       expect(afterBack.history?.destination?.hash).toMatch(/(?:^|&)zoom=/);
-      expect(Math.abs((afterBack.scrollTop ?? 0) - (beforeLink.scrollTop ?? 0))).toBeLessThanOrEqual(2);
+      expect(
+        Math.abs(afterBack.scrollTop - beforeLink.scrollTop),
+      ).toBeLessThanOrEqual(2);
       await page.screenshot({ path: join(artifacts.root, "pdf-history-after-back.png") });
       assertPng(join(artifacts.root, "pdf-history-after-back.png"));
 
@@ -1155,7 +1171,9 @@ test("reader preserves PDF-internal navigation history", async () => {
       expect(afterForward.zoom).toBe(afterLink.zoom);
       expect(afterForward.history?.destination?.page).toBe(2);
       expect(afterForward.history?.destination?.hasExplicitDestination).toBe(true);
-      expect(Math.abs((afterForward.scrollTop ?? 0) - (afterLink.scrollTop ?? 0))).toBeLessThanOrEqual(2);
+      expect(
+        Math.abs(afterForward.scrollTop - afterLink.scrollTop),
+      ).toBeLessThanOrEqual(2);
       await page.screenshot({ path: join(artifacts.root, "pdf-history-after-forward.png") });
       assertPng(join(artifacts.root, "pdf-history-after-forward.png"));
     },
