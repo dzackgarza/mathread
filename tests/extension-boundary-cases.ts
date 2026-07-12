@@ -389,6 +389,68 @@ test("disabling automatic capture removes the PDF redirect rule", async () => {
   });
 }, 30_000);
 
+test("extension synchronization removes legacy PDF redirect rules", async () => {
+  await withExtensionReader(async ({ context }) => {
+    const serviceWorker = await waitForExtensionServiceWorker(context);
+    await waitForPdfRedirectRule(serviceWorker);
+    await serviceWorker.evaluate(async () => {
+      const chromeApi = (
+        globalThis as typeof globalThis & {
+          chrome: {
+            declarativeNetRequest: {
+              updateDynamicRules(update: {
+                removeRuleIds: number[];
+                addRules: unknown[];
+              }): Promise<void>;
+            };
+            storage: {
+              local: {
+                set(items: Record<string, unknown>): Promise<void>;
+              };
+            };
+          };
+        }
+      ).chrome;
+      await chromeApi.declarativeNetRequest.updateDynamicRules({
+        removeRuleIds: [5],
+        addRules: [
+          {
+            id: 5,
+            priority: 3,
+            action: {
+              type: "redirect",
+              redirect: {
+                regexSubstitution:
+                  "chrome-extension://legacy/content/web/viewer.html?DNR:\\0",
+              },
+            },
+            condition: {
+              regexFilter: "^.*$",
+              resourceTypes: ["main_frame", "sub_frame"],
+              responseHeaders: [
+                {
+                  header: "content-type",
+                  values: ["application/pdf", "application/pdf;*"],
+                },
+              ],
+            },
+          },
+        ],
+      });
+      await chromeApi.storage.local.set({
+        "mathread.settings": {
+          autoCapturePdfs: true,
+          autosaveMs: 800,
+          fitWidthOnOpen: false,
+          lineNumbers: true,
+        },
+      });
+    });
+    await waitForPdfRedirectRule(serviceWorker);
+    expect(await pdfRedirectRuleIds(serviceWorker)).toEqual([1]);
+  });
+}, 30_000);
+
 }
 
 function registerCapturedSourceBoundaryTests(): void {
@@ -1480,6 +1542,22 @@ async function hasPdfRedirectRule(serviceWorker: Worker): Promise<boolean> {
     ).chrome;
     const rules = await chromeApi.declarativeNetRequest.getDynamicRules();
     return rules.some((rule) => rule.id === 1);
+  });
+}
+
+async function pdfRedirectRuleIds(serviceWorker: Worker): Promise<number[]> {
+  return serviceWorker.evaluate(async () => {
+    const chromeApi = (
+      globalThis as typeof globalThis & {
+        chrome: {
+          declarativeNetRequest: {
+            getDynamicRules(): Promise<Array<{ id: number }>>;
+          };
+        };
+      }
+    ).chrome;
+    const rules = await chromeApi.declarativeNetRequest.getDynamicRules();
+    return rules.map(rule => rule.id).sort((left, right) => left - right);
   });
 }
 

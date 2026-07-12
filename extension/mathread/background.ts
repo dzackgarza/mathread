@@ -35,6 +35,7 @@ type ChromeApi = {
     create(properties: { url: string }): Promise<unknown>;
   };
   declarativeNetRequest: {
+    getDynamicRules(): Promise<Array<{ id: number }>>;
     updateDynamicRules(update: {
       removeRuleIds: number[];
       addRules: Array<{
@@ -118,8 +119,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 async function synchronizePdfRedirectRule(): Promise<PdfRedirectState> {
   try {
     const settings = await loadMathReadSettings(chrome.storage.local);
+    const dynamicRules = await chrome.declarativeNetRequest.getDynamicRules();
     await chrome.declarativeNetRequest.updateDynamicRules({
-      removeRuleIds: [pdfRedirectRuleId],
+      removeRuleIds: dynamicRules.map(rule => rule.id),
       addRules: settings.autoCapturePdfs
         ? [
             {
