@@ -61,6 +61,8 @@ const pdfBytes = new TextEncoder().encode(
 
 const cookieName = "mathread_session";
 const cookieValue = "extension-test";
+const numdamRegressionPdfUrl =
+  "https://www.numdam.org/item/AST_1992__211__1_0.pdf";
 const documentControlIds = [
   "prev-page",
   "next-page",
@@ -552,6 +554,61 @@ test("reader renders all pages of a large PDF with real content", async () => {
 test("built extension fails loudly when the capture backend is down", async () => {
   await runBackendUnavailable();
 }, 60_000);
+}
+
+export function registerNumdamRenderingBoundaryTest(): void {
+test("installed reader renders a nonblank late page of the canonical Numdam PDF", async () => {
+  await withExtensionReader(
+    async ({ artifacts, backendPort, extensionId, page }) => {
+      const key = await preCaptureExternalPdfThroughBackend(
+        backendPort,
+        numdamRegressionPdfUrl,
+      );
+      await page.goto(readerPageUrl(extensionId, key), {
+        waitUntil: "domcontentloaded",
+      });
+
+      await expectElementText(
+        page.locator("#page-total"),
+        (text) => text === "265",
+      );
+      const pageInput = page.locator("#page-input");
+      await pageInput.fill("6");
+      await pageInput.press("Enter");
+      await expectInputValue(pageInput, (value) => value === "6");
+
+      const latePageCanvasIndex = await page
+        .locator('#pdf-viewer .page[data-page-number="6"] canvas')
+        .evaluate((latePageCanvas) =>
+          Array.from(document.querySelectorAll("#viewer canvas")).indexOf(
+            latePageCanvas,
+          ),
+        );
+      const rendered = await canvasPixelEvidence(page, latePageCanvasIndex);
+      expect(rendered.canvasSize).toBeGreaterThan(10_000);
+      expect(rendered.nonWhitePixels).toBeGreaterThan(250);
+
+      await page.locator("#toggle-more").click();
+      await page.locator('.menu-item[data-action="copy-view-link"]').click();
+      const expectedViewUrl = new URL(numdamRegressionPdfUrl);
+      expectedViewUrl.searchParams.set("mrpage", "6");
+      expectedViewUrl.searchParams.set("mrzoom", "1.00");
+      await waitForClipboardText(page, (text) => text === expectedViewUrl.href);
+
+      const screenshotPath = join(
+        artifacts.root,
+        "numdam-page-6.png",
+      );
+      await page.screenshot({ path: screenshotPath });
+      assertPng(screenshotPath);
+      appendEvent(artifacts.eventsLogPath, {
+        type: "numdam-late-page-proof",
+        path: screenshotPath,
+        url: expectedViewUrl.href,
+      });
+    },
+  );
+}, 120_000);
 }
 
 export function registerReaderNotesBoundaryTests(): void {
@@ -1474,6 +1531,42 @@ async function preCapturePdfThroughBackend(
   const form = new FormData();
   const pdfFilename = pdfPathForScenario(scenario).split("/").pop();
   assert(pdfFilename !== undefined && pdfFilename !== "");
+  form.append(
+    "pdf",
+    new Blob([responsePdfBytes], { type: "application/pdf" }),
+    pdfFilename,
+  );
+  form.append("pdf_url", pdfUrl);
+  form.append("source_url", pdfUrl);
+  const response = await fetch(
+    `http://127.0.0.1:${backendPort}/capture-bytes`,
+    {
+      method: "POST",
+      body: form,
+    },
+  );
+  expect(response.ok).toBe(true);
+  const value: unknown = await response.json();
+  assert(isRecord(value) && typeof value.stored_path === "string");
+  const key = storedKeyFromPath(value.stored_path);
+  await waitForBackendLibraryKey(backendPort, key);
+  return key;
+}
+
+async function preCaptureExternalPdfThroughBackend(
+  backendPort: number,
+  pdfUrl: string,
+): Promise<string> {
+  const pdfResponse = await fetch(pdfUrl);
+  expect(pdfResponse.ok).toBe(true);
+  expect(pdfResponse.headers.get("content-type")).toMatch(
+    /^application\/pdf(?:\s*;|$)/i,
+  );
+  const responsePdfBytes = await pdfResponse.arrayBuffer();
+  const pdfFilename = new URL(pdfUrl).pathname.split("/").pop();
+  assert(pdfFilename !== undefined && pdfFilename !== "");
+
+  const form = new FormData();
   form.append(
     "pdf",
     new Blob([responsePdfBytes], { type: "application/pdf" }),
