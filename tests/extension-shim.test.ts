@@ -137,7 +137,8 @@ test("built extension manifest declares packaged Web Store icons", () => {
   });
   expect(action?.default_title).toBe("Open MathRead library");
   expect(action?.default_icon).toEqual(icons);
-  for (const iconPath of Object.values(icons ?? {})) {
+  assert(icons !== undefined);
+  for (const iconPath of Object.values(icons)) {
     expect(existsSync(join("dist", "extension", iconPath))).toBe(true);
   }
 });

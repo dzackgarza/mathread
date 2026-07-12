@@ -132,17 +132,9 @@ def _markdown_image_destination_spans(markdown: str) -> Iterator[tuple[int, int]
         leading_spaces = len(content) - len(content.lstrip(" "))
         stripped = content[leading_spaces:]
         fence_character = stripped[:1]
-        fence_length = (
-            len(stripped) - len(stripped.lstrip(fence_character))
-            if fence_character in {"`", "~"}
-            else 0
-        )
+        fence_length = len(stripped) - len(stripped.lstrip(fence_character)) if fence_character in {"`", "~"} else 0
         if fence is not None:
-            closes_fence = (
-                fence_character == fence[0]
-                and fence_length >= fence[1]
-                and not stripped[fence_length:].strip()
-            )
+            closes_fence = fence_character == fence[0] and fence_length >= fence[1] and not stripped[fence_length:].strip()
             if closes_fence:
                 fence = None
             offset += len(line)
@@ -200,40 +192,21 @@ def migrate_prior_nested_layout(root: Path) -> None:
     if not inbox.exists():
         return
 
-    assert inbox.is_dir(), (
-        "Prior MathRead library path must be a real directory before migration; "
-        f"path={inbox}"
-    )
+    assert inbox.is_dir(), f"Prior MathRead library path must be a real directory before migration; path={inbox}"
     sources = sorted(inbox.iterdir())
-    invalid_sources = [
-        source
-        for source in sources
-        if not source.is_file()
-        or source.suffix.lower() not in {".pdf", ".md"}
-    ]
+    invalid_sources = [source for source in sources if not source.is_file() or source.suffix.lower() not in {".pdf", ".md"}]
     assert not invalid_sources, (
-        "Prior MathRead inbox contains ownership outside the PDF/note transition; "
-        f"unexpected={invalid_sources}; move or remove these entries before starting MathRead"
+        f"Prior MathRead inbox contains ownership outside the PDF/note transition; unexpected={invalid_sources}; move or remove these entries before starting MathRead"
     )
 
     pdf_names = {source.name for source in sources if source.suffix.lower() == ".pdf"}
-    orphan_notes = [
-        source
-        for source in sources
-        if source.suffix.lower() == ".md" and source.with_suffix(".pdf").name not in pdf_names
-    ]
-    assert not orphan_notes, (
-        "Prior MathRead inbox contains notes without their owned PDFs; "
-        f"orphan_notes={orphan_notes}; restore the matching PDFs before starting MathRead"
-    )
+    orphan_notes = [source for source in sources if source.suffix.lower() == ".md" and source.with_suffix(".pdf").name not in pdf_names]
+    assert not orphan_notes, f"Prior MathRead inbox contains notes without their owned PDFs; orphan_notes={orphan_notes}; restore the matching PDFs before starting MathRead"
 
     moves = [(source, root / source.name) for source in sources]
     collisions = [(source, destination) for source, destination in moves if destination.exists()]
     if collisions:
-        raise FileExistsError(
-            "Prior MathRead inbox migration would overwrite canonical library artifacts; "
-            f"collisions={collisions}"
-        )
+        raise FileExistsError(f"Prior MathRead inbox migration would overwrite canonical library artifacts; collisions={collisions}")
 
     for source, destination in moves:
         if source.suffix.lower() == ".md":
@@ -391,18 +364,17 @@ def overwrite_note(root: Path, key: str, text: str) -> str:
     return _calculate_note_version(note_path)
 
 
-def _allocate_clip_index(root: Path, paper_key: str) -> int:
+def _allocate_clip_index(root: Path, paper_key: str, clips_dir: Path) -> int:
     """Allocate a unique, sequential clip index transactionally in the database."""
     with _db_connection(root) as conn:
-        while True:
-            row = conn.execute("SELECT MAX(clip_index) as max_idx FROM clips WHERE paper_key = ?", (paper_key,)).fetchone()
-            next_idx = (row["max_idx"] if row and row["max_idx"] is not None else 0) + 1
-            try:
-                conn.execute("INSERT INTO clips (paper_key, clip_index) VALUES (?, ?)", (paper_key, next_idx))
-                conn.commit()
-                return next_idx
-            except sqlite3.IntegrityError:
-                continue
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT MAX(clip_index) as max_idx FROM clips WHERE paper_key = ?", (paper_key,)).fetchone()
+        database_max = row["max_idx"] if row and row["max_idx"] is not None else 0
+        file_indices = [int(path.stem.removeprefix("clip-")) for path in clips_dir.glob("clip-*.png") if path.stem.removeprefix("clip-").isdigit()]
+        next_idx = max([database_max, *file_indices]) + 1
+        conn.execute("INSERT INTO clips (paper_key, clip_index) VALUES (?, ?)", (paper_key, next_idx))
+        conn.commit()
+        return next_idx
 
 
 def write_note_image(root: Path, key: str, png_bytes: bytes) -> str:
@@ -415,15 +387,11 @@ def write_note_image(root: Path, key: str, png_bytes: bytes) -> str:
     clips_dir = root / "clips" / paper_key
     clips_dir.mkdir(parents=True, exist_ok=True)
 
-    while True:
-        index = _allocate_clip_index(root, paper_key)
-        image_path = clips_dir / f"clip-{index:02d}.png"
-        try:
-            with image_path.open("xb") as output:
-                output.write(png_bytes)
-            return f"clips/{paper_key}/{image_path.name}"
-        except FileExistsError:
-            continue
+    index = _allocate_clip_index(root, paper_key, clips_dir)
+    image_path = clips_dir / f"clip-{index:02d}.png"
+    with image_path.open("xb") as output:
+        output.write(png_bytes)
+    return f"clips/{paper_key}/{image_path.name}"
 
 
 def sanitize_paper_key(key: str) -> str:

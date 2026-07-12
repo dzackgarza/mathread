@@ -195,11 +195,7 @@ for (const arxivId of ARXIV_IDS) {
           const pageTotal = await waitForNonEmptyText(page, "#page-total");
           const pageCount = Number(pageTotal);
           expect(pageCount).toBeGreaterThan(5);
-          await waitFor(
-            async () =>
-              (await page.locator("#viewer canvas").count()) === pageCount,
-            120_000,
-          );
+          await renderEveryPageTextLayer(page, pageCount);
           const textLayerSpanCount = await page
             .locator('.page[data-page-number="1"] .textLayer span')
             .count();
@@ -213,7 +209,8 @@ for (const arxivId of ARXIV_IDS) {
               ),
             );
             const span = spans.find(
-              (s) => (s.textContent ?? "").trim().length > 20,
+              (s) =>
+                s.textContent !== null && s.textContent.trim().length > 20,
             );
             if (span === undefined) {
               throw new Error("no selectable text-layer span on page 1");
@@ -226,7 +223,11 @@ for (const arxivId of ARXIV_IDS) {
             span
               .closest(".textLayer")!
               .dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-            return (span.textContent ?? "").trim();
+            const selectedText = span.textContent;
+            if (selectedText === null) {
+              throw new Error("selected text-layer span has no text content");
+            }
+            return selectedText.trim();
           });
           await waitFor(
             async () =>
@@ -440,6 +441,43 @@ async function waitForNonEmptyText(
     return /^[1-9]\d*$/.test(text);
   }, 120_000);
   return text;
+}
+
+async function renderEveryPageTextLayer(
+  page: Page,
+  pageCount: number,
+): Promise<void> {
+  const pageInput = page.locator("#page-input");
+  const renderedPages: number[] = [];
+  for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+    await pageInput.fill(String(pageNumber));
+    await pageInput.press("Enter");
+    await waitFor(
+      async () =>
+        (await pageInput.inputValue()) === String(pageNumber) &&
+        (await page
+          .locator(
+            `.page[data-page-number="${pageNumber}"] .textLayer span`,
+          )
+          .count()) > 0,
+      30_000,
+    );
+    renderedPages.push(pageNumber);
+  }
+  expect(renderedPages).toEqual(
+    Array.from({ length: pageCount }, (_, index) => index + 1),
+  );
+
+  await pageInput.fill("1");
+  await pageInput.press("Enter");
+  await waitFor(
+    async () =>
+      (await pageInput.inputValue()) === "1" &&
+      (await page
+        .locator('.page[data-page-number="1"] .textLayer span')
+        .count()) > 10,
+    30_000,
+  );
 }
 
 function unusedTcpPort(): Promise<number> {

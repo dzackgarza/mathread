@@ -1,11 +1,16 @@
 import {
   type CaptureRequest,
   type CaptureResult,
+  type ExtensionLocalStorage,
   type RuntimeCaptureMessage,
   type RuntimeCaptureResponse,
   captureBytesEndpointFromManifest,
   postCaptureBytes,
 } from "./capture-client";
+import {
+  loadMathReadSettings,
+  settingsStorageKey,
+} from "./settings";
 
 type ChromeApi = {
   runtime: {
@@ -29,6 +34,39 @@ type ChromeApi = {
   tabs: {
     create(properties: { url: string }): Promise<unknown>;
   };
+  declarativeNetRequest: {
+    updateDynamicRules(update: {
+      removeRuleIds: number[];
+      addRules: Array<{
+        id: number;
+        priority: number;
+        action: {
+          type: "redirect";
+          redirect: { regexSubstitution: string };
+        };
+        condition: {
+          regexFilter: string;
+          excludedRequestMethods: ["post"];
+          resourceTypes: ["main_frame"];
+          responseHeaders: Array<{
+            header: "content-type";
+            values: ["application/pdf", "application/pdf;*"];
+          }>;
+        };
+      }>;
+    }): Promise<void>;
+  };
+  storage: {
+    local: ExtensionLocalStorage;
+    onChanged: {
+      addListener(
+        listener: (
+          changes: Record<string, { newValue?: unknown }>,
+          areaName: string,
+        ) => void,
+      ): void;
+    };
+  };
 };
 
 type UnknownRecord = Record<string, unknown>;
@@ -42,6 +80,23 @@ const recentSuccessfulCaptures = new Map<
 
 declare const chrome: ChromeApi;
 
+const pdfRedirectRuleId = 1;
+
+type PdfRedirectState =
+  | { kind: "ready" }
+  | { kind: "failed"; error: Error };
+
+// Chrome 128+ evaluates response-header DNR rules before committing the response as a
+// document. Redirecting here prevents the native PDF viewer from owning even the first
+// visible document; pdf-launch then performs the existing backend capture asynchronously.
+let pdfRedirectState = synchronizePdfRedirectRule();
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === "local" && changes[settingsStorageKey] !== undefined) {
+    pdfRedirectState = synchronizePdfRedirectRule();
+  }
+});
+
 chrome.action.onClicked.addListener(() => {
   void chrome.tabs.create({ url: chrome.runtime.getURL("reader/reader.html") });
 });
@@ -50,7 +105,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!isCaptureMessage(message)) {
     return undefined;
   }
-  void capturePdf(message.request)
+  void capturePdfAfterRedirectReady(message.request)
     .then((result) => {
       sendResponse({ ok: true, result });
     })
@@ -59,6 +114,63 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     });
   return true;
 });
+
+async function synchronizePdfRedirectRule(): Promise<PdfRedirectState> {
+  try {
+    const settings = await loadMathReadSettings(chrome.storage.local);
+    await chrome.declarativeNetRequest.updateDynamicRules({
+      removeRuleIds: [pdfRedirectRuleId],
+      addRules: settings.autoCapturePdfs
+        ? [
+            {
+              id: pdfRedirectRuleId,
+              priority: 1,
+              action: {
+                type: "redirect",
+                redirect: {
+                  // DNR cannot encode the matched URL, so pdf-launch parses this raw
+                  // sentinel before rewriting the visible route to an encoded source.
+                  regexSubstitution: `${chrome.runtime.getURL("pdf-launch.html")}?DNR:\\0`,
+                },
+              },
+              condition: {
+                regexFilter: "^https?://.*$",
+                excludedRequestMethods: ["post"],
+                resourceTypes: ["main_frame"],
+                responseHeaders: [
+                  {
+                    header: "content-type",
+                    values: ["application/pdf", "application/pdf;*"],
+                  },
+                ],
+              },
+            },
+          ]
+        : [],
+    });
+    return { kind: "ready" };
+  } catch (error) {
+    const registrationError = new Error(
+      "MathRead PDF redirect registration failed",
+      { cause: error },
+    );
+    console.error(registrationError);
+    return {
+      kind: "failed",
+      error: registrationError,
+    };
+  }
+}
+
+async function capturePdfAfterRedirectReady(
+  request: CaptureRequest,
+): Promise<CaptureResult> {
+  const redirectState = await pdfRedirectState;
+  if (redirectState.kind === "failed") {
+    throw redirectState.error;
+  }
+  return capturePdf(request);
+}
 
 async function capturePdf(request: CaptureRequest): Promise<CaptureResult> {
   const now = Date.now();

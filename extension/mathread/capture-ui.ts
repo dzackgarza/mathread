@@ -112,7 +112,7 @@ const viewerPageHistory = {
   navigating: false,
 };
 
-// PDF-document interception lives in reader-swap.ts; this script only serves the
+// PDF-document interception lives in the DNR/pdf-launch path; this script only serves the
 // (retired) vendored-viewer capture UI surface.
 void initCaptureUi();
 

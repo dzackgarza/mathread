@@ -3,7 +3,7 @@
   "name": "MathRead PDF Viewer",
   "version": "1.0.0",
   "description": "Capture PDFs to the local MathRead service and read them in the MathRead reader.",
-  "permissions": ["storage", "cookies"],
+  "permissions": ["storage", "cookies", "declarativeNetRequestWithHostAccess"],
   "host_permissions": ["http://127.0.0.1:8765/*", "http://*/*", "https://*/*"],
   "background": {
     "service_worker": "mathread/background.js",
@@ -13,11 +13,6 @@
     {
       "matches": ["http://*/*", "https://*/*"],
       "js": ["mathread/link-origin.js"],
-      "run_at": "document_start"
-    },
-    {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["mathread/reader-swap.js"],
       "run_at": "document_start"
     }
   ],
@@ -33,7 +28,7 @@
   "options_page": "mathread/options.html",
   "web_accessible_resources": [
     {
-      "resources": ["reader/*"],
+      "resources": ["reader/*", "pdf-launch.html"],
       "matches": ["http://*/*", "https://*/*"]
     }
   ],
@@ -42,5 +37,6 @@
     "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  }
+  },
+  "minimum_chrome_version": "128"
 }

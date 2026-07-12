@@ -1,6 +1,6 @@
-// End-to-end proof of the extension boundary: opening a PDF in a tab auto-captures it to
-// the real local backend and swaps the document body for the MathRead reader iframe keyed
-// by the backend library key, while the address bar keeps the original PDF URL. The
+// End-to-end proof of the extension boundary: opening a PDF in a tab commits an
+// extension-owned launch page before Chrome's native viewer, auto-captures to the real
+// local backend, and mounts the MathRead reader while preserving the source URL. The
 // reader's Key Points panel persists notes to the on-disk markdown sidecar and the
 // Library panel lists/opens/trashes captured items against the same backend.
 import { expect, test } from "bun:test";
@@ -27,6 +27,7 @@ import {
   type BrowserContext,
   type Frame,
   type Page,
+  type Worker,
 } from "playwright";
 import { chromiumExecutablePath } from "./browser-helpers";
 
@@ -87,6 +88,7 @@ type CaptureArtifacts = {
   backendLogPath: string;
   eventsLogPath: string;
   screenshotBeforePath: string;
+  screenshotLaunchPath: string;
   screenshotAfterPath: string;
   tracePath: string;
 };
@@ -138,6 +140,7 @@ const defaultCaptureRunOptions: CaptureRunOptions = {
   preExistingCapture: false,
 };
 
+export function registerCaptureBoundaryTests(): void {
 test("reader Library panel lists, opens, and trashes captured items against the backend", async () => {
   await withExtensionReader(
     async ({ backendPort, courseServer, extensionId, page, readingRoot }) => {
@@ -194,21 +197,25 @@ test("reader Library panel lists, opens, and trashes captured items against the 
         .locator('[data-testid="library-entry-open"]')
         .click();
       await waitForReaderFrame(page, secondKey);
-      expect(new URL(page.url()).pathname).toBe(
+      const visibleReaderUrl = new URL(page.url());
+      expect(visibleReaderUrl.pathname).toBe("/pdf-launch.html");
+      const visibleSourceUrl = visibleReaderUrl.searchParams.get("source");
+      assert(visibleSourceUrl !== null);
+      expect(new URL(visibleSourceUrl).pathname).toBe(
         pdfPathForScenario("large-numdam-pdf"),
       );
 
       const reader = await waitForReaderFrame(page, secondKey);
-      // Let the reader finish its synchronous page-render pass before interacting -
-      // canvas rasterization can otherwise stall input dispatch on a loaded machine.
-      await waitForCanvasCount(reader, 6);
+      // PDF.js owns a bounded canvas window; wait for the current page rather than
+      // requiring every page canvas to exist simultaneously.
+      await reader.locator("#viewer canvas").first().waitFor();
 
       // Copy view link must work from the cross-origin reader iframe (requires the
       // iframe's clipboard-write permissions-policy delegation) and carry mrpage/mrzoom
       // on the source URL.
       await reader.locator("#toggle-more").click();
       await reader.locator('.menu-item[data-action="copy-view-link"]').click();
-      const expectedViewUrl = new URL(page.url());
+      const expectedViewUrl = new URL(visibleSourceUrl);
       expectedViewUrl.searchParams.set("mrpage", "1");
       expectedViewUrl.searchParams.set("mrzoom", "1.00");
       await waitForClipboardText(page, (text) => text === expectedViewUrl.href);
@@ -281,7 +288,7 @@ test("built extension intercepts a clicked PDF directly into an extension-owned 
   expect(evidence.metadata["/MathReadPDFURL"]).toBe(expectedPdfUrl);
   expect(evidence.metadata["/MathReadCapture"]).toBe("capture-bytes");
   expect(evidence.metadata["/MathReadOriginalSHA256"]).toBe(pdfSha256());
-  // link-origin's click-time capture and reader-swap's document capture dedupe in the
+  // link-origin's click-time capture and pdf-launch's document capture dedupe in the
   // background worker to a single backend POST.
   expect(evidence.backendCaptureRequestCount).toBe(1);
   expect(
@@ -336,6 +343,35 @@ test("built extension auto-captures an application/pdf URL without a .pdf suffix
     evidence.storedPath,
     "direct-pdf-without-extension",
   );
+}, 30_000);
+
+test("disabling automatic capture removes the PDF redirect rule", async () => {
+  await withExtensionReader(async ({ context }) => {
+    const serviceWorker = await waitForExtensionServiceWorker(context);
+    await waitForPdfRedirectRule(serviceWorker);
+    await serviceWorker.evaluate(async () => {
+      const chromeApi = (
+        globalThis as typeof globalThis & {
+          chrome: {
+            storage: {
+              local: {
+                set(items: Record<string, unknown>): Promise<void>;
+              };
+            };
+          };
+        }
+      ).chrome;
+      await chromeApi.storage.local.set({
+        "mathread.settings": {
+          autoCapturePdfs: false,
+          autosaveMs: 800,
+          fitWidthOnOpen: false,
+          lineNumbers: true,
+        },
+      });
+    });
+    await waitForNoPdfRedirectRule(serviceWorker);
+  });
 }, 30_000);
 
 test("reader exposes arXiv source links as a dedicated toolbar button", async () => {
@@ -396,7 +432,7 @@ test("reader renders all pages of a large PDF with real content", async () => {
         "large-numdam-pdf",
       );
       // View-link restore: page/zoom params (forwarded from mrpage/mrzoom on the source
-      // URL by reader-swap) re-open the document at that view.
+      // URL by pdf-launch) re-open the document at that view.
       await page.goto(`${readerPageUrl(extensionId, key)}&page=3&zoom=0.9`, {
         waitUntil: "domcontentloaded",
       });
@@ -434,7 +470,9 @@ test("reader renders all pages of a large PDF with real content", async () => {
 test("built extension fails loudly when the capture backend is down", async () => {
   await runBackendUnavailable();
 }, 60_000);
+}
 
+export function registerReaderNotesBoundaryTests(): void {
 test("reader Notes panel persists notes to the on-disk markdown file and renders a live preview", async () => {
   await withExtensionReader(
     async ({ backendPort, courseServer, extensionId, page, readingRoot }) => {
@@ -685,7 +723,9 @@ test("legacy highlight migration rejects incomplete records instead of fabricati
     },
   );
 }, 120_000);
+}
 
+export function registerReaderRenderingBoundaryTests(): void {
 test("reader disables document-only toolbar actions when no document key is open", async () => {
   await withExtensionReader(async ({ extensionId, page }) => {
     await page.goto(`chrome-extension://${extensionId}/reader/reader.html`, {
@@ -798,6 +838,13 @@ test("reader delegates stable responsive navigation to the PDF.js viewer", async
         pageWidths.push(geometry.pageWidth);
         expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
       }
+      assert(
+        pageWidths[0] !== undefined &&
+          pageWidths[1] !== undefined &&
+          pageWidths[2] !== undefined &&
+          pageWidths[3] !== undefined &&
+          pageWidths[4] !== undefined,
+      );
       expect(pageWidths[1]).toBeGreaterThan(pageWidths[0]);
       expect(pageWidths[2]).toBeLessThan(pageWidths[1]);
       expect(pageWidths[3]).toBeGreaterThan(pageWidths[2]);
@@ -902,7 +949,10 @@ test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", 
         height: element.clientHeight,
       }));
       expect(rotatedGeometry.width).toBeGreaterThan(rotatedGeometry.height);
-      const dprGeometry = await rotatedCanvas.evaluate((canvas) => ({
+      const dprGeometry = await rotatedCanvas.evaluate<
+        { backingWidth: number; cssWidth: number; devicePixelRatio: number },
+        HTMLCanvasElement
+      >((canvas) => ({
         backingWidth: canvas.width,
         cssWidth: canvas.getBoundingClientRect().width,
         devicePixelRatio: window.devicePixelRatio,
@@ -988,6 +1038,7 @@ test("intercepted reader owns shortcuts without escaping the Notes editor", asyn
     },
   );
 }, 120_000);
+}
 
 function readerPageUrl(extensionId: string, key: string): string {
   return `chrome-extension://${extensionId}/reader/reader.html?key=${encodeURIComponent(key)}`;
@@ -1021,7 +1072,8 @@ async function runBackendUnavailable(): Promise<void> {
         ],
       },
     );
-    await waitForExtensionServiceWorker(context);
+    const serviceWorker = await waitForExtensionServiceWorker(context);
+    await waitForPdfRedirectRule(serviceWorker);
     await context.addCookies([
       {
         name: cookieName,
@@ -1033,10 +1085,10 @@ async function runBackendUnavailable(): Promise<void> {
     attachPageDiagnostics(page, artifacts, "clicked-link");
     await page.goto(`${courseServer.url.origin}/notes.pdf`);
 
-    // No backend means capture fails, and the content script replaces the document with a loud
-    // error, never a silent local viewer.
-    await expectElementText(page.locator("#mathread-capture-error"), (text) =>
-      text.includes("MathRead could not capture this PDF"),
+    // No backend means the extension-owned launch document remains visible with a loud
+    // capture error; Chrome's PDF viewer is never used as a failure fallback.
+    await expectElementText(page.locator("#mathread-pdf-launch.failed"), (text) =>
+      text.includes("MathRead could not open this PDF"),
     );
     await page.screenshot({ path: artifacts.screenshotAfterPath });
     assertPng(artifacts.screenshotAfterPath);
@@ -1088,6 +1140,7 @@ async function runExtensionCapture(
       },
     );
     const serviceWorker = await waitForExtensionServiceWorker(context);
+    await waitForPdfRedirectRule(serviceWorker);
     serviceWorker.on("console", (message) => {
       appendEvent(artifacts.eventsLogPath, {
         type: "service-worker-console",
@@ -1106,16 +1159,27 @@ async function runExtensionCapture(
     const page = await context.newPage();
     attachPageDiagnostics(page, artifacts, scenario);
     const mainFrameNavigations: string[] = [];
+    let launchScreenshot: Promise<Uint8Array<ArrayBufferLike>> | undefined;
     page.on("framenavigated", (frame) => {
       if (frame === page.mainFrame()) {
         mainFrameNavigations.push(frame.url());
+        const navigationUrl = new URL(frame.url());
+        if (
+          navigationUrl.protocol === "chrome-extension:" &&
+          navigationUrl.pathname === "/pdf-launch.html" &&
+          launchScreenshot === undefined
+        ) {
+          launchScreenshot = page.screenshot({
+            path: artifacts.screenshotLaunchPath,
+          });
+        }
       }
     });
 
     if (scenario === "clicked-link") {
       // The realistic flow: a click on a PDF link records the click origin as capture
-      // provenance (link-origin.ts), then the PDF document itself is intercepted by
-      // reader-swap.ts.
+      // provenance (link-origin.ts), then DNR commits the extension launch page before
+      // Chrome can commit its native PDF document.
       await page.goto(`${courseServer.url.origin}/course/`);
       await page.screenshot({ path: artifacts.screenshotBeforePath });
       await page.getByRole("link", { name: "Notes" }).click();
@@ -1130,6 +1194,9 @@ async function runExtensionCapture(
     const storedPath = await waitForStoredPdf(readingRoot);
     const key = storedKeyFromPath(storedPath);
     const readerFrame = await waitForReaderFrame(page, key);
+    assert(launchScreenshot !== undefined);
+    await launchScreenshot;
+    await readerFrame.locator("#viewer canvas").first().waitFor();
     await page.screenshot({ path: artifacts.screenshotAfterPath });
 
     appendEvent(artifacts.eventsLogPath, {
@@ -1208,6 +1275,7 @@ async function withExtensionReader(
       },
     );
     const serviceWorker = await waitForExtensionServiceWorker(context);
+    await waitForPdfRedirectRule(serviceWorker);
     const extensionId = new URL(serviceWorker.url()).host;
     await context.grantPermissions(["clipboard-read"]);
     await context.addCookies([
@@ -1293,10 +1361,12 @@ async function preCapturePdfThroughBackend(
   expect(pdfResponse.ok).toBe(true);
   const responsePdfBytes = await pdfResponse.arrayBuffer();
   const form = new FormData();
+  const pdfFilename = pdfPathForScenario(scenario).split("/").pop();
+  assert(pdfFilename !== undefined && pdfFilename !== "");
   form.append(
     "pdf",
     new Blob([responsePdfBytes], { type: "application/pdf" }),
-    pdfPathForScenario(scenario).split("/").pop() ?? "document.pdf",
+    pdfFilename,
   );
   form.append("pdf_url", pdfUrl);
   form.append("source_url", pdfUrl);
@@ -1326,6 +1396,42 @@ async function waitForExtensionServiceWorker(context: BrowserContext) {
     await Bun.sleep(100);
   }
   throw new Error("Timed out waiting for MathRead extension service worker");
+}
+
+async function waitForPdfRedirectRule(serviceWorker: Worker): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (await hasPdfRedirectRule(serviceWorker)) {
+      return;
+    }
+    await Bun.sleep(100);
+  }
+  throw new Error("Timed out waiting for the MathRead PDF redirect rule");
+}
+
+async function waitForNoPdfRedirectRule(serviceWorker: Worker): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (!(await hasPdfRedirectRule(serviceWorker))) {
+      return;
+    }
+    await Bun.sleep(100);
+  }
+  throw new Error("Timed out waiting for the MathRead PDF redirect rule removal");
+}
+
+async function hasPdfRedirectRule(serviceWorker: Worker): Promise<boolean> {
+  return serviceWorker.evaluate(async () => {
+    const chromeApi = (
+      globalThis as typeof globalThis & {
+        chrome: {
+          declarativeNetRequest: {
+            getDynamicRules(): Promise<Array<{ id: number }>>;
+          };
+        };
+      }
+    ).chrome;
+    const rules = await chromeApi.declarativeNetRequest.getDynamicRules();
+    return rules.some((rule) => rule.id === 1);
+  });
 }
 
 function storedKeyFromPath(storedPath: string): string {
@@ -1650,10 +1756,18 @@ async function waitForNoDocumentReaderState(page: Page): Promise<{
         const selector = enabledDocumentControlSelector(id);
         return selector === undefined ? [] : [selector];
       });
+      const docTitle = document.getElementById("doc-title")?.textContent;
+      const viewerText = document.getElementById("viewer")?.textContent;
+      if (docTitle === undefined || docTitle === null) {
+        throw new Error("reader document title is missing");
+      }
+      if (viewerText === undefined || viewerText === null) {
+        throw new Error("reader viewer text is missing");
+      }
       return {
-        docTitle: document.getElementById("doc-title")?.textContent ?? "",
+        docTitle,
         enabledDocumentControls,
-        viewerText: document.getElementById("viewer")?.textContent ?? "",
+        viewerText,
       };
     }, documentControlIds);
     if (
@@ -1778,34 +1892,6 @@ async function persistFitWidthOnOpen(context: BrowserContext): Promise<void> {
   });
 }
 
-async function waitForStablePageDom(
-  page: Page,
-): Promise<{ canvasCount: number; pageNumbers: string[] }> {
-  let lastSignature = "";
-  let stableSamples = 0;
-  let lastDom = { canvasCount: 0, pageNumbers: [] as string[] };
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    lastDom = await page.evaluate(() => ({
-      canvasCount: document.querySelectorAll("#viewer canvas").length,
-      pageNumbers: Array.from(document.querySelectorAll("#viewer .page")).map(
-        (page) => page.getAttribute("data-page-number") ?? "",
-      ),
-    }));
-    const signature = JSON.stringify(lastDom);
-    if (signature === lastSignature) {
-      stableSamples += 1;
-      if (stableSamples >= 5) {
-        return lastDom;
-      }
-    } else {
-      lastSignature = signature;
-      stableSamples = 0;
-    }
-    await Bun.sleep(100);
-  }
-  return lastDom;
-}
-
 type FitWidthGeometry = {
   clientWidth: number;
   pageWidth: number;
@@ -1867,7 +1953,7 @@ async function waitForFitWidthConvergence(
       .locator("html")
       .getAttribute("data-fit-width-proof");
     throw new Error(
-      `Fit-width did not converge during ${transition}: ${lastProof ?? "no geometry sampled"}`,
+      `Fit-width did not converge during ${transition}: ${String(lastProof)}`,
       { cause: error },
     );
   }
@@ -2035,6 +2121,7 @@ function createCaptureArtifacts(
     backendLogPath: join(root, "backend.log"),
     eventsLogPath: join(root, "events.jsonl"),
     screenshotBeforePath: join(screenshotDir, "before.png"),
+    screenshotLaunchPath: join(screenshotDir, "launch.png"),
     screenshotAfterPath: join(screenshotDir, "after.png"),
     tracePath: join(root, "trace.zip"),
   };
@@ -2055,6 +2142,7 @@ function assertEvidenceArtifacts(
   if (scenario === "clicked-link") {
     assertPng(artifacts.screenshotBeforePath);
   }
+  assertPng(artifacts.screenshotLaunchPath);
   assertPng(artifacts.screenshotAfterPath);
 
   const events = readPersistedEvents(artifacts.eventsLogPath);
