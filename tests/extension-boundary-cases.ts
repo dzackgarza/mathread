@@ -143,6 +143,12 @@ const defaultCaptureRunOptions: CaptureRunOptions = {
 };
 
 export function registerCaptureBoundaryTests(): void {
+  registerLibraryCaptureBoundaryTests();
+  registerPdfInterceptionBoundaryTests();
+  registerCapturedSourceBoundaryTests();
+}
+
+function registerLibraryCaptureBoundaryTests(): void {
 test("reader Library panel lists, opens, and trashes captured items against the backend", async () => {
   await withExtensionReader(
     async ({ backendPort, courseServer, extensionId, page, readingRoot }) => {
@@ -268,6 +274,10 @@ test("reader Library panel opens provenance-less local PDFs from the backend cop
   });
 }, 60_000);
 
+}
+
+function registerPdfInterceptionBoundaryTests(): void {
+
 test("built extension intercepts a clicked PDF directly into an extension-owned reader", async () => {
   const evidence = await runExtensionCapture("clicked-link");
   const expectedCourseUrl = new URL("/course/", evidence.courseOrigin).href;
@@ -379,6 +389,10 @@ test("disabling automatic capture removes the PDF redirect rule", async () => {
   });
 }, 30_000);
 
+}
+
+function registerCapturedSourceBoundaryTests(): void {
+
 test("reader exposes arXiv source links as a dedicated toolbar button", async () => {
   await withExtensionReader(async ({ backendPort, courseServer, extensionId, page }) => {
     const key = await preCapturePdfThroughBackend(backendPort, courseServer, "arxiv-pdf");
@@ -479,6 +493,11 @@ test("built extension fails loudly when the capture backend is down", async () =
 }
 
 export function registerReaderNotesBoundaryTests(): void {
+  registerNoteEditingBoundaryTests();
+  registerNoteMigrationBoundaryTests();
+}
+
+function registerNoteEditingBoundaryTests(): void {
 test("reader Notes panel persists notes to the on-disk markdown file and renders a live preview", async () => {
   await withExtensionReader(
     async ({ backendPort, courseServer, extensionId, page, readingRoot }) => {
@@ -621,6 +640,10 @@ test("reader Key Points panel blocks stale autosave and resolves disk conflicts"
   );
 }, 60_000);
 
+}
+
+function registerNoteMigrationBoundaryTests(): void {
+
 test("reader Key Points panel surfaces a loud error when the backend dies (no localStorage fallback)", async () => {
   await withExtensionReader(
     async ({ backend, backendPort, courseServer, extensionId, page }) => {
@@ -732,6 +755,11 @@ test("legacy highlight migration rejects incomplete records instead of fabricati
 }
 
 export function registerReaderRenderingBoundaryTests(): void {
+  registerReaderNavigationBoundaryTests();
+  registerReaderRenderingSemanticsBoundaryTests();
+}
+
+function registerReaderNavigationBoundaryTests(): void {
 test("reader disables document-only toolbar actions when no document key is open", async () => {
   await withExtensionReader(async ({ extensionId, page }) => {
     await page.goto(`chrome-extension://${extensionId}/reader/reader.html`, {
@@ -870,6 +898,10 @@ test("reader delegates stable responsive navigation to the PDF.js viewer", async
     },
   );
 }, 120_000);
+
+}
+
+function registerReaderRenderingSemanticsBoundaryTests(): void {
 
 test("persisted fit-width setting controls ordinary reader opens without a zoom override", async () => {
   await withExtensionReader(
