@@ -153,6 +153,7 @@ type CaptureRunOptions = {
 const defaultCaptureRunOptions: CaptureRunOptions = {
   preExistingCapture: false,
 };
+const launchCaptureDelayMs = 250;
 
 export function registerCaptureBoundaryTests(): void {
   registerLibraryCaptureBoundaryTests();
@@ -1427,7 +1428,10 @@ async function runExtensionCapture(
     readingRoot,
     artifacts.backendLogPath,
   );
-  const courseServer = startCourseServer(artifacts.eventsLogPath);
+  const courseServer = startCourseServer(
+    artifacts.eventsLogPath,
+    launchCaptureDelayMs,
+  );
   let context: BrowserContext | undefined;
 
   try {
@@ -1470,20 +1474,26 @@ async function runExtensionCapture(
     const page = await context.newPage();
     attachPageDiagnostics(page, artifacts, scenario);
     const mainFrameNavigations: string[] = [];
+    // `framenavigated` fires before the launch renderer is ready, while a chained
+    // `waitForURL` continuation can run after the asynchronous capture has already
+    // replaced it with the reader. Capture directly from the launch document's
+    // `domcontentloaded` event, which fires with the static launch surface rendered.
     let launchScreenshot: Promise<Uint8Array<ArrayBufferLike>> | undefined;
+    page.on("domcontentloaded", () => {
+      const navigationUrl = new URL(page.url());
+      if (
+        navigationUrl.protocol === "chrome-extension:" &&
+        navigationUrl.pathname === "/pdf-launch.html" &&
+        launchScreenshot === undefined
+      ) {
+        launchScreenshot = page.screenshot({
+          path: artifacts.screenshotLaunchPath,
+        });
+      }
+    });
     page.on("framenavigated", (frame) => {
       if (frame === page.mainFrame()) {
         mainFrameNavigations.push(frame.url());
-        const navigationUrl = new URL(frame.url());
-        if (
-          navigationUrl.protocol === "chrome-extension:" &&
-          navigationUrl.pathname === "/pdf-launch.html" &&
-          launchScreenshot === undefined
-        ) {
-          launchScreenshot = page.screenshot({
-            path: artifacts.screenshotLaunchPath,
-          });
-        }
       }
     });
 
@@ -2485,11 +2495,14 @@ function startMathReadBackend(
   return { process, logFd };
 }
 
-function startCourseServer(eventsLogPath: string): RunningCourseServer {
+function startCourseServer(
+  eventsLogPath: string,
+  pdfResponseDelayMs = 0,
+): RunningCourseServer {
   const requests: CourseRequest[] = [];
   const server = Bun.serve({
     port: 0,
-    fetch(request) {
+    async fetch(request) {
       const url = new URL(request.url);
       const courseRequest = {
         path: url.pathname,
@@ -2521,6 +2534,9 @@ function startCourseServer(eventsLogPath: string): RunningCourseServer {
           return new Response("missing browser session cookie", {
             status: 403,
           });
+        }
+        if (pdfResponseDelayMs > 0) {
+          await Bun.sleep(pdfResponseDelayMs);
         }
         return new Response(pdfBytesForPath(url.pathname), {
           headers: { "content-type": "application/pdf" },
