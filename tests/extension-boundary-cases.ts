@@ -1080,6 +1080,14 @@ test("persisted fit-width setting controls ordinary reader opens without a zoom 
   );
 }, 120_000);
 
+registerReaderHistoryBoundaryTest();
+registerReaderPdfJsSemanticsBoundaryTest();
+registerInterceptedReaderShortcutsBoundaryTest();
+
+}
+
+function registerReaderHistoryBoundaryTest(): void {
+
 test("reader preserves PDF-internal navigation history", async () => {
   await withExtensionReader(
     async ({ artifacts, extensionId, page, readingRoot }) => {
@@ -1191,8 +1199,12 @@ test("reader preserves PDF-internal navigation history", async () => {
       expect(afterBack.page).toBe(beforeLink.page);
       expect(afterBack.zoom).toBe(beforeLink.zoom);
       expect(afterBack.history?.destination?.page).toBe(1);
-      expect(afterBack.history?.destination?.hash).toMatch(/(?:^|&)page=1(?:&|$)/);
-      expect(afterBack.history?.destination?.hash).toMatch(/(?:^|&)zoom=/);
+      expect(afterBack.history?.destination?.hash).toMatch(
+        new RegExp("(?:^|&)page=1(?:&|$)"),
+      );
+      expect(afterBack.history?.destination?.hash).toMatch(
+        new RegExp("(?:^|&)zoom="),
+      );
       expect(
         Math.abs(afterBack.scrollTop - beforeLink.scrollTop),
       ).toBeLessThanOrEqual(2);
@@ -1217,6 +1229,10 @@ test("reader preserves PDF-internal navigation history", async () => {
     },
   );
 }, 120_000);
+
+}
+
+function registerReaderPdfJsSemanticsBoundaryTest(): void {
 
 test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", async () => {
   await withExtensionReader(
@@ -1315,6 +1331,10 @@ test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", 
     },
   );
 }, 120_000);
+
+}
+
+function registerInterceptedReaderShortcutsBoundaryTest(): void {
 
 test("intercepted reader owns shortcuts without escaping the Notes editor", async () => {
   await withExtensionReader(
