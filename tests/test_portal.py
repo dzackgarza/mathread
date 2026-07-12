@@ -152,7 +152,7 @@ def test_note_put_rejects_stale_sidecar_write(
         json={
             "key": key,
             "text": "stale tab overwrite",
-            "version": first.json().get("version", ""),
+            "version": first.json()["version"],
         },
     )
 
@@ -487,9 +487,7 @@ Preserve this argument verbatim: ../clips/legacy-paper/clip-01.png
     migrated_note_path = root / "legacy-paper.md"
     migrated_note = migrated_note_path.read_text(encoding="utf-8")
     assert migrated_note == migrated_note_text
-    generated_link = next(
-        line for line in migrated_note.splitlines() if line.startswith("![Clipped region](")
-    )
+    generated_link = next(line for line in migrated_note.splitlines() if line.startswith("![Clipped region]("))
     generated_destination = generated_link.removeprefix("![Clipped region](").removesuffix(")")
     assert (migrated_note_path.parent / generated_destination).resolve() == clip_path.resolve()
     assert clip_path.read_bytes() == PNG_PIXEL

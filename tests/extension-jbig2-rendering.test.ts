@@ -32,8 +32,6 @@ test("extension reader renders the PDF.js JBig2 fixture as visible pixels", asyn
       String(backendPort),
       "--root",
       readingRoot,
-      "--config",
-      join(import.meta.dir, "..", "config", "mathread-backend.toml"),
     ],
     { stdout: backendLogFd, stderr: backendLogFd },
   );
@@ -149,6 +147,28 @@ async function canvasPixelEvidence(
       throw new Error("Reader reported an error before rendering the JBig2 fixture");
     }
     latest = await page.evaluate((index) => {
+      function rgbaAt(
+        pixels: Uint8ClampedArray,
+        offset: number,
+      ): [number, number, number, number] {
+        const channels = [
+          pixels.at(offset),
+          pixels.at(offset + 1),
+          pixels.at(offset + 2),
+          pixels.at(offset + 3),
+        ];
+        if (channels.some(channel => channel === undefined)) {
+          throw new Error(`Incomplete RGBA pixel at offset ${offset}`);
+        }
+        return channels as [number, number, number, number];
+      }
+
+      function isNonWhitePixel(
+        [red, green, blue, alpha]: [number, number, number, number],
+      ): boolean {
+        return alpha > 0 && Math.min(red, green, blue) < 245;
+      }
+
       const canvas = document.querySelectorAll<HTMLCanvasElement>(
         "#viewer canvas",
       )[index];
@@ -162,22 +182,7 @@ async function canvasPixelEvidence(
       const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
       let nonWhitePixels = 0;
       for (let offset = 0; offset < pixels.length; offset += 4) {
-        const red = pixels.at(offset);
-        const green = pixels.at(offset + 1);
-        const blue = pixels.at(offset + 2);
-        const alpha = pixels.at(offset + 3);
-        if (
-          red === undefined ||
-          green === undefined ||
-          blue === undefined ||
-          alpha === undefined
-        ) {
-          throw new Error(`Incomplete RGBA pixel at offset ${offset}`);
-        }
-        if (
-          alpha > 0 &&
-          Math.min(red, green, blue) < 245
-        ) {
+        if (isNonWhitePixel(rgbaAt(pixels, offset))) {
           nonWhitePixels += 1;
         }
       }

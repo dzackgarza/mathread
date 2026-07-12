@@ -47,7 +47,7 @@ GlobalWorkerOptions.workerSrc = chrome.runtime.getURL("reader/vendor/pdfjs/pdf.w
 // library entry. Without a key the reader is a library browser only.
 const bootParams = new URLSearchParams(location.search);
 const libraryKey = bootParams.get("key");
-// View restore: reader-swap forwards mrpage/mrzoom from the source URL as page/zoom.
+// View restore: pdf-launch forwards mrpage/mrzoom from the source URL as page/zoom.
 const initialPage = Number(bootParams.get("page"));
 const initialZoomParam = bootParams.get("zoom");
 const initialZoom = initialZoomParam === null ? null : Number(initialZoomParam);

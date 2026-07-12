@@ -16,6 +16,7 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
@@ -100,6 +101,7 @@ async function withArxivReader(
     },
   });
   let context: BrowserContext | undefined;
+  let completed = false;
 
   try {
     await waitForHttpService(`http://127.0.0.1:${backendPort}/openapi.json`);
@@ -158,9 +160,16 @@ async function withArxivReader(
     const extensionId = new URL(serviceWorker.url()).host;
     const page = await context.newPage();
     const pageFailures: string[] = [];
+    const pageEvents: string[] = [];
     page.on("pageerror", (error) =>
       pageFailures.push(`READER-PAGE-ERROR: ${error.message}`),
     );
+    page.on("crash", () => pageFailures.push("READER-PAGE-CRASH"));
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) {
+        pageEvents.push(`READER-NAVIGATION: ${frame.url()}`);
+      }
+    });
     page.on("console", (message) => {
       if (message.type() === "error") {
         pageFailures.push(`READER-CONSOLE-ERROR: ${message.text()}`);
@@ -170,9 +179,28 @@ async function withArxivReader(
       `chrome-extension://${extensionId}/reader/reader.html?key=${encodeURIComponent(key)}`,
     );
 
-    await run({ page, backendPort, readingRoot, key, notePath });
+    try {
+      await run({ page, backendPort, readingRoot, key, notePath });
+    } catch (error) {
+      const bodyText = page.isClosed()
+        ? "<closed>"
+        : await page
+            .locator("body")
+            .innerText({ timeout: 1_000 })
+            .catch((bodyError: unknown) => `<unavailable: ${String(bodyError)}>`);
+      throw new Error(
+        [
+          `arXiv reader failed at ${page.url()} (closed=${page.isClosed()})`,
+          ...pageEvents,
+          ...pageFailures,
+          `READER-BODY: ${bodyText.slice(0, 1_000)}`,
+        ].join("\n"),
+        { cause: error },
+      );
+    }
     expect(pageFailures).toEqual([]);
     await page.close();
+    completed = true;
   } finally {
     if (context !== undefined) {
       await context.close();
@@ -181,6 +209,9 @@ async function withArxivReader(
     backend.kill();
     await backend.exited;
     closeSync(logFd);
+    if (completed) {
+      rmSync(testRoot, { recursive: true, force: true });
+    }
   }
 }
 
@@ -195,11 +226,7 @@ for (const arxivId of ARXIV_IDS) {
           const pageTotal = await waitForNonEmptyText(page, "#page-total");
           const pageCount = Number(pageTotal);
           expect(pageCount).toBeGreaterThan(5);
-          await waitFor(
-            async () =>
-              (await page.locator("#viewer canvas").count()) === pageCount,
-            120_000,
-          );
+          await renderEveryPageTextLayer(page, pageCount);
           const textLayerSpanCount = await page
             .locator('.page[data-page-number="1"] .textLayer span')
             .count();
@@ -213,7 +240,8 @@ for (const arxivId of ARXIV_IDS) {
               ),
             );
             const span = spans.find(
-              (s) => (s.textContent ?? "").trim().length > 20,
+              (s) =>
+                s.textContent !== null && s.textContent.trim().length > 20,
             );
             if (span === undefined) {
               throw new Error("no selectable text-layer span on page 1");
@@ -226,7 +254,11 @@ for (const arxivId of ARXIV_IDS) {
             span
               .closest(".textLayer")!
               .dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-            return (span.textContent ?? "").trim();
+            const selectedText = span.textContent;
+            if (selectedText === null) {
+              throw new Error("selected text-layer span has no text content");
+            }
+            return selectedText.trim();
           });
           await waitFor(
             async () =>
@@ -440,6 +472,43 @@ async function waitForNonEmptyText(
     return /^[1-9]\d*$/.test(text);
   }, 120_000);
   return text;
+}
+
+async function renderEveryPageTextLayer(
+  page: Page,
+  pageCount: number,
+): Promise<void> {
+  const pageInput = page.locator("#page-input");
+  const renderedPages: number[] = [];
+  for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+    await pageInput.fill(String(pageNumber));
+    await pageInput.press("Enter");
+    await waitFor(
+      async () =>
+        (await pageInput.inputValue()) === String(pageNumber) &&
+        (await page
+          .locator(
+            `.page[data-page-number="${pageNumber}"] .textLayer span`,
+          )
+          .count()) > 0,
+      30_000,
+    );
+    renderedPages.push(pageNumber);
+  }
+  expect(renderedPages).toEqual(
+    Array.from({ length: pageCount }, (_, index) => index + 1),
+  );
+
+  await pageInput.fill("1");
+  await pageInput.press("Enter");
+  await waitFor(
+    async () =>
+      (await pageInput.inputValue()) === "1" &&
+      (await page
+        .locator('.page[data-page-number="1"] .textLayer span')
+        .count()) > 10,
+    30_000,
+  );
 }
 
 function unusedTcpPort(): Promise<number> {

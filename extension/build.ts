@@ -19,6 +19,9 @@ copyFileSync(
   join("extension", "mathread", "options.html"),
   join(distExt, "mathread", "options.html"),
 );
+for (const asset of ["pdf-launch.html", "pdf-launch.css"]) {
+  copyFileSync(join("extension", asset), join(distExt, asset));
+}
 
 // reader.js and its pre-minified vendor ESM ship verbatim: re-bundling minified ESM
 // through bun corrupts identifiers. Only backend.ts (already built to reader/vendor/backend.js
@@ -43,6 +46,11 @@ for (const asset of ["pdf_viewer.mjs", "pdf_viewer.css"]) {
     join(distExt, "reader", "vendor", "pdfjs", asset),
   );
 }
+cpSync(
+  join("node_modules", "pdfjs-dist", "web", "images"),
+  join(distExt, "reader", "vendor", "pdfjs", "images"),
+  { recursive: true },
+);
 for (const directory of ["cmaps", "standard_fonts", "wasm"]) {
   cpSync(
     join("node_modules", "pdfjs-dist", directory),
