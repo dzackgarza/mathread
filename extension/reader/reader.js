@@ -5,6 +5,7 @@ import {
   EventBus,
   LinkTarget,
   PDFFindController,
+  PDFHistory,
   PDFLinkService,
   PDFViewer,
 } from "./vendor/pdfjs/pdf_viewer.mjs";
@@ -137,6 +138,8 @@ const linkService = new PDFLinkService({
   eventBus,
   externalLinkTarget: LinkTarget.BLANK,
 });
+const pdfHistory = new PDFHistory({ eventBus, linkService });
+linkService.setHistory(pdfHistory);
 const findController = new PDFFindController({ eventBus, linkService });
 const pdfViewer = new PDFViewer({
   container: viewerEl,
@@ -449,6 +452,12 @@ async function mountPdfDocument() {
   linkService.setDocument(pdfDoc, pdfUrl ?? backendPdfUrl(libraryKey));
   pdfViewer.setDocument(pdfDoc);
   await pagesInitialized;
+  if (Array.isArray(pdfDoc?.fingerprints) && typeof pdfDoc.fingerprints[0] === "string" && pdfDoc.fingerprints[0].length > 0) {
+    pdfHistory.initialize({
+      fingerprint: pdfDoc.fingerprints[0],
+      updateUrl: false,
+    });
+  }
   syncPageContainers();
   pdfViewer.currentScaleValue = settings.fitWidthOnOpen && !hasExplicitInitialZoom
     ? "page-width"
@@ -1713,6 +1722,16 @@ document.addEventListener("keydown", event => {
     return;
   }
   if (event.defaultPrevented || isEditableTarget(event.target) || pdfDoc === null) {
+    return;
+  }
+  if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowLeft") {
+    pdfHistory.back();
+    event.preventDefault();
+    return;
+  }
+  if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowRight") {
+    pdfHistory.forward();
+    event.preventDefault();
     return;
   }
   if (event.ctrlKey || event.metaKey) {
