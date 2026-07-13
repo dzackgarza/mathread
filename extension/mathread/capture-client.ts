@@ -81,9 +81,7 @@ function pdfUrlFromFileQuery(queryString: string): string | undefined {
 
 function pdfUrlFromDnrQuery(queryString: string): string | undefined {
   if (queryString.startsWith("DNR:")) {
-    return originalPdfUrlOrUndefined(
-      safeDecodeUriComponent(queryString.slice(4)),
-    );
+    return originalPdfUrlOrUndefined(queryString.slice(4));
   }
   return undefined;
 }

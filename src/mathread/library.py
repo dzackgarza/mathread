@@ -451,6 +451,7 @@ def record_read_event(root: Path, key: str, position: float | None) -> None:
     resolve_pdf(root, key)  # validate the key exists before recording history
     now = datetime.now(UTC).isoformat()
     with _db_connection(root) as conn:
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT first_read, last_position FROM read_history WHERE key = ?", (key,)).fetchone()
         if row:
             first_read = row["first_read"]

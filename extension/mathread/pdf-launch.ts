@@ -21,8 +21,7 @@ declare const chrome: {
 
 type SourcePdf = {
   pdfUrl: string;
-  page: string | null;
-  zoom: string | null;
+  viewState: string | null;
 };
 
 void launchPdf().catch(renderLaunchError);
@@ -49,11 +48,8 @@ async function launchPdf(): Promise<void> {
   const key = libraryKeyFromStoredPath(response.result.stored_path);
   const readerUrl = new URL(chrome.runtime.getURL("reader/reader.html"));
   readerUrl.searchParams.set("key", key);
-  if (sourcePdf.page !== null) {
-    readerUrl.searchParams.set("page", sourcePdf.page);
-  }
-  if (sourcePdf.zoom !== null) {
-    readerUrl.searchParams.set("zoom", sourcePdf.zoom);
+  if (sourcePdf.viewState !== null) {
+    readerUrl.searchParams.set("mathread-view", sourcePdf.viewState);
   }
 
   const reader = document.createElement("iframe");
@@ -84,11 +80,70 @@ function captureRequest(
 
 function canonicalSourcePdf(rawPdfUrl: string): SourcePdf {
   const url = new URL(rawPdfUrl);
-  const page = url.searchParams.get("mrpage");
-  const zoom = url.searchParams.get("mrzoom");
-  url.searchParams.delete("mrpage");
-  url.searchParams.delete("mrzoom");
-  return { pdfUrl: url.href, page, zoom };
+  const entries = [...url.searchParams.entries()];
+  const trailingEntries = trailingMathReadEntries(entries);
+  if (trailingEntries === null) {
+    return sourcePdfWithoutView(url);
+  }
+  return sourcePdfFromMathReadLink(url, entries, trailingEntries);
+}
+
+function trailingMathReadEntries(entries: [string, string][]) {
+  const linkEntry = entries[entries.length - 2];
+  const sourceEntry = entries[entries.length - 1];
+  if (linkEntry?.[0] !== "mathread-link") {
+    return null;
+  }
+  if (sourceEntry?.[0] !== "mathread-source") {
+    return null;
+  }
+  return { linkEntry, sourceEntry };
+}
+
+function sourcePdfFromMathReadLink(
+  url: URL,
+  entries: [string, string][],
+  { linkEntry, sourceEntry }: { linkEntry: [string, string]; sourceEntry: [string, string] },
+): SourcePdf {
+  const sourceValue = sourceEntry[1];
+  if (!sourceValue.startsWith("v1.")) {
+    return sourcePdfWithoutView(url);
+  }
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(sourceValue.slice(3))) {
+    return sourcePdfWithoutView(url);
+  }
+  if (sourceValue.slice(3).length % 4 !== 0) {
+    return sourcePdfWithoutView(url);
+  }
+  const sourceUrl = atob(sourceValue.slice(3));
+  if (!URL.canParse(sourceUrl)) {
+    return sourcePdfWithoutView(url);
+  }
+  const reconstructedSource = urlWithEntries(url.href, entries.slice(0, -2));
+  const markedSource = new URL(sourceUrl);
+  const normalizedMarkedSource = urlWithEntries(
+    sourceUrl,
+    [...markedSource.searchParams.entries()],
+  );
+  if (reconstructedSource.href !== normalizedMarkedSource.href) {
+    return sourcePdfWithoutView(url);
+  }
+  assert(linkEntry[1].startsWith("v1."), "MathRead PDF link view state is invalid");
+  const viewState = atob(linkEntry[1].slice(3));
+  return { pdfUrl: sourceUrl, viewState };
+}
+
+function urlWithEntries(rawUrl: string, entries: [string, string][]): URL {
+  const url = new URL(rawUrl);
+  url.search = "";
+  for (const [name, value] of entries) {
+    url.searchParams.append(name, value);
+  }
+  return url;
+}
+
+function sourcePdfWithoutView(url: URL): SourcePdf {
+  return { pdfUrl: url.href, viewState: null };
 }
 
 function exposeSourceIdentity(pdfUrl: string): void {

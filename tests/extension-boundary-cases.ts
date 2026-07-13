@@ -144,6 +144,10 @@ type PersistedEvent = {
   storedPath?: string;
   text?: string;
   url?: string;
+  currentViewUrl?: string;
+  plainLinkUrl?: string;
+  desktopMenuPath?: string;
+  narrowMenuPath?: string;
 };
 
 type CaptureRunOptions = {
@@ -231,15 +235,34 @@ test("reader Library panel lists, opens, and trashes captured items against the 
       // requiring every page canvas to exist simultaneously.
       await reader.locator("#viewer canvas").first().waitFor();
 
-      // Copy view link must work from the cross-origin reader iframe (requires the
-      // iframe's clipboard-write permissions-policy delegation) and carry mrpage/mrzoom
-      // on the source URL.
+      // Copy view link must work from the cross-origin reader iframe and carry a
+      // MathRead-owned view-state envelope without rewriting the source identity.
       await reader.locator("#toggle-more").click();
       await reader.locator('.menu-item[data-action="copy-view-link"]').click();
+      await page.waitForFunction(() =>
+        navigator.clipboard.readText().then((text) => text.length > 0),
+      );
+      const copiedViewUrl = new URL(
+        await page.evaluate(() => navigator.clipboard.readText()),
+      );
       const expectedViewUrl = new URL(visibleSourceUrl);
-      expectedViewUrl.searchParams.set("mrpage", "1");
-      expectedViewUrl.searchParams.set("mrzoom", "1.00");
-      await waitForClipboardText(page, (text) => text === expectedViewUrl.href);
+      expect(copiedViewUrl.origin).toBe(expectedViewUrl.origin);
+      expect(copiedViewUrl.pathname).toBe(expectedViewUrl.pathname);
+      const viewLinks = copiedViewUrl.searchParams.getAll("mathread-link");
+      const viewLink = viewLinks[viewLinks.length - 1];
+      if (viewLink === undefined) {
+        throw new Error("Current-view link omitted its MathRead view state");
+      }
+      if (!viewLink.startsWith("v1.")) {
+        throw new Error("Current-view link omitted its MathRead view state");
+      }
+      const viewState = atob(viewLink.slice(3));
+      const [version, pageNumber, viewportX, viewportY, zoom] = viewState.split(":");
+      expect(version).toBe("v1");
+      expect(pageNumber).toBe("1");
+      expect(zoom).toBe("1.00");
+      expect(Number.isFinite(Number(viewportX))).toBe(true);
+      expect(Number.isFinite(Number(viewportY))).toBe(true);
 
       await reader.locator('.nav-expand-btn[data-tab="library"]').click();
       await waitForLibraryEntryCount(reader, 2);
@@ -568,18 +591,37 @@ test("built extension fails loudly when the capture backend is down", async () =
 }
 
 export function registerNumdamRenderingBoundaryTest(): void {
-test("installed reader renders a nonblank late page of the canonical Numdam PDF", async () => {
+test("installed reader copies source-preserving current and plain links for the canonical Numdam PDF", async () => {
   await withExtensionReader(
-    async ({ artifacts, backendPort, extensionId, page }) => {
+    async ({ artifacts, backendPort, context, extensionId, page }) => {
+      const numdamBytes = await numdamFixtureBytes();
+      const numdamSourceUrl = `${numdamRegressionPdfUrl}?title=source%20owned~query&mathread-view=source-owned&mathread-link=v1.source-owned`;
       const key = await preCaptureExternalPdfThroughBackend(
         backendPort,
-        numdamRegressionPdfUrl,
-        await numdamFixtureBytes(),
+        numdamSourceUrl,
+        numdamBytes,
+      );
+      // The installed extension still performs the source fetch. Fulfill only its
+      // service-worker fetch from the hash-verified canonical Numdam fixture so
+      // the DNR/pdf-launch source handoff remains deterministic.
+      let sourceFixtureFetches = 0;
+      await context.route(
+        (url) => url.toString().startsWith(numdamRegressionPdfUrl),
+        async (route, request) => {
+          if (request.serviceWorker() === null) {
+            await route.continue();
+            return;
+          }
+          sourceFixtureFetches += 1;
+          await route.fulfill({
+            contentType: "application/pdf",
+            path: numdamFixturePath,
+          });
+        },
       );
       await page.goto(readerPageUrl(extensionId, key), {
         waitUntil: "domcontentloaded",
       });
-
       await expectElementText(
         page.locator("#page-total"),
         (text) => text === "265",
@@ -588,7 +630,6 @@ test("installed reader renders a nonblank late page of the canonical Numdam PDF"
       await pageInput.fill("6");
       await pageInput.press("Enter");
       await expectInputValue(pageInput, (value) => value === "6");
-
       const latePageCanvasIndex = await page
         .locator('#pdf-viewer .page[data-page-number="6"] canvas')
         .evaluate((latePageCanvas) =>
@@ -599,14 +640,127 @@ test("installed reader renders a nonblank late page of the canonical Numdam PDF"
       const rendered = await canvasPixelEvidence(page, latePageCanvasIndex);
       expect(rendered.canvasSize).toBeGreaterThan(10_000);
       expect(rendered.nonWhitePixels).toBeGreaterThan(250);
-
+      await page.locator("#zoom-in").click();
+      await expectElementText(
+        page.locator("#zoom-level"),
+        (text) => text === "110%",
+      );
+      const capturedViewport = await page.locator("#viewer").evaluate((viewer) => {
+        const pageElement = document.querySelector(
+          '#pdf-viewer .page[data-page-number="6"]',
+        );
+        if (!(pageElement instanceof HTMLElement)) {
+          throw new Error("Numdam page 6 is unavailable");
+        }
+        viewer.scrollTop = pageElement.offsetTop + 132;
+        return {
+          x: Math.max(0, viewer.scrollLeft - pageElement.offsetLeft) / 1.1,
+          y: Math.max(0, viewer.scrollTop - pageElement.offsetTop) / 1.1,
+        };
+      });
+      expect(capturedViewport.y).toBeCloseTo(120, 0);
       await page.locator("#toggle-more").click();
+      await page.locator("#more-menu").evaluate((menu) =>
+        Promise.all(menu.getAnimations().map((animation) => animation.finished)),
+      );
+      const desktopMenuPath = join(
+        artifacts.root,
+        "numdam-copy-actions-desktop.png",
+      );
+      await page.screenshot({ path: desktopMenuPath });
+      assertPng(desktopMenuPath);
+      await page.evaluate(() => navigator.clipboard.writeText(""));
       await page.locator('.menu-item[data-action="copy-view-link"]').click();
-      const expectedViewUrl = new URL(numdamRegressionPdfUrl);
-      expectedViewUrl.searchParams.set("mrpage", "6");
-      expectedViewUrl.searchParams.set("mrzoom", "1.00");
-      await waitForClipboardText(page, (text) => text === expectedViewUrl.href);
-
+      await page.waitForFunction(() =>
+        navigator.clipboard.readText().then((text) => text.length > 0),
+      );
+      const copiedViewUrl = await page.evaluate(() => navigator.clipboard.readText());
+      const copiedView = new URL(copiedViewUrl);
+      expect(copiedView.origin).toBe("https://www.numdam.org");
+      expect(copiedView.pathname).toBe("/item/AST_1992__211__1_0.pdf");
+      expect(copiedView.searchParams.get("mathread-view")).toBe("source-owned");
+      const viewLinks = copiedView.searchParams.getAll("mathread-link");
+      expect(viewLinks[0]).toBe("v1.source-owned");
+      const viewLink = viewLinks[viewLinks.length - 1];
+      if (viewLink === undefined) {
+        throw new Error("Current-view link omitted its MathRead view state");
+      }
+      if (!viewLink.startsWith("v1.")) {
+        throw new Error("Current-view link omitted its MathRead view state");
+      }
+      const viewState = atob(viewLink.slice(3));
+      const [version, pageNumber, viewportX, viewportY, zoom] = viewState.split(":");
+      expect(version).toBe("v1");
+      expect(pageNumber).toBe("6");
+      expect(zoom).toBe("1.10");
+      expect(Number.isFinite(Number(viewportX))).toBe(true);
+      expect(Number(viewportY)).toBeGreaterThan(0);
+      await page.locator("#toggle-more").click();
+      await page.evaluate(() => navigator.clipboard.writeText(""));
+      await page.locator('.menu-item[data-action="copy-plain-link"]').click();
+      await waitForClipboardText(page, numdamSourceUrl);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.waitForFunction(() => {
+        const sidebar = document.getElementById("sidebar");
+        return sidebar instanceof HTMLElement
+          && !sidebar.classList.contains("open")
+          && getComputedStyle(sidebar).display === "none";
+      });
+      await page.locator("#toggle-more").click();
+      await page.locator("#more-menu").evaluate((menu) =>
+        Promise.all(menu.getAnimations().map((animation) => animation.finished)),
+      );
+      expect(
+        await page.locator("#sidebar").evaluate((sidebar) =>
+          sidebar.classList.contains("open"),
+        ),
+      ).toBe(false);
+      expect(
+        await page.locator("#more-menu").evaluate((menu) =>
+          menu.classList.contains("open"),
+        ),
+      ).toBe(true);
+      const narrowMenuPath = join(
+        artifacts.root,
+        "numdam-copy-actions-narrow.png",
+      );
+      await page.screenshot({ path: narrowMenuPath });
+      assertPng(narrowMenuPath);
+      await page.locator("#toggle-more").click();
+      await page.setViewportSize({ width: 1280, height: 720 });
+      const plainLaunchUrl = new URL(
+        `chrome-extension://${extensionId}/pdf-launch.html`,
+      );
+      plainLaunchUrl.searchParams.set("file", numdamSourceUrl);
+      await page.goto(plainLaunchUrl.href, { waitUntil: "domcontentloaded" });
+      await waitForReaderFrame(page, key);
+      await page.goto(copiedViewUrl, { waitUntil: "domcontentloaded" });
+      const restoredReader = await waitForReaderFrame(page, key);
+      expect(sourceFixtureFetches).toBe(1);
+      await expectInputValue(
+        restoredReader.locator("#page-input"),
+        (value) => value === "6",
+      );
+      await expectElementText(
+        restoredReader.locator("#zoom-level"),
+        (text) => text === "110%",
+      );
+      await restoredReader.waitForFunction(() => {
+        const viewer = document.getElementById("viewer");
+        const pageElement = document.querySelector(
+          '#pdf-viewer .page[data-page-number="6"]',
+        );
+        if (!(viewer instanceof HTMLElement)) {
+          return false;
+        }
+        if (!(pageElement instanceof HTMLElement)) {
+          return false;
+        }
+        return viewer.scrollTop - pageElement.offsetTop > 5;
+      });
+      await restoredReader.locator("#toggle-more").click();
+      await restoredReader.locator('.menu-item[data-action="copy-view-link"]').click();
+      await waitForClipboardText(page, copiedViewUrl);
       const screenshotPath = join(
         artifacts.root,
         "numdam-page-6.png",
@@ -614,9 +768,12 @@ test("installed reader renders a nonblank late page of the canonical Numdam PDF"
       await page.screenshot({ path: screenshotPath });
       assertPng(screenshotPath);
       appendEvent(artifacts.eventsLogPath, {
-        type: "numdam-late-page-proof",
+        type: "numdam-source-link-proof",
         path: screenshotPath,
-        url: expectedViewUrl.href,
+        currentViewUrl: copiedViewUrl,
+        plainLinkUrl: numdamSourceUrl,
+        desktopMenuPath,
+        narrowMenuPath,
       });
     },
   );
@@ -1927,8 +2084,12 @@ async function waitForReaderFrame(
   const surfaces = page
     .frames()
     .map((frame) => `${frame.name()} ${frame.url()}`);
+  const launchStatus = page.locator("#mathread-launch-status");
+  const launchError = (await launchStatus.count()) === 1
+    ? await launchStatus.textContent()
+    : undefined;
   throw new Error(
-    `Timed out waiting for reader frame with key=${expectedKey}; frames: ${surfaces.join(", ")}; last URL error: ${String(lastUrlError)}`,
+    `Timed out waiting for reader frame with key=${expectedKey}; frames: ${surfaces.join(", ")}; launch error: ${launchError}; last URL error: ${String(lastUrlError)}`,
   );
 }
 
@@ -2093,27 +2254,11 @@ async function expectElementText(
 
 async function waitForClipboardText(
   page: Page,
-  predicate: (text: string) => boolean,
+  expected: string,
 ): Promise<void> {
-  let lastText = "<unread>";
-  let lastError: unknown = undefined;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    let text: string | null = null;
-    try {
-      text = await page.evaluate(() => navigator.clipboard.readText());
-    } catch (error) {
-      lastError = error;
-    }
-    if (text !== null) {
-      lastText = text;
-      if (predicate(text)) {
-        return;
-      }
-    }
-    await Bun.sleep(100);
-  }
-  throw new Error(
-    `Timed out waiting for clipboard text; last: ${lastText}; last error: ${String(lastError)}`,
+  await page.waitForFunction(
+    (expectedText) => navigator.clipboard.readText().then((text) => text === expectedText),
+    expected,
   );
 }
 
