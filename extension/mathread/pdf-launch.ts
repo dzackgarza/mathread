@@ -21,10 +21,7 @@ declare const chrome: {
 
 type SourcePdf = {
   pdfUrl: string;
-  page: string | null;
-  viewportX: string | null;
-  viewportY: string | null;
-  zoom: string | null;
+  viewState: string | null;
 };
 
 void launchPdf().catch(renderLaunchError);
@@ -51,17 +48,8 @@ async function launchPdf(): Promise<void> {
   const key = libraryKeyFromStoredPath(response.result.stored_path);
   const readerUrl = new URL(chrome.runtime.getURL("reader/reader.html"));
   readerUrl.searchParams.set("key", key);
-  if (sourcePdf.page !== null) {
-    readerUrl.searchParams.set("page", sourcePdf.page);
-  }
-  if (sourcePdf.viewportX !== null) {
-    readerUrl.searchParams.set("mrx", sourcePdf.viewportX);
-  }
-  if (sourcePdf.viewportY !== null) {
-    readerUrl.searchParams.set("mry", sourcePdf.viewportY);
-  }
-  if (sourcePdf.zoom !== null) {
-    readerUrl.searchParams.set("zoom", sourcePdf.zoom);
+  if (sourcePdf.viewState !== null) {
+    readerUrl.searchParams.set("mathread-view", sourcePdf.viewState);
   }
 
   const reader = document.createElement("iframe");
@@ -92,15 +80,9 @@ function captureRequest(
 
 function canonicalSourcePdf(rawPdfUrl: string): SourcePdf {
   const url = new URL(rawPdfUrl);
-  const page = url.searchParams.get("mrpage");
-  const viewportX = url.searchParams.get("mrx");
-  const viewportY = url.searchParams.get("mry");
-  const zoom = url.searchParams.get("mrzoom");
-  url.searchParams.delete("mrpage");
-  url.searchParams.delete("mrx");
-  url.searchParams.delete("mry");
-  url.searchParams.delete("mrzoom");
-  return { pdfUrl: url.href, page, viewportX, viewportY, zoom };
+  const viewState = url.searchParams.get("mathread-view");
+  url.searchParams.delete("mathread-view");
+  return { pdfUrl: url.href, viewState };
 }
 
 function exposeSourceIdentity(pdfUrl: string): void {

@@ -1,5 +1,5 @@
 schema_version = 1
-profile = "bun"
+profile = "bun-python"
 installed_ref = "main"
 release_channel = "main"
 workflow_template_version = 1

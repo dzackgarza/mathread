@@ -235,9 +235,8 @@ test("reader Library panel lists, opens, and trashes captured items against the 
       // requiring every page canvas to exist simultaneously.
       await reader.locator("#viewer canvas").first().waitFor();
 
-      // Copy view link must work from the cross-origin reader iframe (requires the
-      // iframe's clipboard-write permissions-policy delegation) and carry mrpage/mrzoom
-      // on the source URL.
+      // Copy view link must work from the cross-origin reader iframe and carry a
+      // MathRead-owned view-state envelope without rewriting the source identity.
       await reader.locator("#toggle-more").click();
       await reader.locator('.menu-item[data-action="copy-view-link"]').click();
       await page.waitForFunction(() =>
@@ -249,13 +248,14 @@ test("reader Library panel lists, opens, and trashes captured items against the 
       const expectedViewUrl = new URL(visibleSourceUrl);
       expect(copiedViewUrl.origin).toBe(expectedViewUrl.origin);
       expect(copiedViewUrl.pathname).toBe(expectedViewUrl.pathname);
-      expect(copiedViewUrl.searchParams.get("mrpage")).toBe("1");
-      expect(copiedViewUrl.searchParams.get("mrzoom")).toBe("1.00");
-      const viewportX = copiedViewUrl.searchParams.get("mrx");
-      const viewportY = copiedViewUrl.searchParams.get("mry");
-      if (viewportX === null || viewportY === null) {
-        throw new Error("Current-view link omitted its viewport coordinates");
+      const viewState = copiedViewUrl.searchParams.get("mathread-view");
+      if (viewState === null) {
+        throw new Error("Current-view link omitted its MathRead view state");
       }
+      const [version, pageNumber, viewportX, viewportY, zoom] = viewState.split(":");
+      expect(version).toBe("v1");
+      expect(pageNumber).toBe("1");
+      expect(zoom).toBe("1.00");
       expect(Number.isFinite(Number(viewportX))).toBe(true);
       expect(Number.isFinite(Number(viewportY))).toBe(true);
 
@@ -616,7 +616,6 @@ test("installed reader copies source-preserving current and plain links for the 
       await page.goto(readerPageUrl(extensionId, key), {
         waitUntil: "domcontentloaded",
       });
-
       await expectElementText(
         page.locator("#page-total"),
         (text) => text === "265",
@@ -625,7 +624,6 @@ test("installed reader copies source-preserving current and plain links for the 
       await pageInput.fill("6");
       await pageInput.press("Enter");
       await expectInputValue(pageInput, (value) => value === "6");
-
       const latePageCanvasIndex = await page
         .locator('#pdf-viewer .page[data-page-number="6"] canvas')
         .evaluate((latePageCanvas) =>
@@ -636,7 +634,6 @@ test("installed reader copies source-preserving current and plain links for the 
       const rendered = await canvasPixelEvidence(page, latePageCanvasIndex);
       expect(rendered.canvasSize).toBeGreaterThan(10_000);
       expect(rendered.nonWhitePixels).toBeGreaterThan(250);
-
       await page.locator("#zoom-in").click();
       await expectElementText(
         page.locator("#zoom-level"),
@@ -656,7 +653,6 @@ test("installed reader copies source-preserving current and plain links for the 
         };
       });
       expect(capturedViewport.y).toBeCloseTo(120, 0);
-
       await page.locator("#toggle-more").click();
       await page.locator("#more-menu").evaluate((menu) =>
         Promise.all(menu.getAnimations().map((animation) => animation.finished)),
@@ -676,21 +672,20 @@ test("installed reader copies source-preserving current and plain links for the 
       const copiedView = new URL(copiedViewUrl);
       expect(copiedView.origin).toBe("https://www.numdam.org");
       expect(copiedView.pathname).toBe("/item/AST_1992__211__1_0.pdf");
-      expect(copiedView.searchParams.get("mrpage")).toBe("6");
-      expect(copiedView.searchParams.get("mrzoom")).toBe("1.10");
-      const viewportX = copiedView.searchParams.get("mrx");
-      const viewportY = copiedView.searchParams.get("mry");
-      if (viewportX === null || viewportY === null) {
-        throw new Error("Current-view link omitted its viewport coordinates");
+      const viewState = copiedView.searchParams.get("mathread-view");
+      if (viewState === null) {
+        throw new Error("Current-view link omitted its MathRead view state");
       }
+      const [version, pageNumber, viewportX, viewportY, zoom] = viewState.split(":");
+      expect(version).toBe("v1");
+      expect(pageNumber).toBe("6");
+      expect(zoom).toBe("1.10");
       expect(Number.isFinite(Number(viewportX))).toBe(true);
       expect(Number(viewportY)).toBeGreaterThan(0);
-
       await page.locator("#toggle-more").click();
       await page.evaluate(() => navigator.clipboard.writeText(""));
       await page.locator('.menu-item[data-action="copy-plain-link"]').click();
       await waitForClipboardText(page, numdamRegressionPdfUrl);
-
       await page.setViewportSize({ width: 390, height: 844 });
       await page.waitForFunction(() => {
         const sidebar = document.getElementById("sidebar");
@@ -720,7 +715,6 @@ test("installed reader copies source-preserving current and plain links for the 
       assertPng(narrowMenuPath);
       await page.locator("#toggle-more").click();
       await page.setViewportSize({ width: 1280, height: 720 });
-
       await page.goto(copiedViewUrl, { waitUntil: "domcontentloaded" });
       const restoredReader = await waitForReaderFrame(page, key);
       expect(sourceFixtureFetches).toBe(1);
@@ -745,7 +739,6 @@ test("installed reader copies source-preserving current and plain links for the 
       await restoredReader.locator("#toggle-more").click();
       await restoredReader.locator('.menu-item[data-action="copy-view-link"]').click();
       await waitForClipboardText(page, copiedViewUrl);
-
       const screenshotPath = join(
         artifacts.root,
         "numdam-page-6.png",
@@ -760,63 +753,6 @@ test("installed reader copies source-preserving current and plain links for the 
         desktopMenuPath,
         narrowMenuPath,
       });
-    },
-  );
-}, 120_000);
-
-test("installed reader keeps source query identity while restoring namespaced current-view state", async () => {
-  await withExtensionReader(
-    async ({ backendPort, context, page }) => {
-      const numdamBytes = await numdamFixtureBytes();
-      const sourceUrl = new URL(numdamRegressionPdfUrl);
-      sourceUrl.searchParams.set("mrpage", "source-page");
-      sourceUrl.searchParams.set("mrx", "source-token");
-      sourceUrl.searchParams.set("mry", "source-token-y");
-      sourceUrl.searchParams.set("mrzoom", "source-zoom");
-      const copiedViewUrl = new URL(sourceUrl.href);
-      copiedViewUrl.searchParams.set("mathread-view", "v1:6:0:120:1.10");
-      await preCaptureExternalPdfThroughBackend(
-        backendPort,
-        sourceUrl.href,
-        numdamBytes,
-      );
-      await context.route(
-        (url) => url.toString().startsWith(numdamRegressionPdfUrl),
-        async (route, request) => {
-          if (request.serviceWorker() === null) {
-            await route.continue();
-            return;
-          }
-          await route.fulfill({
-            contentType: "application/pdf",
-            path: numdamFixturePath,
-          });
-        },
-      );
-
-      await page.goto(copiedViewUrl.href, { waitUntil: "domcontentloaded" });
-      await page.locator("#mathread-reader-frame").waitFor();
-      const reader = page.frames().find((frame) => frame.name() === "mathreadReaderFrame");
-      if (reader === undefined) {
-        throw new Error("MathRead reader frame did not mount");
-      }
-      await reader.waitForLoadState("domcontentloaded");
-      await expectInputValue(
-        reader.locator("#page-input"),
-        (value) => value === "6",
-      );
-      await expectElementText(
-        reader.locator("#zoom-level"),
-        (text) => text === "110%",
-      );
-      await reader.locator("#toggle-more").click();
-      await page.evaluate(() => navigator.clipboard.writeText(""));
-      await reader.locator('.menu-item[data-action="copy-view-link"]').click();
-      await waitForClipboardText(page, copiedViewUrl.href);
-      await reader.locator("#toggle-more").click();
-      await page.evaluate(() => navigator.clipboard.writeText(""));
-      await reader.locator('.menu-item[data-action="copy-plain-link"]').click();
-      await waitForClipboardText(page, sourceUrl.href);
     },
   );
 }, 120_000);

@@ -49,10 +49,10 @@ GlobalWorkerOptions.workerSrc = chrome.runtime.getURL("reader/vendor/pdfjs/pdf.w
 const bootParams = new URLSearchParams(location.search);
 const libraryKey = bootParams.get("key");
 // View restore: pdf-launch forwards source-link state into the reader query.
-const initialPage = Number(bootParams.get("page"));
-const initialViewport = initialViewportFrom(bootParams, initialPage);
-const initialZoomParam = bootParams.get("zoom");
-const initialZoom = initialZoomParam === null ? null : Number(initialZoomParam);
+const initialView = initialViewFrom(bootParams);
+const initialPage = initialView.page;
+const initialViewport = initialView.viewport;
+const initialZoom = initialView.zoom;
 const hasExplicitInitialZoom =
   initialZoom !== null && Number.isFinite(initialZoom) && initialZoom > 0;
 // Legacy localStorage highlight store; read once to migrate into the notes file.
@@ -86,6 +86,34 @@ function initialViewportFrom(params, page) {
   assert(Number.isFinite(x), "MathRead reader viewport x must be finite");
   assert(Number.isFinite(y), "MathRead reader viewport y must be finite");
   return { x, y };
+}
+
+function initialViewFrom(params) {
+  const serializedState = params.get("mathread-view");
+  if (serializedState !== null) {
+    return initialViewFromSerializedState(serializedState);
+  }
+  const page = Number(params.get("page"));
+  const zoomParam = params.get("zoom");
+  return {
+    page,
+    viewport: initialViewportFrom(params, page),
+    zoom: zoomParam === null ? null : Number(zoomParam),
+  };
+}
+
+function initialViewFromSerializedState(serializedState) {
+  const parts = serializedState.split(":");
+  assert(parts.length === 5 && parts[0] === "v1", "MathRead reader view state is invalid");
+  const page = Number(parts[1]);
+  const x = Number(parts[2]);
+  const y = Number(parts[3]);
+  const zoom = Number(parts[4]);
+  assert(Number.isInteger(page) && page >= 1, "MathRead reader view state requires a page");
+  assert(Number.isFinite(x), "MathRead reader view state x must be finite");
+  assert(Number.isFinite(y), "MathRead reader view state y must be finite");
+  assert(Number.isFinite(zoom) && zoom > 0, "MathRead reader view state zoom must be positive");
+  return { page, viewport: { x, y }, zoom };
 }
 
 const viewerEl = $("viewer");
@@ -1561,12 +1589,7 @@ function sourceLinkUrl() {
   if (libraryEntry.pdf_url === undefined) {
     return localReaderUrl(libraryEntry.key);
   }
-  const url = new URL(libraryEntry.pdf_url);
-  url.searchParams.delete("mrpage");
-  url.searchParams.delete("mrx");
-  url.searchParams.delete("mry");
-  url.searchParams.delete("mrzoom");
-  return url;
+  return new URL(libraryEntry.pdf_url);
 }
 
 function currentViewCoordinates() {
@@ -1577,6 +1600,10 @@ function currentViewCoordinates() {
     viewerEl.scrollTop - pageView.div.offsetTop,
   );
   return { x: Math.round(x), y: Math.round(y) };
+}
+
+function serializedCurrentView(viewport) {
+  return `v1:${currentPageNumber}:${viewport.x}:${viewport.y}:${scale.toFixed(2)}`;
 }
 
 function currentViewUrl() {
@@ -1592,10 +1619,7 @@ function currentViewUrl() {
     url.searchParams.set("zoom", scale.toFixed(2));
     return url.href;
   }
-  url.searchParams.set("mrpage", String(currentPageNumber));
-  url.searchParams.set("mrx", String(viewport.x));
-  url.searchParams.set("mry", String(viewport.y));
-  url.searchParams.set("mrzoom", scale.toFixed(2));
+  url.searchParams.set("mathread-view", serializedCurrentView(viewport));
   return url.href;
 }
 
