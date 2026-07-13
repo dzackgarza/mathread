@@ -318,7 +318,8 @@ def test_concurrent_read_events_persist_all_key_updates(
     expected_positions = {key: (index + 1) / 10 for index, key in enumerate(keys)}
 
     def record(index: int) -> None:
-        client.post("/read-event", json={"key": keys[index], "position": expected_positions[keys[index]]})
+        response = client.post("/read-event", json={"key": keys[index], "position": expected_positions[keys[index]]})
+        assert response.status_code == 204
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
         futures = [executor.submit(record, index) for index in range(len(keys))]
