@@ -592,7 +592,7 @@ test("installed reader copies source-preserving current and plain links for the 
   await withExtensionReader(
     async ({ artifacts, backendPort, context, extensionId, page }) => {
       const numdamBytes = await numdamFixtureBytes();
-      const numdamSourceUrl = `${numdamRegressionPdfUrl}?mathread-view=source-owned`;
+      const numdamSourceUrl = `${numdamRegressionPdfUrl}?mathread-view=source-owned&mathread-link=v1.source-owned`;
       const key = await preCaptureExternalPdfThroughBackend(
         backendPort,
         numdamSourceUrl,
@@ -677,6 +677,7 @@ test("installed reader copies source-preserving current and plain links for the 
       expect(copiedView.pathname).toBe("/item/AST_1992__211__1_0.pdf");
       expect(copiedView.searchParams.get("mathread-view")).toBe("source-owned");
       const viewLinks = copiedView.searchParams.getAll("mathread-link");
+      expect(viewLinks[0]).toBe("v1.source-owned");
       const viewLink = viewLinks[viewLinks.length - 1];
       if (viewLink === undefined || !viewLink.startsWith("v1.")) {
         throw new Error("Current-view link omitted its MathRead view state");
@@ -692,6 +693,10 @@ test("installed reader copies source-preserving current and plain links for the 
       await page.evaluate(() => navigator.clipboard.writeText(""));
       await page.locator('.menu-item[data-action="copy-plain-link"]').click();
       await waitForClipboardText(page, numdamSourceUrl);
+      const plainPage = await context.newPage();
+      await plainPage.goto(numdamSourceUrl, { waitUntil: "domcontentloaded" });
+      await waitForReaderFrame(plainPage, key);
+      await plainPage.close();
       await page.setViewportSize({ width: 390, height: 844 });
       await page.waitForFunction(() => {
         const sidebar = document.getElementById("sidebar");
