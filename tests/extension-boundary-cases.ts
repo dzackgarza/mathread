@@ -595,7 +595,7 @@ test("installed reader copies source-preserving current and plain links for the 
   await withExtensionReader(
     async ({ artifacts, backendPort, context, extensionId, page }) => {
       const numdamBytes = await numdamFixtureBytes();
-      const numdamSourceUrl = `${numdamRegressionPdfUrl}?mathread-view=source-owned&mathread-link=v1.source-owned`;
+      const numdamSourceUrl = `${numdamRegressionPdfUrl}?title=source%20owned~query&mathread-view=source-owned&mathread-link=v1.source-owned`;
       const key = await preCaptureExternalPdfThroughBackend(
         backendPort,
         numdamSourceUrl,
