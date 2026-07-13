@@ -590,9 +590,10 @@ test("installed reader copies source-preserving current and plain links for the 
   await withExtensionReader(
     async ({ artifacts, backendPort, context, extensionId, page }) => {
       const numdamBytes = await numdamFixtureBytes();
+      const numdamSourceUrl = `${numdamRegressionPdfUrl}?mathread-view=source-owned`;
       const key = await preCaptureExternalPdfThroughBackend(
         backendPort,
-        numdamRegressionPdfUrl,
+        numdamSourceUrl,
         numdamBytes,
       );
       // The installed extension still performs the source fetch. Fulfill only its
@@ -672,10 +673,13 @@ test("installed reader copies source-preserving current and plain links for the 
       const copiedView = new URL(copiedViewUrl);
       expect(copiedView.origin).toBe("https://www.numdam.org");
       expect(copiedView.pathname).toBe("/item/AST_1992__211__1_0.pdf");
-      const viewState = copiedView.searchParams.get("mathread-view");
-      if (viewState === null) {
+      expect(copiedView.searchParams.get("mathread-view")).toBe("source-owned");
+      const viewLinks = copiedView.searchParams.getAll("mathread-link");
+      const viewLink = viewLinks[viewLinks.length - 1];
+      if (viewLink === undefined || !viewLink.startsWith("v1.")) {
         throw new Error("Current-view link omitted its MathRead view state");
       }
+      const viewState = JSON.parse(atob(viewLink.slice(3))).viewState;
       const [version, pageNumber, viewportX, viewportY, zoom] = viewState.split(":");
       expect(version).toBe("v1");
       expect(pageNumber).toBe("6");
@@ -685,7 +689,7 @@ test("installed reader copies source-preserving current and plain links for the 
       await page.locator("#toggle-more").click();
       await page.evaluate(() => navigator.clipboard.writeText(""));
       await page.locator('.menu-item[data-action="copy-plain-link"]').click();
-      await waitForClipboardText(page, numdamRegressionPdfUrl);
+      await waitForClipboardText(page, numdamSourceUrl);
       await page.setViewportSize({ width: 390, height: 844 });
       await page.waitForFunction(() => {
         const sidebar = document.getElementById("sidebar");
@@ -749,7 +753,7 @@ test("installed reader copies source-preserving current and plain links for the 
         type: "numdam-source-link-proof",
         path: screenshotPath,
         currentViewUrl: copiedViewUrl,
-        plainLinkUrl: numdamRegressionPdfUrl,
+        plainLinkUrl: numdamSourceUrl,
         desktopMenuPath,
         narrowMenuPath,
       });
