@@ -1608,7 +1608,10 @@ function serializedCurrentView(viewport) {
 
 function currentViewUrl() {
   const url = sourceLinkUrl();
-  if (url === null || libraryEntry === null) {
+  if (url === null) {
+    return null;
+  }
+  if (libraryEntry === null) {
     return null;
   }
   const viewport = currentViewCoordinates();

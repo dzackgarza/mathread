@@ -91,7 +91,10 @@ function canonicalSourcePdf(rawPdfUrl: string): SourcePdf {
 function trailingMathReadEntries(entries: [string, string][]) {
   const linkEntry = entries[entries.length - 2];
   const sourceEntry = entries[entries.length - 1];
-  if (linkEntry?.[0] !== "mathread-link" || sourceEntry?.[0] !== "mathread-source") {
+  if (linkEntry?.[0] !== "mathread-link") {
+    return null;
+  }
+  if (sourceEntry?.[0] !== "mathread-source") {
     return null;
   }
   return { linkEntry, sourceEntry };
@@ -103,11 +106,13 @@ function sourcePdfFromMathReadLink(
   { linkEntry, sourceEntry }: { linkEntry: [string, string]; sourceEntry: [string, string] },
 ): SourcePdf {
   const sourceValue = sourceEntry[1];
-  if (
-    !sourceValue.startsWith("v1.") ||
-    !/^[A-Za-z0-9+/]*={0,2}$/.test(sourceValue.slice(3)) ||
-    sourceValue.slice(3).length % 4 !== 0
-  ) {
+  if (!sourceValue.startsWith("v1.")) {
+    return sourcePdfWithoutView(url);
+  }
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(sourceValue.slice(3))) {
+    return sourcePdfWithoutView(url);
+  }
+  if (sourceValue.slice(3).length % 4 !== 0) {
     return sourcePdfWithoutView(url);
   }
   const sourceUrl = atob(sourceValue.slice(3));

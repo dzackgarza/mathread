@@ -250,7 +250,10 @@ test("reader Library panel lists, opens, and trashes captured items against the 
       expect(copiedViewUrl.pathname).toBe(expectedViewUrl.pathname);
       const viewLinks = copiedViewUrl.searchParams.getAll("mathread-link");
       const viewLink = viewLinks[viewLinks.length - 1];
-      if (viewLink === undefined || !viewLink.startsWith("v1.")) {
+      if (viewLink === undefined) {
+        throw new Error("Current-view link omitted its MathRead view state");
+      }
+      if (!viewLink.startsWith("v1.")) {
         throw new Error("Current-view link omitted its MathRead view state");
       }
       const viewState = atob(viewLink.slice(3));
@@ -679,7 +682,10 @@ test("installed reader copies source-preserving current and plain links for the 
       const viewLinks = copiedView.searchParams.getAll("mathread-link");
       expect(viewLinks[0]).toBe("v1.source-owned");
       const viewLink = viewLinks[viewLinks.length - 1];
-      if (viewLink === undefined || !viewLink.startsWith("v1.")) {
+      if (viewLink === undefined) {
+        throw new Error("Current-view link omitted its MathRead view state");
+      }
+      if (!viewLink.startsWith("v1.")) {
         throw new Error("Current-view link omitted its MathRead view state");
       }
       const viewState = atob(viewLink.slice(3));
@@ -744,7 +750,10 @@ test("installed reader copies source-preserving current and plain links for the 
         const pageElement = document.querySelector(
           '#pdf-viewer .page[data-page-number="6"]',
         );
-        if (!(viewer instanceof HTMLElement) || !(pageElement instanceof HTMLElement)) {
+        if (!(viewer instanceof HTMLElement)) {
+          return false;
+        }
+        if (!(pageElement instanceof HTMLElement)) {
           return false;
         }
         return viewer.scrollTop - pageElement.offsetTop > 5;
