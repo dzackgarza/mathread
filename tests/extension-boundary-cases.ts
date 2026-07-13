@@ -248,10 +248,12 @@ test("reader Library panel lists, opens, and trashes captured items against the 
       const expectedViewUrl = new URL(visibleSourceUrl);
       expect(copiedViewUrl.origin).toBe(expectedViewUrl.origin);
       expect(copiedViewUrl.pathname).toBe(expectedViewUrl.pathname);
-      const viewState = copiedViewUrl.searchParams.get("mathread-view");
-      if (viewState === null) {
+      const viewLinks = copiedViewUrl.searchParams.getAll("mathread-link");
+      const viewLink = viewLinks[viewLinks.length - 1];
+      if (viewLink === undefined || !viewLink.startsWith("v1.")) {
         throw new Error("Current-view link omitted its MathRead view state");
       }
+      const viewState = JSON.parse(atob(viewLink.slice(3))).viewState;
       const [version, pageNumber, viewportX, viewportY, zoom] = viewState.split(":");
       expect(version).toBe("v1");
       expect(pageNumber).toBe("1");

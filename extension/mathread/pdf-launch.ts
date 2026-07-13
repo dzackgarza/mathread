@@ -80,9 +80,20 @@ function captureRequest(
 
 function canonicalSourcePdf(rawPdfUrl: string): SourcePdf {
   const url = new URL(rawPdfUrl);
-  const viewState = url.searchParams.get("mathread-view");
-  url.searchParams.delete("mathread-view");
-  return { pdfUrl: url.href, viewState };
+  const linkValues = url.searchParams.getAll("mathread-link");
+  const linkValue = linkValues[linkValues.length - 1];
+  if (linkValue === undefined || !linkValue.startsWith("v1.")) {
+    return { pdfUrl: url.href, viewState: null };
+  }
+  const payload: unknown = JSON.parse(atob(linkValue.slice(3)));
+  assert(
+    typeof payload === "object" && payload !== null,
+    "MathRead PDF link payload is invalid",
+  );
+  const { sourceUrl, viewState } = payload as Record<string, unknown>;
+  assert(typeof sourceUrl === "string", "MathRead PDF link source is invalid");
+  assert(typeof viewState === "string", "MathRead PDF link view state is invalid");
+  return { pdfUrl: sourceUrl, viewState };
 }
 
 function exposeSourceIdentity(pdfUrl: string): void {
