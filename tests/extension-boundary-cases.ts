@@ -763,6 +763,63 @@ test("installed reader copies source-preserving current and plain links for the 
     },
   );
 }, 120_000);
+
+test("installed reader keeps source query identity while restoring namespaced current-view state", async () => {
+  await withExtensionReader(
+    async ({ backendPort, context, page }) => {
+      const numdamBytes = await numdamFixtureBytes();
+      const sourceUrl = new URL(numdamRegressionPdfUrl);
+      sourceUrl.searchParams.set("mrpage", "source-page");
+      sourceUrl.searchParams.set("mrx", "source-token");
+      sourceUrl.searchParams.set("mry", "source-token-y");
+      sourceUrl.searchParams.set("mrzoom", "source-zoom");
+      const copiedViewUrl = new URL(sourceUrl.href);
+      copiedViewUrl.searchParams.set("mathread-view", "v1:6:0:120:1.10");
+      await preCaptureExternalPdfThroughBackend(
+        backendPort,
+        sourceUrl.href,
+        numdamBytes,
+      );
+      await context.route(
+        (url) => url.toString().startsWith(numdamRegressionPdfUrl),
+        async (route, request) => {
+          if (request.serviceWorker() === null) {
+            await route.continue();
+            return;
+          }
+          await route.fulfill({
+            contentType: "application/pdf",
+            path: numdamFixturePath,
+          });
+        },
+      );
+
+      await page.goto(copiedViewUrl.href, { waitUntil: "domcontentloaded" });
+      await page.locator("#mathread-reader-frame").waitFor();
+      const reader = page.frames().find((frame) => frame.name() === "mathreadReaderFrame");
+      if (reader === undefined) {
+        throw new Error("MathRead reader frame did not mount");
+      }
+      await reader.waitForLoadState("domcontentloaded");
+      await expectInputValue(
+        reader.locator("#page-input"),
+        (value) => value === "6",
+      );
+      await expectElementText(
+        reader.locator("#zoom-level"),
+        (text) => text === "110%",
+      );
+      await reader.locator("#toggle-more").click();
+      await page.evaluate(() => navigator.clipboard.writeText(""));
+      await reader.locator('.menu-item[data-action="copy-view-link"]').click();
+      await waitForClipboardText(page, copiedViewUrl.href);
+      await reader.locator("#toggle-more").click();
+      await page.evaluate(() => navigator.clipboard.writeText(""));
+      await reader.locator('.menu-item[data-action="copy-plain-link"]').click();
+      await waitForClipboardText(page, sourceUrl.href);
+    },
+  );
+}, 120_000);
 }
 
 export function registerReaderNotesBoundaryTests(): void {
