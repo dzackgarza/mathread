@@ -48,8 +48,9 @@ GlobalWorkerOptions.workerSrc = chrome.runtime.getURL("reader/vendor/pdfjs/pdf.w
 // library entry. Without a key the reader is a library browser only.
 const bootParams = new URLSearchParams(location.search);
 const libraryKey = bootParams.get("key");
-// View restore: pdf-launch forwards mrpage/mrzoom from the source URL as page/zoom.
+// View restore: pdf-launch forwards source-link state into the reader query.
 const initialPage = Number(bootParams.get("page"));
+const initialViewport = initialViewportFrom(bootParams, initialPage);
 const initialZoomParam = bootParams.get("zoom");
 const initialZoom = initialZoomParam === null ? null : Number(initialZoomParam);
 const hasExplicitInitialZoom =
@@ -59,11 +60,32 @@ const legacyStorageKey = `mathread-legacy-highlights:${libraryKey}`;
 
 const $ = id => document.getElementById(id);
 
+function assert(condition, message) {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
 function setStatusMessage(target, className, message) {
   const status = document.createElement("div");
   status.className = className;
   status.textContent = message;
   target.replaceChildren(status);
+}
+
+function initialViewportFrom(params, page) {
+  const xParam = params.get("mrx");
+  const yParam = params.get("mry");
+  if (xParam === null && yParam === null) {
+    return null;
+  }
+  assert(xParam !== null && yParam !== null, "MathRead reader viewport requires both coordinates");
+  assert(Number.isInteger(page) && page >= 1, "MathRead reader viewport requires a page");
+  const x = Number(xParam);
+  const y = Number(yParam);
+  assert(Number.isFinite(x), "MathRead reader viewport x must be finite");
+  assert(Number.isFinite(y), "MathRead reader viewport y must be finite");
+  return { x, y };
 }
 
 const viewerEl = $("viewer");
@@ -462,7 +484,9 @@ async function mountPdfDocument() {
   pdfViewer.currentScaleValue = settings.fitWidthOnOpen && !hasExplicitInitialZoom
     ? "page-width"
     : String(scale);
-  if (Number.isFinite(initialPage) && initialPage >= 1) {
+  if (initialViewport !== null) {
+    linkService.goToXY(initialPage, initialViewport.x, initialViewport.y);
+  } else if (Number.isFinite(initialPage) && initialPage >= 1) {
     scrollToPage(initialPage);
   }
   updateZoomLabel();
@@ -1283,6 +1307,10 @@ function handleMenuAction(action) {
     void copyViewLink();
     return;
   }
+  if (action === "copy-plain-link") {
+    void copyPlainLink();
+    return;
+  }
   if (action?.startsWith("mode-")) {
     for (const item of moreMenuEl.querySelectorAll(".menu-check")) {
       item.dataset.checked = String(item.dataset.action === action);
@@ -1526,20 +1554,54 @@ async function populateScholarMenu() {
 }
 
 // ---------- View links ----------
-function currentViewUrl() {
+function sourceLinkUrl() {
   if (libraryEntry === null) {
     return null;
   }
   if (libraryEntry.pdf_url === undefined) {
-    const localUrl = localReaderUrl(libraryEntry.key);
-    localUrl.searchParams.set("page", String(currentPageNumber));
-    localUrl.searchParams.set("zoom", scale.toFixed(2));
-    return localUrl.href;
+    return localReaderUrl(libraryEntry.key);
   }
   const url = new URL(libraryEntry.pdf_url);
+  url.searchParams.delete("mrpage");
+  url.searchParams.delete("mrx");
+  url.searchParams.delete("mry");
+  url.searchParams.delete("mrzoom");
+  return url;
+}
+
+function currentViewCoordinates() {
+  const pageView = pdfViewer.getPageView(currentPageNumber - 1);
+  assert(pageView !== undefined, "MathRead reader current page is unavailable");
+  const [x, y] = pageView.getPagePoint(
+    viewerEl.scrollLeft - pageView.div.offsetLeft,
+    viewerEl.scrollTop - pageView.div.offsetTop,
+  );
+  return { x: Math.round(x), y: Math.round(y) };
+}
+
+function currentViewUrl() {
+  const url = sourceLinkUrl();
+  if (url === null || libraryEntry === null) {
+    return null;
+  }
+  const viewport = currentViewCoordinates();
+  if (libraryEntry.pdf_url === undefined) {
+    url.searchParams.set("page", String(currentPageNumber));
+    url.searchParams.set("mrx", String(viewport.x));
+    url.searchParams.set("mry", String(viewport.y));
+    url.searchParams.set("zoom", scale.toFixed(2));
+    return url.href;
+  }
   url.searchParams.set("mrpage", String(currentPageNumber));
+  url.searchParams.set("mrx", String(viewport.x));
+  url.searchParams.set("mry", String(viewport.y));
   url.searchParams.set("mrzoom", scale.toFixed(2));
   return url.href;
+}
+
+function plainLinkUrl() {
+  const url = sourceLinkUrl();
+  return url === null ? null : url.href;
 }
 
 async function copyViewLink() {
@@ -1548,13 +1610,18 @@ async function copyViewLink() {
     flashTitle("No document open to link");
     return;
   }
-  try {
-    await navigator.clipboard.writeText(viewUrl);
-  } catch (error) {
-    flashTitle(`Copy failed: ${error}`);
-    throw readerError("MATHREAD-COPY-LINK-ERROR", error);
+  await navigator.clipboard.writeText(viewUrl);
+  flashTitle("Copied current view link");
+}
+
+async function copyPlainLink() {
+  const plainUrl = plainLinkUrl();
+  if (plainUrl === null) {
+    flashTitle("No document open to link");
+    return;
   }
-  flashTitle("Copied view link");
+  await navigator.clipboard.writeText(plainUrl);
+  flashTitle("Copied plain link");
 }
 
 // ---------- Screen clipping: drag a region into the notes as an image ----------

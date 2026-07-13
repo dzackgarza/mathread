@@ -1441,7 +1441,6 @@ body {
   }
 
   .tb-left,
-  .tb-right,
   .tb-divider,
   #prev-page,
   #next-page,
@@ -1450,8 +1449,22 @@ body {
     display: none;
   }
 
+  .tb-right {
+    display: flex;
+    flex: 0 0 auto;
+  }
+
+  .tb-right > :not(.reader-actions-menu) {
+    display: none;
+  }
+
+  .side-panel.right:not(.open) {
+    display: none;
+  }
+
   .tb-center {
-    width: 100%;
+    flex: 1 1 0;
+    min-width: 0;
     justify-content: center;
   }
 }

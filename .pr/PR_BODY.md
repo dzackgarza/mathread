@@ -31,7 +31,7 @@ Excluded:
 
 ## Claim map
 
-- [ ] **#9 — source-preserving PDF link copy actions**
+- [x] **#9 — source-preserving PDF link copy actions**
   - Proof obligations claimed:
     - Current-view copying preserves the original PDF URL and encodes page, viewport, and zoom state.
     - Plain-link copying preserves the original PDF URL and carries no MathRead view state.
@@ -41,7 +41,11 @@ Excluded:
     - A real extension-browser run against the canonical Numdam PDF, exercising both menu actions through the system clipboard.
     - Direct URL assertions for source identity and the current-view/plain-link distinction.
     - Rendered desktop and narrow-viewport screenshots inspected for the menu state.
-  - Current evidence: pending implementation.
+  - Current evidence:
+    - `just build` passes.
+    - `bun test --max-concurrency=1 ./tests/extension-numdam-rendering.test.ts` passes 20 assertions across the installed extension, canonical source URL, system clipboard, DNR/pdf-launch handoff, and restored reader view.
+    - `bun test --max-concurrency=1 --test-name-pattern 'reader Library panel lists' ./tests/extension-capture-boundary.test.ts` passes 18 assertions for the existing source-link path.
+    - The generated desktop and 390 px menu screenshots were manually inspected after the menu animation completed.
 
 ## Automated gates
 

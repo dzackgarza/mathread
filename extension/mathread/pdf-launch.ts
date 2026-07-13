@@ -22,6 +22,8 @@ declare const chrome: {
 type SourcePdf = {
   pdfUrl: string;
   page: string | null;
+  viewportX: string | null;
+  viewportY: string | null;
   zoom: string | null;
 };
 
@@ -51,6 +53,12 @@ async function launchPdf(): Promise<void> {
   readerUrl.searchParams.set("key", key);
   if (sourcePdf.page !== null) {
     readerUrl.searchParams.set("page", sourcePdf.page);
+  }
+  if (sourcePdf.viewportX !== null) {
+    readerUrl.searchParams.set("mrx", sourcePdf.viewportX);
+  }
+  if (sourcePdf.viewportY !== null) {
+    readerUrl.searchParams.set("mry", sourcePdf.viewportY);
   }
   if (sourcePdf.zoom !== null) {
     readerUrl.searchParams.set("zoom", sourcePdf.zoom);
@@ -85,10 +93,14 @@ function captureRequest(
 function canonicalSourcePdf(rawPdfUrl: string): SourcePdf {
   const url = new URL(rawPdfUrl);
   const page = url.searchParams.get("mrpage");
+  const viewportX = url.searchParams.get("mrx");
+  const viewportY = url.searchParams.get("mry");
   const zoom = url.searchParams.get("mrzoom");
   url.searchParams.delete("mrpage");
+  url.searchParams.delete("mrx");
+  url.searchParams.delete("mry");
   url.searchParams.delete("mrzoom");
-  return { pdfUrl: url.href, page, zoom };
+  return { pdfUrl: url.href, page, viewportX, viewportY, zoom };
 }
 
 function exposeSourceIdentity(pdfUrl: string): void {
