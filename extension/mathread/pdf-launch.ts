@@ -80,20 +80,35 @@ function captureRequest(
 
 function canonicalSourcePdf(rawPdfUrl: string): SourcePdf {
   const url = new URL(rawPdfUrl);
-  const linkValues = url.searchParams.getAll("mathread-link");
-  const linkValue = linkValues[linkValues.length - 1];
-  if (linkValue === undefined || !linkValue.startsWith("v1.")) {
+  const entries = [...url.searchParams.entries()];
+  const linkEntry = entries[entries.length - 2];
+  const sourceEntry = entries[entries.length - 1];
+  if (linkEntry?.[0] !== "mathread-link" || sourceEntry?.[0] !== "mathread-source") {
     return { pdfUrl: url.href, viewState: null };
   }
-  const payload: unknown = JSON.parse(atob(linkValue.slice(3)));
-  assert(
-    typeof payload === "object" && payload !== null,
-    "MathRead PDF link payload is invalid",
-  );
-  const { sourceUrl, viewState } = payload as Record<string, unknown>;
-  assert(typeof sourceUrl === "string", "MathRead PDF link source is invalid");
-  assert(typeof viewState === "string", "MathRead PDF link view state is invalid");
-  return { pdfUrl: sourceUrl, viewState };
+  const sourceValue = sourceEntry[1];
+  const encodedSource = sourceValue.startsWith("v1.")
+    ? sourceValue.slice(3)
+    : null;
+  if (
+    encodedSource === null ||
+    !/^[A-Za-z0-9+/]*={0,2}$/.test(encodedSource) ||
+    encodedSource.length % 4 !== 0
+  ) {
+    return { pdfUrl: url.href, viewState: null };
+  }
+  const sourceUrl = atob(encodedSource);
+  const reconstructedSource = new URL(url.href);
+  reconstructedSource.search = "";
+  for (const [name, value] of entries.slice(0, -2)) {
+    reconstructedSource.searchParams.append(name, value);
+  }
+  if (reconstructedSource.href !== sourceUrl) {
+    return { pdfUrl: url.href, viewState: null };
+  }
+  assert(linkEntry[1].startsWith("v1."), "MathRead PDF link view state is invalid");
+  const viewState = atob(linkEntry[1].slice(3));
+  return { pdfUrl: reconstructedSource.href, viewState };
 }
 
 function exposeSourceIdentity(pdfUrl: string): void {

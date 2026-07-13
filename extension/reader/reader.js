@@ -1619,13 +1619,9 @@ function currentViewUrl() {
     url.searchParams.set("zoom", scale.toFixed(2));
     return url.href;
   }
-  url.searchParams.append(
-    "mathread-link",
-    `v1.${btoa(JSON.stringify({
-      sourceUrl: url.href,
-      viewState: serializedCurrentView(viewport),
-    }))}`,
-  );
+  const sourceUrl = url.href;
+  url.searchParams.append("mathread-link", `v1.${btoa(serializedCurrentView(viewport))}`);
+  url.searchParams.append("mathread-source", `v1.${btoa(sourceUrl)}`);
   return url.href;
 }
 

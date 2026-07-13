@@ -253,7 +253,7 @@ test("reader Library panel lists, opens, and trashes captured items against the 
       if (viewLink === undefined || !viewLink.startsWith("v1.")) {
         throw new Error("Current-view link omitted its MathRead view state");
       }
-      const viewState = JSON.parse(atob(viewLink.slice(3))).viewState;
+      const viewState = atob(viewLink.slice(3));
       const [version, pageNumber, viewportX, viewportY, zoom] = viewState.split(":");
       expect(version).toBe("v1");
       expect(pageNumber).toBe("1");
@@ -682,7 +682,7 @@ test("installed reader copies source-preserving current and plain links for the 
       if (viewLink === undefined || !viewLink.startsWith("v1.")) {
         throw new Error("Current-view link omitted its MathRead view state");
       }
-      const viewState = JSON.parse(atob(viewLink.slice(3))).viewState;
+      const viewState = atob(viewLink.slice(3));
       const [version, pageNumber, viewportX, viewportY, zoom] = viewState.split(":");
       expect(version).toBe("v1");
       expect(pageNumber).toBe("6");
@@ -693,10 +693,6 @@ test("installed reader copies source-preserving current and plain links for the 
       await page.evaluate(() => navigator.clipboard.writeText(""));
       await page.locator('.menu-item[data-action="copy-plain-link"]').click();
       await waitForClipboardText(page, numdamSourceUrl);
-      const plainPage = await context.newPage();
-      await plainPage.goto(numdamSourceUrl, { waitUntil: "domcontentloaded" });
-      await waitForReaderFrame(plainPage, key);
-      await plainPage.close();
       await page.setViewportSize({ width: 390, height: 844 });
       await page.waitForFunction(() => {
         const sidebar = document.getElementById("sidebar");
@@ -726,6 +722,12 @@ test("installed reader copies source-preserving current and plain links for the 
       assertPng(narrowMenuPath);
       await page.locator("#toggle-more").click();
       await page.setViewportSize({ width: 1280, height: 720 });
+      const plainLaunchUrl = new URL(
+        `chrome-extension://${extensionId}/pdf-launch.html`,
+      );
+      plainLaunchUrl.searchParams.set("file", numdamSourceUrl);
+      await page.goto(plainLaunchUrl.href, { waitUntil: "domcontentloaded" });
+      await waitForReaderFrame(page, key);
       await page.goto(copiedViewUrl, { waitUntil: "domcontentloaded" });
       const restoredReader = await waitForReaderFrame(page, key);
       expect(sourceFixtureFetches).toBe(1);
