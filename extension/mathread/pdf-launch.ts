@@ -116,17 +116,30 @@ function sourcePdfFromMathReadLink(
     return sourcePdfWithoutView(url);
   }
   const sourceUrl = atob(sourceValue.slice(3));
-  const reconstructedSource = new URL(url.href);
-  reconstructedSource.search = "";
-  for (const [name, value] of entries.slice(0, -2)) {
-    reconstructedSource.searchParams.append(name, value);
+  if (!URL.canParse(sourceUrl)) {
+    return sourcePdfWithoutView(url);
   }
-  if (reconstructedSource.href !== sourceUrl) {
+  const reconstructedSource = urlWithEntries(url.href, entries.slice(0, -2));
+  const markedSource = new URL(sourceUrl);
+  const normalizedMarkedSource = urlWithEntries(
+    sourceUrl,
+    [...markedSource.searchParams.entries()],
+  );
+  if (reconstructedSource.href !== normalizedMarkedSource.href) {
     return sourcePdfWithoutView(url);
   }
   assert(linkEntry[1].startsWith("v1."), "MathRead PDF link view state is invalid");
   const viewState = atob(linkEntry[1].slice(3));
-  return { pdfUrl: reconstructedSource.href, viewState };
+  return { pdfUrl: sourceUrl, viewState };
+}
+
+function urlWithEntries(rawUrl: string, entries: [string, string][]): URL {
+  const url = new URL(rawUrl);
+  url.search = "";
+  for (const [name, value] of entries) {
+    url.searchParams.append(name, value);
+  }
+  return url;
 }
 
 function sourcePdfWithoutView(url: URL): SourcePdf {
