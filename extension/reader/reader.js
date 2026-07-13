@@ -1611,9 +1611,6 @@ function currentViewUrl() {
   if (url === null) {
     return null;
   }
-  if (libraryEntry === null) {
-    return null;
-  }
   const viewport = currentViewCoordinates();
   if (libraryEntry.pdf_url === undefined) {
     url.searchParams.set("page", String(currentPageNumber));
