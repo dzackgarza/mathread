@@ -81,34 +81,51 @@ function captureRequest(
 function canonicalSourcePdf(rawPdfUrl: string): SourcePdf {
   const url = new URL(rawPdfUrl);
   const entries = [...url.searchParams.entries()];
+  const trailingEntries = trailingMathReadEntries(entries);
+  if (trailingEntries === null) {
+    return sourcePdfWithoutView(url);
+  }
+  return sourcePdfFromMathReadLink(url, entries, trailingEntries);
+}
+
+function trailingMathReadEntries(entries: [string, string][]) {
   const linkEntry = entries[entries.length - 2];
   const sourceEntry = entries[entries.length - 1];
   if (linkEntry?.[0] !== "mathread-link" || sourceEntry?.[0] !== "mathread-source") {
-    return { pdfUrl: url.href, viewState: null };
+    return null;
   }
+  return { linkEntry, sourceEntry };
+}
+
+function sourcePdfFromMathReadLink(
+  url: URL,
+  entries: [string, string][],
+  { linkEntry, sourceEntry }: { linkEntry: [string, string]; sourceEntry: [string, string] },
+): SourcePdf {
   const sourceValue = sourceEntry[1];
-  const encodedSource = sourceValue.startsWith("v1.")
-    ? sourceValue.slice(3)
-    : null;
   if (
-    encodedSource === null ||
-    !/^[A-Za-z0-9+/]*={0,2}$/.test(encodedSource) ||
-    encodedSource.length % 4 !== 0
+    !sourceValue.startsWith("v1.") ||
+    !/^[A-Za-z0-9+/]*={0,2}$/.test(sourceValue.slice(3)) ||
+    sourceValue.slice(3).length % 4 !== 0
   ) {
-    return { pdfUrl: url.href, viewState: null };
+    return sourcePdfWithoutView(url);
   }
-  const sourceUrl = atob(encodedSource);
+  const sourceUrl = atob(sourceValue.slice(3));
   const reconstructedSource = new URL(url.href);
   reconstructedSource.search = "";
   for (const [name, value] of entries.slice(0, -2)) {
     reconstructedSource.searchParams.append(name, value);
   }
   if (reconstructedSource.href !== sourceUrl) {
-    return { pdfUrl: url.href, viewState: null };
+    return sourcePdfWithoutView(url);
   }
   assert(linkEntry[1].startsWith("v1."), "MathRead PDF link view state is invalid");
   const viewState = atob(linkEntry[1].slice(3));
   return { pdfUrl: reconstructedSource.href, viewState };
+}
+
+function sourcePdfWithoutView(url: URL): SourcePdf {
+  return { pdfUrl: url.href, viewState: null };
 }
 
 function exposeSourceIdentity(pdfUrl: string): void {
