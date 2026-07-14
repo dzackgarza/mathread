@@ -431,9 +431,11 @@ async function main() {
   await mountPdfDocument();
   pageInputEl.value = String(currentPageNumber);
   void initNotes();
-  postReadEvent(libraryKey).catch(error => {
-    throw readerError("MATHREAD-READ-EVENT-ERROR", error);
-  });
+  postReadEvent(libraryKey)
+    .then(refreshLibrary)
+    .catch(error => {
+      throw readerError("MATHREAD-READ-EVENT-ERROR", error);
+    });
 }
 
 async function setDocTitle() {
@@ -1169,6 +1171,7 @@ function renderLibrary(backendStatus, entries) {
     item.className = "library-entry";
     item.classList.toggle("current", entry.key === libraryKey);
     item.dataset.testid = "library-entry";
+    item.dataset.mathreadKey = entry.key;
 
     const open = document.createElement("button");
     open.className = "library-entry-open";

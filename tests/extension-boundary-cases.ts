@@ -18,6 +18,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
@@ -148,6 +149,21 @@ type PersistedEvent = {
   plainLinkUrl?: string;
   desktopMenuPath?: string;
   narrowMenuPath?: string;
+  readerScreenshotPath?: string;
+  markdownScreenshotPath?: string;
+  libraryScreenshotPath?: string;
+};
+
+type ReadEventRequest = {
+  method: string;
+  pathname: string;
+  bodyText: string | null;
+};
+
+type BackendLibraryEntry = {
+  key: string;
+  first_read: string;
+  last_read: string;
 };
 
 type CaptureRunOptions = {
@@ -513,16 +529,44 @@ test("reader exposes arXiv source links as a dedicated toolbar button", async ()
 
 test("reader, markdown, and library workflows remain extension-owned", async () => {
   await withExtensionReader(
-    async ({ backendPort, courseServer, extensionId, page, readingRoot }) => {
+    async ({ artifacts, backendPort, courseServer, extensionId, page, readingRoot }) => {
+      const olderCapturedKey = await preCapturePdfThroughBackend(
+        backendPort,
+        courseServer,
+        "arxiv-pdf",
+      );
+      const manualKey = "manual-local.pdf";
+      writeFileSync(join(readingRoot, manualKey), pdfBytes);
       const key = await preCapturePdfThroughBackend(
         backendPort,
         courseServer,
-        "direct-pdf-tab",
+        "large-numdam-pdf",
       );
+      const originalReadTime = new Date("2020-01-01T00:00:00.000Z");
+      for (const entryKey of [olderCapturedKey, manualKey, key]) {
+        utimesSync(join(readingRoot, entryKey), originalReadTime, originalReadTime);
+      }
+      const readEvents = collectReadEventRequests(page, backendPort);
+
       await page.goto(readerPageUrl(extensionId, key), {
         waitUntil: "domcontentloaded",
       });
-      await waitForCanvasCount(page, 1);
+      await page.locator("#viewer canvas").first().waitFor();
+      await waitForReadEventCount(readEvents, 1);
+      assertReadEventBodies(readEvents, [key]);
+      const currentEntry = await waitForBackendLibraryEntry(
+        backendPort,
+        key,
+        (entry) => readTimestamp(entry.last_read) > readTimestamp(entry.first_read),
+      );
+      expect(readTimestamp(currentEntry.first_read)).toBe(originalReadTime.getTime());
+      const backendEntries = await fetchBackendLibraryEntries(backendPort);
+      for (const entryKey of [key, olderCapturedKey, manualKey]) {
+        const entry = backendEntries.find((candidate) => candidate.key === entryKey);
+        assert(entry !== undefined);
+        expect(Number.isFinite(readTimestamp(entry.first_read))).toBe(true);
+        expect(Number.isFinite(readTimestamp(entry.last_read))).toBe(true);
+      }
 
       const visibleReaderUrl = new URL(page.url());
       expect(visibleReaderUrl.protocol).toBe("chrome-extension:");
@@ -530,13 +574,55 @@ test("reader, markdown, and library workflows remain extension-owned", async () 
       expect(visibleReaderUrl.pathname).toBe("/reader/reader.html");
       expect(visibleReaderUrl.searchParams.get("key")).toBe(key);
       expect(page.url()).not.toContain("markdown-editor.localhost");
+      const readerScreenshotPath = join(
+        artifacts.root,
+        "issue10-extension-reader.png",
+      );
+      await page.screenshot({ path: readerScreenshotPath });
+      assertPng(readerScreenshotPath);
 
-      await page.locator('.nav-expand-btn[data-tab="keypoints"]').click({ force: true });
+      const pageInput = page.locator("#page-input");
+      await pageInput.fill("3");
+      await pageInput.press("Enter");
+      await expectInputValue(pageInput, (value) => value === "3");
+      await page.locator("#zoom-in").click();
       await expectElementText(
-        page.locator("#notes-path"),
+        page.locator("#zoom-level"),
+        (text) => text === "110%",
+      );
+      expect(readEvents.length).toBe(1);
+      await page.locator("#toggle-more").click();
+      await page.locator('.menu-item[data-action="copy-view-link"]').click();
+      await page.waitForFunction(() =>
+        navigator.clipboard.readText().then((text) => text.length > 0),
+      );
+      const copiedViewUrl = await page.evaluate(() => navigator.clipboard.readText());
+      const copiedView = new URL(copiedViewUrl);
+      expect(copiedView.pathname).toBe(pdfPathForScenario("large-numdam-pdf"));
+      const viewLink = copiedView.searchParams.getAll("mathread-link").at(-1);
+      assert(viewLink !== undefined && viewLink.startsWith("v1."));
+
+      await page.goto(copiedViewUrl, { waitUntil: "domcontentloaded" });
+      const restoredReader = await waitForReaderFrame(page, key);
+      await waitForReadEventCount(readEvents, 2);
+      assertReadEventBodies(readEvents, [key, key]);
+      await expectInputValue(
+        restoredReader.locator("#page-input"),
+        (value) => value === "3",
+      );
+      await expectElementText(
+        restoredReader.locator("#zoom-level"),
+        (text) => text === "110%",
+      );
+
+      await restoredReader
+        .locator('.nav-expand-btn[data-tab="keypoints"]')
+        .click({ force: true });
+      await expectElementText(
+        restoredReader.locator("#notes-path"),
         (text) => text === key.replace(/\.pdf$/, ".md"),
       );
-      const editor = page.locator("#ai-editor .cm-content");
+      const editor = restoredReader.locator("#ai-editor .cm-content");
       await editor.click();
       await page.keyboard.type("# issue10-probe\n");
       await waitForNoteSaved(
@@ -545,16 +631,40 @@ test("reader, markdown, and library workflows remain extension-owned", async () 
         (text) => text.includes("issue10-probe"),
       );
       await expectElementText(
-        page.locator("#notes-status"),
+        restoredReader.locator("#notes-status"),
         (text) => text === "Saved",
       );
+      const markdownScreenshotPath = join(
+        artifacts.root,
+        "issue10-extension-markdown.png",
+      );
+      await page.screenshot({ path: markdownScreenshotPath });
+      assertPng(markdownScreenshotPath);
 
-      await page.locator('.nav-expand-btn[data-tab="library"]').click({ force: true });
-      await waitForLibraryEntryCount(page, 1);
+      await restoredReader
+        .locator('.nav-expand-btn[data-tab="library"]')
+        .click({ force: true });
+      await waitForLibraryEntryCount(restoredReader, 3);
       await expectElementText(
-        page.locator('[data-testid="library-folder-path"]'),
+        restoredReader.locator('[data-testid="library-folder-path"]'),
         (text) => text === readingRoot,
       );
+      await waitForLibraryOrder(restoredReader, [key, olderCapturedKey, manualKey]);
+      const libraryScreenshotPath = join(
+        artifacts.root,
+        "issue10-extension-library-recently-read.png",
+      );
+      await page.screenshot({ path: libraryScreenshotPath });
+      assertPng(libraryScreenshotPath);
+      expect(readEvents.length).toBe(2);
+      appendEvent(artifacts.eventsLogPath, {
+        type: "issue10-extension-owned-proof",
+        scenario: "large-numdam-pdf",
+        readerScreenshotPath,
+        markdownScreenshotPath,
+        libraryScreenshotPath,
+        currentViewUrl: copiedViewUrl,
+      });
     },
   );
 }, 120_000);
@@ -619,6 +729,9 @@ test("reader renders all pages of a large PDF with real content", async () => {
       await pageInput.fill("6");
       await pageInput.press("Enter");
       await expectInputValue(pageInput, (value) => value === "6");
+      await page
+        .locator('#pdf-viewer .page[data-page-number="6"] canvas')
+        .waitFor();
       const latePageCanvasIndex = await page
         .locator('#pdf-viewer .page[data-page-number="6"] canvas')
         .evaluate((latePageCanvas) =>
@@ -674,10 +787,14 @@ test("installed reader copies source-preserving current and plain links for the 
         page.locator("#page-total"),
         (text) => text === "265",
       );
+      await page.locator("#viewer canvas").first().waitFor();
       const pageInput = page.locator("#page-input");
       await pageInput.fill("6");
       await pageInput.press("Enter");
       await expectInputValue(pageInput, (value) => value === "6");
+      await page
+        .locator('#pdf-viewer .page[data-page-number="6"] canvas')
+        .waitFor();
       const latePageCanvasIndex = await page
         .locator('#pdf-viewer .page[data-page-number="6"] canvas')
         .evaluate((latePageCanvas) =>
@@ -2187,6 +2304,139 @@ async function waitForBackendLibraryKey(
   }
   throw new Error(
     `Timed out waiting for backend library key ${key}; last keys: ${lastKeys.join(", ")}`,
+  );
+}
+
+function collectReadEventRequests(
+  page: Page,
+  backendPort: number,
+): ReadEventRequest[] {
+  const requests: ReadEventRequest[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (
+      url.origin === `http://127.0.0.1:${backendPort}` &&
+      url.pathname === "/read-event"
+    ) {
+      requests.push({
+        method: request.method(),
+        pathname: url.pathname,
+        bodyText: request.postData(),
+      });
+    }
+  });
+  return requests;
+}
+
+async function waitForReadEventCount(
+  requests: ReadEventRequest[],
+  expectedCount: number,
+): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (requests.length === expectedCount) {
+      return;
+    }
+    await Bun.sleep(100);
+  }
+  throw new Error(
+    `Timed out waiting for ${expectedCount} read-event request(s); observed ${requests.length}`,
+  );
+}
+
+function assertReadEventBodies(
+  requests: ReadEventRequest[],
+  expectedKeys: string[],
+): void {
+  expect(requests.length).toBe(expectedKeys.length);
+  for (const [index, expectedKey] of expectedKeys.entries()) {
+    const request = requests[index];
+    assert(request !== undefined);
+    expect(request.method).toBe("POST");
+    expect(request.pathname).toBe("/read-event");
+    assert(request.bodyText !== null);
+    const body: unknown = JSON.parse(request.bodyText);
+    assert(isRecord(body));
+    expect(Object.keys(body).sort()).toEqual(["key"]);
+    expect(body.key).toBe(expectedKey);
+  }
+}
+
+async function fetchBackendLibraryEntries(
+  backendPort: number,
+): Promise<BackendLibraryEntry[]> {
+  const response = await fetch(`http://127.0.0.1:${backendPort}/library`);
+  expect(response.ok).toBe(true);
+  const value: unknown = await response.json();
+  assert(Array.isArray(value));
+  return value.map(parseBackendLibraryEntry);
+}
+
+function parseBackendLibraryEntry(value: unknown): BackendLibraryEntry {
+  assert(isRecord(value));
+  assert(typeof value.key === "string");
+  assert(typeof value.first_read === "string");
+  assert(typeof value.last_read === "string");
+  return {
+    key: value.key,
+    first_read: value.first_read,
+    last_read: value.last_read,
+  };
+}
+
+async function waitForBackendLibraryEntry(
+  backendPort: number,
+  key: string,
+  predicate: (entry: BackendLibraryEntry) => boolean,
+): Promise<BackendLibraryEntry> {
+  let lastEntry: BackendLibraryEntry | undefined;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const entries = await fetchBackendLibraryEntries(backendPort);
+    lastEntry = entries.find((entry) => entry.key === key);
+    if (lastEntry !== undefined && predicate(lastEntry)) {
+      return lastEntry;
+    }
+    await Bun.sleep(100);
+  }
+  throw new Error(
+    `Timed out waiting for backend library entry ${key}; last entry: ${JSON.stringify(lastEntry)}`,
+  );
+}
+
+function readTimestamp(value: string): number {
+  const timestamp = Date.parse(value);
+  expect(Number.isFinite(timestamp)).toBe(true);
+  return timestamp;
+}
+
+async function waitForLibraryOrder(
+  surface: ReaderSurface,
+  expectedKeys: string[],
+): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const actualKeys = await surface
+      .locator('[data-testid="library-entry"]')
+      .evaluateAll((entries) =>
+        entries.map((entry) => {
+          if (!(entry instanceof HTMLElement)) {
+            throw new Error("Library entry is not an HTMLElement");
+          }
+          const key = entry.dataset.mathreadKey;
+          if (key === undefined) {
+            throw new Error("Library entry omitted data-mathread-key");
+          }
+          return key;
+        }),
+      );
+    if (
+      actualKeys[0] === expectedKeys[0] &&
+      expectedKeys.every((key) => actualKeys.includes(key))
+    ) {
+      return;
+    }
+    await Bun.sleep(100);
+  }
+  throw new Error(
+    `Timed out waiting for library order headed by ${expectedKeys[0]}`,
   );
 }
 
