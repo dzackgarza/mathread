@@ -1572,6 +1572,8 @@ test("reader preserves PDF-internal history through the production launch iframe
           && input.value === expected.page
           && Math.abs(viewer.scrollTop - expected.scrollTop) <= 2;
       }, afterLink);
+      const afterBrowserHistoryForward = await readView();
+      expect(afterBrowserHistoryForward.zoom).toBe(afterLink.zoom);
 
       await reader.locator("body").press("Alt+ArrowLeft");
       await reader.waitForFunction((expected) => {
