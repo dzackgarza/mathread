@@ -1550,9 +1550,8 @@ test("reader preserves PDF-internal history through the production launch iframe
       await page.screenshot({ path: join(artifacts.root, "production-history-after-link.png") });
       assertPng(join(artifacts.root, "production-history-after-link.png"));
 
-      // A browser history gesture can return to the PDF's initial entry before the
-      // reader receives another Alt-arrow. The reader must still recognize the
-      // forward PDF.js entry that the link created.
+      // Native browser history traverses the PDF.js entry that the internal link
+      // created; MathRead does not classify or consume that history itself.
       await reader.evaluate(() => window.history.back());
       await reader.waitForFunction((expected) => {
         const input = document.getElementById("page-input");
@@ -1563,7 +1562,7 @@ test("reader preserves PDF-internal history through the production launch iframe
           && Math.abs(viewer.scrollTop - expected.scrollTop) <= 2;
       }, beforeLink);
 
-      await reader.locator("body").press("Alt+ArrowRight");
+      await reader.evaluate(() => window.history.forward());
       await reader.waitForFunction((expected) => {
         const input = document.getElementById("page-input");
         const viewer = document.getElementById("viewer");
@@ -1575,7 +1574,7 @@ test("reader preserves PDF-internal history through the production launch iframe
       const afterBrowserHistoryForward = await readView();
       expect(afterBrowserHistoryForward.zoom).toBe(afterLink.zoom);
 
-      await reader.locator("body").press("Alt+ArrowLeft");
+      await reader.evaluate(() => window.history.back());
       await reader.waitForFunction((expected) => {
         const input = document.getElementById("page-input");
         const viewer = document.getElementById("viewer");
@@ -1589,7 +1588,7 @@ test("reader preserves PDF-internal history through the production launch iframe
       await page.screenshot({ path: join(artifacts.root, "production-history-after-back.png") });
       assertPng(join(artifacts.root, "production-history-after-back.png"));
 
-      await reader.locator("body").press("Alt+ArrowRight");
+      await reader.evaluate(() => window.history.forward());
       await reader.waitForFunction((expected) => {
         const input = document.getElementById("page-input");
         const viewer = document.getElementById("viewer");
@@ -1709,11 +1708,15 @@ test("reader preserves PDF-internal navigation history", async () => {
       await page.screenshot({ path: join(artifacts.root, "pdf-history-after-link.png") });
       assertPng(join(artifacts.root, "pdf-history-after-link.png"));
 
-      await page.keyboard.press("Alt+ArrowLeft");
-      await page.waitForFunction(() => {
+      await page.goBack();
+      await page.waitForFunction((expected) => {
         const input = document.getElementById("page-input");
-        return input instanceof HTMLInputElement && input.value === "1";
-      });
+        const viewer = document.getElementById("viewer");
+        return input instanceof HTMLInputElement
+          && viewer instanceof HTMLElement
+          && input.value === expected.page
+          && Math.abs(viewer.scrollTop - expected.scrollTop) <= 2;
+      }, beforeLink);
       const afterBack = await readReaderLocation();
       expect(afterBack.page).toBe(beforeLink.page);
       expect(afterBack.zoom).toBe(beforeLink.zoom);
@@ -1730,11 +1733,15 @@ test("reader preserves PDF-internal navigation history", async () => {
       await page.screenshot({ path: join(artifacts.root, "pdf-history-after-back.png") });
       assertPng(join(artifacts.root, "pdf-history-after-back.png"));
 
-      await page.keyboard.press("Alt+ArrowRight");
-      await page.waitForFunction(() => {
+      await page.goForward();
+      await page.waitForFunction((expected) => {
         const input = document.getElementById("page-input");
-        return input instanceof HTMLInputElement && input.value === "2";
-      });
+        const viewer = document.getElementById("viewer");
+        return input instanceof HTMLInputElement
+          && viewer instanceof HTMLElement
+          && input.value === expected.page
+          && Math.abs(viewer.scrollTop - expected.scrollTop) <= 2;
+      }, afterLink);
       const afterForward = await readReaderLocation();
       expect(afterForward.page).toBe(afterLink.page);
       expect(afterForward.zoom).toBe(afterLink.zoom);

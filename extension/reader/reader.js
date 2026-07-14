@@ -161,8 +161,6 @@ let pdfDoc = null;
 let pdfData = null;
 let libraryEntry = null;
 let pdfUrl = null; // original provenance URL (Scholar lookup, document properties)
-let pdfHistoryFingerprint = null;
-let greatestPdfHistoryUid = -1;
 // Editor state machine: loading -> clean <-> dirty -> saving -> clean | error.
 let noteState = { kind: "loading" };
 // The note text, loaded once at boot before page render so highlights are
@@ -505,18 +503,11 @@ async function mountPdfDocument() {
   linkService.setDocument(pdfDoc, pdfUrl ?? backendPdfUrl(libraryKey));
   pdfViewer.setDocument(pdfDoc);
   await pagesInitialized;
-  pdfHistoryFingerprint = Array.isArray(pdfDoc?.fingerprints)
-    && typeof pdfDoc.fingerprints[0] === "string"
-    && pdfDoc.fingerprints[0].length > 0
-    ? pdfDoc.fingerprints[0]
-    : null;
-  greatestPdfHistoryUid = -1;
-  if (pdfHistoryFingerprint !== null) {
+  if (Array.isArray(pdfDoc?.fingerprints) && typeof pdfDoc.fingerprints[0] === "string" && pdfDoc.fingerprints[0].length > 0) {
     pdfHistory.initialize({
-      fingerprint: pdfHistoryFingerprint,
+      fingerprint: pdfDoc.fingerprints[0],
       updateUrl: false,
     });
-    observePdfHistoryEntry(window.history.state);
   }
   syncPageContainers();
   pdfViewer.currentScaleValue = settings.fitWidthOnOpen && !hasExplicitInitialZoom
@@ -1819,70 +1810,12 @@ function isEditableTarget(target) {
     && (target.isContentEditable || target.closest("input, textarea, [contenteditable='true'], .cm-editor") !== null);
 }
 
-function observePdfHistoryEntry(state) {
-  if (
-    pdfHistoryFingerprint === null
-    || state === null
-    || typeof state !== "object"
-    || state.fingerprint !== pdfHistoryFingerprint
-    || !Number.isInteger(state.uid)
-    || state.uid < 0
-  ) {
-    return null;
-  }
-  greatestPdfHistoryUid = Math.max(greatestPdfHistoryUid, state.uid);
-  return state.uid;
-}
-
-function canTraversePdfHistory(direction) {
-  const uid = observePdfHistoryEntry(window.history.state);
-  if (uid === null) {
-    return false;
-  }
-  return direction === "back" ? uid > 0 : uid < greatestPdfHistoryUid;
-}
-
-for (const method of ["pushState", "replaceState"]) {
-  const historyMethod = window.history[method];
-  window.history[method] = function (...args) {
-    const result = historyMethod.apply(window.history, args);
-    observePdfHistoryEntry(window.history.state);
-    return result;
-  };
-}
-
-window.addEventListener("popstate", event => {
-  observePdfHistoryEntry(event.state);
-});
-
 document.addEventListener("keydown", event => {
   if (event.key === "Escape" && !clipOverlayEl.hidden) {
     endClip();
     return;
   }
   if (event.defaultPrevented || isEditableTarget(event.target) || pdfDoc === null) {
-    return;
-  }
-  if (
-    event.altKey
-    && !event.ctrlKey
-    && !event.metaKey
-    && event.key === "ArrowLeft"
-    && canTraversePdfHistory("back")
-  ) {
-    pdfHistory.back();
-    event.preventDefault();
-    return;
-  }
-  if (
-    event.altKey
-    && !event.ctrlKey
-    && !event.metaKey
-    && event.key === "ArrowRight"
-    && canTraversePdfHistory("forward")
-  ) {
-    pdfHistory.forward();
-    event.preventDefault();
     return;
   }
   if (event.ctrlKey || event.metaKey) {
@@ -1900,10 +1833,7 @@ document.addEventListener("keydown", event => {
     event.preventDefault();
     return;
   }
-  if (
-    event.altKey
-    && (event.key === "ArrowLeft" || event.key === "ArrowRight")
-  ) {
+  if (event.altKey && !event.ctrlKey && !event.metaKey && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
     return;
   }
   const pageDelta = event.key === "PageDown" || event.key === "ArrowDown" || event.key === "ArrowRight"
