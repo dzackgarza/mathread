@@ -1424,9 +1424,10 @@ registerInterceptedReaderShortcutsBoundaryTest();
 
 function registerReaderHistoryBoundaryTest(): void {
 
-test("reader hands Alt-Left to the browser without a PDF-internal back destination", async () => {
+test("reader hands native Alt-left and Alt-right to browser history without a PDF-internal destination", async () => {
   await withExtensionReader(
-    async ({ artifacts, backendPort, courseServer, page, readingRoot }) => {
+    async ({ artifacts, backendPort, courseServer, page, readingRoot, x11Display }) => {
+      assert(x11Display !== undefined, "Native browser shortcut proof requires an X11 display");
       const sourceUrl = `${courseServer.url.origin}/internal-link.pdf`;
       const readEventRequests = collectReadEventRequests(page, backendPort);
       await page.goto(`${courseServer.url.origin}/course/`, {
@@ -1447,61 +1448,31 @@ test("reader hands Alt-Left to the browser without a PDF-internal back destinati
       await page.screenshot({ path: join(artifacts.root, "browser-history-reader.png") });
       assertPng(join(artifacts.root, "browser-history-reader.png"));
 
-      const readerAltArrowDefaultPrevented = async (
-        expectedKey: "ArrowLeft" | "ArrowRight",
-      ) => {
-        await reader.evaluate((expectedKey) => {
-          const target = window as typeof window & {
-            mathreadAltArrowDefaultPrevented?: boolean;
-          };
-          delete target.mathreadAltArrowDefaultPrevented;
-          const recordAltArrow = (event: KeyboardEvent) => {
-            if (event.altKey && event.key === expectedKey) {
-              target.mathreadAltArrowDefaultPrevented = event.defaultPrevented;
-              document.removeEventListener("keydown", recordAltArrow);
-            }
-          };
-          document.addEventListener("keydown", recordAltArrow);
-        }, expectedKey);
-        await reader.locator("body").press(`Alt+${expectedKey}`);
-        await reader.waitForFunction(() => (
-          window as typeof window & { mathreadAltArrowDefaultPrevented?: boolean }
-        ).mathreadAltArrowDefaultPrevented !== undefined);
-        return reader.evaluate(() => (
-          window as typeof window & { mathreadAltArrowDefaultPrevented?: boolean }
-        ).mathreadAltArrowDefaultPrevented);
-      };
-
-      expect(await readerAltArrowDefaultPrevented("ArrowRight")).toBe(false);
-      expect(await readerAltArrowDefaultPrevented("ArrowLeft")).toBe(false);
-      await reader.locator("body").press("Alt+ArrowDown");
-      await reader.waitForFunction(() => {
-        const input = document.getElementById("page-input");
-        return input instanceof HTMLInputElement && input.value === "2";
-      });
-      await reader.locator("body").press("Alt+ArrowUp");
-      await reader.waitForFunction(() => {
-        const input = document.getElementById("page-input");
-        return input instanceof HTMLInputElement && input.value === "1";
-      });
-      await page.goBack({ waitUntil: "domcontentloaded" });
-      await page.waitForURL(`${courseServer.url.origin}/course/`);
+      await page.bringToFront();
+      await reader.locator("#viewer").click({ position: { x: 20, y: 20 } });
+      const atCoursePage = page.waitForURL(`${courseServer.url.origin}/course/`);
+      sendNativeHistoryShortcut(x11Display, "Left");
+      await atCoursePage;
       await page.screenshot({ path: join(artifacts.root, "browser-history-parent.png") });
       assertPng(join(artifacts.root, "browser-history-parent.png"));
-      await page.goForward({ waitUntil: "domcontentloaded" });
-      await page.waitForURL((url) => (
+      const atReader = page.waitForURL((url) => (
         url.pathname === "/reader/reader.html" && url.searchParams.get("key") === key
       ));
-      await reader.locator("#viewer canvas").first().waitFor();
+      sendNativeHistoryShortcut(x11Display, "Right");
+      await atReader;
+      const returnedReader = await waitForReaderFrame(page, key);
+      await returnedReader.locator("#viewer canvas").first().waitFor();
       await waitForReadEventCount(readEventRequests, 2);
       assertReadEventBodies(readEventRequests, [key, key]);
     },
+    { nativeBrowserShortcuts: true },
   );
 }, 120_000);
 
 test("reader preserves PDF-internal history through the production launch redirect", async () => {
   await withExtensionReader(
-    async ({ artifacts, backendPort, courseServer, page, readingRoot }) => {
+    async ({ artifacts, backendPort, courseServer, page, readingRoot, x11Display }) => {
+      assert(x11Display !== undefined, "Native browser shortcut proof requires an X11 display");
       const sourceUrl = `${courseServer.url.origin}/internal-link.pdf`;
       const readEventRequests = collectReadEventRequests(page, backendPort);
       await page.goto(`${courseServer.url.origin}/course/`, {
@@ -1554,9 +1525,11 @@ test("reader preserves PDF-internal history through the production launch redire
       await page.screenshot({ path: join(artifacts.root, "production-history-after-link.png") });
       assertPng(join(artifacts.root, "production-history-after-link.png"));
 
-      // Native browser history traverses the PDF.js entry that the internal link
-      // created; MathRead does not classify or consume that history itself.
-      await reader.evaluate(() => window.history.back());
+      // A real X11 shortcut traverses the PDF.js entry that the internal link created;
+      // MathRead neither classifies nor consumes that browser history.
+      await page.bringToFront();
+      await reader.locator("#viewer").click({ position: { x: 20, y: 20 } });
+      sendNativeHistoryShortcut(x11Display, "Left");
       await reader.waitForFunction((expected) => {
         const input = document.getElementById("page-input");
         const viewer = document.getElementById("viewer");
@@ -1566,7 +1539,7 @@ test("reader preserves PDF-internal history through the production launch redire
           && Math.abs(viewer.scrollTop - expected.scrollTop) <= 2;
       }, beforeLink);
 
-      await reader.evaluate(() => window.history.forward());
+      sendNativeHistoryShortcut(x11Display, "Right");
       await reader.waitForFunction((expected) => {
         const input = document.getElementById("page-input");
         const viewer = document.getElementById("viewer");
@@ -1579,6 +1552,7 @@ test("reader preserves PDF-internal history through the production launch redire
       expect(afterBrowserHistoryForward.zoom).toBe(afterLink.zoom);
       assertReadEventBodies(readEventRequests, [key]);
     },
+    { nativeBrowserShortcuts: true },
   );
 }, 120_000);
 
@@ -2085,10 +2059,21 @@ type ExtensionReaderEvidence = {
   extensionId: string;
   page: Page;
   readingRoot: string;
+  x11Display: string | undefined;
+};
+
+type ExtensionReaderOptions = {
+  nativeBrowserShortcuts?: boolean;
+};
+
+type RunningXServer = {
+  display: string;
+  process: Bun.Subprocess<"ignore", "ignore", "pipe">;
 };
 
 async function withExtensionReader(
   callback: (evidence: ExtensionReaderEvidence) => Promise<void>,
+  options: ExtensionReaderOptions = {},
 ): Promise<void> {
   const backendPort = await unusedTcpPort();
   const testRoot = mkdtemp("mathread-extension-reader-");
@@ -2103,19 +2088,25 @@ async function withExtensionReader(
   );
   const courseServer = startCourseServer(artifacts.eventsLogPath);
   let context: BrowserContext | undefined;
+  let xServer: RunningXServer | undefined;
   let completed = false;
 
   try {
     await waitForHttpService(`http://127.0.0.1:${backendPort}/openapi.json`);
+    if (options.nativeBrowserShortcuts === true) {
+      xServer = await startXServer();
+    }
     context = await chromium.launchPersistentContext(
       join(testRoot, "profile"),
       {
         executablePath: chromiumExecutablePath(),
-        headless: true,
+        headless: options.nativeBrowserShortcuts !== true,
         artifactsDir: artifacts.root,
+        ...(xServer === undefined ? {} : { env: { ...process.env, DISPLAY: xServer.display } }),
         args: [
           `--disable-extensions-except=${extensionPath}`,
           `--load-extension=${extensionPath}`,
+          ...(xServer === undefined ? [] : ["--ozone-platform=x11"]),
         ],
       },
     );
@@ -2142,12 +2133,17 @@ async function withExtensionReader(
       extensionId,
       page,
       readingRoot,
+      x11Display: xServer?.display,
     });
     await page.close();
     completed = true;
   } finally {
     if (context !== undefined) {
       await context.close();
+    }
+    if (xServer !== undefined) {
+      xServer.process.kill();
+      await xServer.process.exited;
     }
     courseServer.stop(true);
     backend.process.kill();
@@ -2156,6 +2152,46 @@ async function withExtensionReader(
     if (completed) {
       rmSync(testRoot, { recursive: true, force: true });
     }
+  }
+}
+
+async function startXServer(): Promise<RunningXServer> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const displayNumber = (await unusedTcpPort()) - 6000;
+    const display = `:${displayNumber}`;
+    const process = Bun.spawn(
+      ["Xvfb", display, "-screen", "0", "1280x1024x24", "-nolisten", "tcp"],
+      { stdout: "ignore", stderr: "pipe" },
+    );
+    const socketPath = `/tmp/.X11-unix/X${displayNumber}`;
+    for (let wait = 0; wait < 100; wait += 1) {
+      if (existsSync(socketPath)) {
+        return { display, process };
+      }
+      const exited = await Promise.race([
+        process.exited.then((exitCode) => ({ exitCode })),
+        Bun.sleep(50).then(() => undefined),
+      ]);
+      if (exited !== undefined) {
+        const stderr = await new Response(process.stderr).text();
+        throw new Error(`Xvfb failed to start on ${display}: ${stderr}`);
+      }
+    }
+    process.kill();
+    await process.exited;
+  }
+  throw new Error("Xvfb did not create a display socket");
+}
+
+function sendNativeHistoryShortcut(display: string, direction: "Left" | "Right"): void {
+  const result = Bun.spawnSync(
+    ["xdotool", "key", "--clearmodifiers", `Alt+${direction}`],
+    { env: { ...process.env, DISPLAY: display } },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `xdotool failed to send Alt+${direction}: ${new TextDecoder().decode(result.stderr)}`,
+    );
   }
 }
 
