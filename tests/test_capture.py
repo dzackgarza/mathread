@@ -82,7 +82,7 @@ def test_status_reports_ready_storage_contract_for_existing_root(
     assert response.status_code == 200
     assert response.json() == {
         "backend_url": "http://127.0.0.1:8765",
-        "portal_url": "http://markdown-editor.localhost",
+        "portal_url": "reader/reader.html",
         "root": str(reading_root),
         "service": {
             "name": "mathread",
@@ -114,7 +114,7 @@ def test_status_reports_missing_root_as_not_ready_without_creating_storage(
     assert response.status_code == 200
     assert response.json() == {
         "backend_url": "http://127.0.0.1:8765",
-        "portal_url": "http://markdown-editor.localhost",
+        "portal_url": "reader/reader.html",
         "root": str(reading_root),
         "service": {
             "name": "mathread",
