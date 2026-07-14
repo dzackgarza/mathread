@@ -35,7 +35,8 @@ PDF.js continues to own page, viewport, zoom, and navigation state.
 ### Tier 0 — every PR
 
 - [x] Evaluated `POLICY.RUNTIME_DEFAULT`; the canonical `POLICY.*` record files named by the template are absent from this checkout, so no unavailable record is claimed as loaded.
-- [x] No fallback, runtime default, optional core state, swallowed error, or partial-success path is introduced. The reader observes history mutations and otherwise leaves the browser event unhandled.
+- [x] No fallback, runtime default, optional core state, swallowed error, or partial-success path is introduced.
+  The reader observes history mutations and otherwise leaves the browser event unhandled.
 - [x] No empty/falsy-literal fallback is added or reclassified as safe.
 
 ### Tier 1 — QC-tooling changes
