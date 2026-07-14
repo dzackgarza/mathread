@@ -25,7 +25,7 @@ PDF.js continues to own page, viewport, zoom, and navigation state.
 - [x] Linked triaged issue: #34.
 - [x] This PR is returned to draft while the current-head policy gate and review loop run.
 - [x] The PR scope maps to #34's reader/browser navigation contract; unrelated reader and backend work is excluded.
-- [x] Ready-for-review is requested only after the current policy gate and evidence below are complete.
+- [ ] Mark ready only after the current-head review and CI gates complete.
 - [x] Accepted feedback has committed remediation; rejected feedback has a top-level `Review feedback disposition ledger`.
 
 ## Policy alignment gate — required
@@ -51,20 +51,22 @@ PDF.js continues to own page, viewport, zoom, and navigation state.
 
 ## Claim map
 
-- **#34 — Reader/browser navigation handoff (not yet claimed; PR remains draft)**
+- **#34 — Reader/browser navigation handoff (implemented and evidenced; PR remains draft for current-head review)**
   - Required proof obligations: an explicit, policy-compliant keyboard command router; native browser internal back and forward; native browser parent-history traversal; PDF.js page, viewport, and zoom restoration; source-preserving current-view links; no backend view-state writes.
   - Partial / not claimed: browser-wide history redesign, custom PDF engine work, PDF.js vendor API changes, backend persistence changes, or multi-client semantics.
   - Evidence required: one real built-extension browser run through `pdf-launch.html` into top-level `reader.html`, with real Chrome Alt-left/right behavior covering all four paths; inspected screenshots for the internal navigation states; backend request evidence showing no view-state write.
   - Current evidence:
-    - The current focused test only establishes unconsumed DOM key events and programmatic history traversal.
-      It does not establish the required real Chrome keyboard routing or a compliant explicit domain model.
-    - The production screenshots were inspected for the initial, linked, and parent-history states only.
-    - The current head passed the local push gate, but that is not proof of the unresolved navigation contract.
+    - A headed Xvfb Chromium run loaded the built extension and sent native X11 `Alt+Left` and `Alt+Right` events with `xdotool`.
+      With no PDF-internal entry, Alt-Left reached the course page and Alt-Right returned to the top-level reader.
+    - The same native-key run followed a PDF.js internal link, restored page 1, viewport, and 110% zoom with Alt-Left, then restored page 2, viewport, and 78% zoom with Alt-Right.
+      The reader made no view-state backend write; the test retained its key-only read-recency assertion.
+    - The rendered top-level reader screenshots were inspected for the initial page and the linked PDF.js destination.
+    - The current head passed the full local push gate. Current-head GitHub review and CI remain the only draft gate.
 
 ## Automated gates
 
 - The repository's commit and push hooks run the global Bun/Python QC layers.
-- The PR becomes ready after the focused browser proof, manual screenshot inspection, and push gate complete.
+- The PR becomes ready after the current-head review and CI gates complete.
 
 ## Review focus
 
