@@ -6,7 +6,7 @@ PDF.js continues to own page, viewport, zoom, and navigation state.
 
 ## Scope
 
-- Included: the `reader.html` non-interference guard and its real `pdf-launch.html`/`mathreadReaderFrame` proof path.
+- Included: the `reader.html` non-interference guard and the production `pdf-launch.html` redirect into a top-level reader.
 - Excluded: a custom PDF navigation engine, PDF.js vendor modifications, backend-owned reader state, session or multi-client machinery, and unrelated shortcut changes.
 - Preserved: PDF.js links, current-view/source URLs, browser navigation, editor shortcut isolation, and key-only backend read-recency events.
 
@@ -47,18 +47,18 @@ PDF.js continues to own page, viewport, zoom, and navigation state.
 
 1. PDF.js writes and restores its own entries through the browser history API.
 2. Alt-modified left and right arrows bypass the ordinary reader page-turn branch without being consumed, leaving Chrome to traverse that history.
-3. Production-path tests enter through PDF interception, `pdf-launch.html`, and `mathreadReaderFrame`.
+3. Production-path tests enter through PDF interception and `pdf-launch.html`, which replaces itself with top-level `reader.html`.
 
 ## Claim map
 
 - **#34 — Reader/browser navigation handoff (not yet claimed; PR remains draft)**
   - Required proof obligations: an explicit, policy-compliant keyboard command router; native browser internal back and forward; native browser parent-history traversal; PDF.js page, viewport, and zoom restoration; source-preserving current-view links; no backend view-state writes.
   - Partial / not claimed: browser-wide history redesign, custom PDF engine work, PDF.js vendor API changes, backend persistence changes, or multi-client semantics.
-  - Evidence required: one real built-extension browser run through `pdf-launch.html` and `mathreadReaderFrame`, with real Chrome Alt-left/right behavior covering all four paths; inspected screenshots for the internal navigation states; backend request evidence showing no view-state write.
+  - Evidence required: one real built-extension browser run through `pdf-launch.html` into top-level `reader.html`, with real Chrome Alt-left/right behavior covering all four paths; inspected screenshots for the internal navigation states; backend request evidence showing no view-state write.
   - Current evidence:
     - The current focused test only establishes unconsumed DOM key events and programmatic history traversal.
       It does not establish the required real Chrome keyboard routing or a compliant explicit domain model.
-    - The production screenshots were inspected for the initial and linked states only.
+    - The production screenshots were inspected for the initial, linked, and parent-history states only.
     - The current head passed the local push gate, but that is not proof of the unresolved navigation contract.
 
 ## Automated gates
@@ -69,4 +69,4 @@ PDF.js continues to own page, viewport, zoom, and navigation state.
 ## Review focus
 
 Review the owner boundary first: PDF.js must remain the sole internal navigator, Chrome must receive an unhandled Alt-arrow, and the backend must remain uninvolved in reader view state.
-Reject any proof that bypasses `pdf-launch.html`, uses private PDF.js fields, or would pass while browser navigation is still suppressed.
+Reject any proof that bypasses the production `pdf-launch.html` redirect, uses private PDF.js fields, or would pass while browser navigation is still suppressed.
