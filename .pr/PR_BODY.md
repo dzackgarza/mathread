@@ -56,12 +56,12 @@ PDF.js continues to own page, viewport, zoom, and navigation state.
   - Partial / not claimed: browser-wide history redesign, custom PDF engine work, PDF.js vendor API changes, backend persistence changes, or multi-client semantics.
   - Evidence required: one real built-extension browser run through `pdf-launch.html` into top-level `reader.html`, with real Chrome Alt-left/right behavior covering all four paths; inspected screenshots for the internal navigation states; backend request evidence showing no view-state write.
   - Current evidence:
-    - A headed Xvfb Chromium run loaded the built extension and sent native X11 `Alt+Left` and `Alt+Right` events with `xdotool`.
-      With no PDF-internal entry, Alt-Left reached the course page and Alt-Right returned to the top-level reader.
+    - A headed Xvfb Chromium run loaded the built extension and sent native X11 `Alt+Left` and `Alt+Right` events with `xdotool`. With no PDF-internal entry, Alt-Left reached the course page and Alt-Right returned to the top-level reader.
     - The same native-key run followed a PDF.js internal link, restored page 1, viewport, and 110% zoom with Alt-Left, then restored page 2, viewport, and 78% zoom with Alt-Right.
       The reader made no view-state backend write; the test retained its key-only read-recency assertion.
     - The rendered top-level reader screenshots were inspected for the initial page and the linked PDF.js destination.
-    - The current head passed the full local push gate. Current-head GitHub review and CI remain the only draft gate.
+    - The current head passed the full local push gate.
+      Current-head GitHub review and CI remain the only draft gate.
 
 ## Automated gates
 
