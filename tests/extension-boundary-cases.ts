@@ -96,7 +96,6 @@ type CaptureScenario =
   | "clicked-link"
   | "direct-pdf-tab"
   | "direct-pdf-without-extension"
-  | "internal-link-pdf"
   | "large-numdam-pdf"
   | "arxiv-pdf"
   | "legacy-arxiv-pdf";
@@ -3286,9 +3285,6 @@ function pdfSha256(): string {
 }
 
 function pdfPathForScenario(scenario: CaptureScenario): string {
-  if (scenario === "internal-link-pdf") {
-    return "/internal-link.pdf";
-  }
   if (scenario === "large-numdam-pdf") {
     return "/item/AST_1992__211__1_0.pdf";
   }
