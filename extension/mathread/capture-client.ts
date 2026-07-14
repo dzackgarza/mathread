@@ -33,6 +33,7 @@ export type RuntimeCaptureMessage = {
 };
 
 export const pdfLinkOriginsStorageKey = "mathread.pdfLinkOrigins";
+const backendCaptureTimeoutMs = 30_000;
 
 export function isLikelyPdfUrl(rawUrl: string): boolean {
   return new URL(rawUrl).pathname.toLowerCase().endsWith(".pdf");
@@ -136,7 +137,11 @@ export async function postCaptureBytes(
     form.append("title_hint", request.title_hint);
   }
 
-  const response = await fetch(endpoint, { method: "POST", body: form });
+  const response = await fetch(endpoint, {
+    method: "POST",
+    body: form,
+    signal: AbortSignal.timeout(backendCaptureTimeoutMs),
+  });
   if (!response.ok) {
     let detail = `${response.status} ${response.statusText}`;
     try {

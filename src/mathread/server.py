@@ -16,7 +16,6 @@ from mathread.library import (
     InvalidNoteImageError,
     OpenRootCommand,
     UnknownLibraryKeyError,
-    migrate_prior_nested_layout,
 )
 from mathread.models import (
     BackendCapabilities,
@@ -28,7 +27,7 @@ from mathread.models import (
 )
 from mathread.portal import create_portal_router
 
-DEFAULT_PORTAL_URL = "http://markdown-editor.localhost"
+DEFAULT_PORTAL_URL = "reader/reader.html"
 
 
 def create_app(
@@ -36,7 +35,6 @@ def create_app(
     portal_url: str = DEFAULT_PORTAL_URL,
     open_root_command: OpenRootCommand = DEFAULT_OPEN_ROOT_COMMAND,
 ) -> FastAPI:
-    migrate_prior_nested_layout(root)
     app = FastAPI(title="MathRead")
 
     # Local reading portal (vite dev + <slug>.localhost) reaches the backend cross-origin.

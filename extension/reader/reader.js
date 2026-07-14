@@ -171,7 +171,6 @@ let noteVersion = "";
 let noteSaveTimer = null;
 let notesInitialized = false;
 let notesPreviewVisible = false;
-let readEventTimer = null;
 // User-tunable settings (see mathread/options.html); loaded before the editor mounts.
 const settingsDefaults = { autosaveMs: 800, fitWidthOnOpen: false, lineNumbers: true };
 let settings = settingsDefaults;
@@ -432,9 +431,11 @@ async function main() {
   await mountPdfDocument();
   pageInputEl.value = String(currentPageNumber);
   void initNotes();
-  postReadEvent(libraryKey, null).catch(error => {
-    throw readerError("MATHREAD-READ-EVENT-ERROR", error);
-  });
+  postReadEvent(libraryKey)
+    .then(refreshLibrary)
+    .catch(error => {
+      throw readerError("MATHREAD-READ-EVENT-ERROR", error);
+    });
 }
 
 async function setDocTitle() {
@@ -559,7 +560,6 @@ function updateZoomLabel() {
 eventBus.on("pagechanging", ({ pageNumber }) => {
   currentPageNumber = pageNumber;
   pageInputEl.value = String(pageNumber);
-  scheduleReadEvent();
 });
 eventBus.on("scalechanging", ({ scale: nextScale }) => {
   scale = nextScale;
@@ -1171,6 +1171,7 @@ function renderLibrary(backendStatus, entries) {
     item.className = "library-entry";
     item.classList.toggle("current", entry.key === libraryKey);
     item.dataset.testid = "library-entry";
+    item.dataset.mathreadKey = entry.key;
 
     const open = document.createElement("button");
     open.className = "library-entry-open";
@@ -1866,19 +1867,6 @@ viewerEl.addEventListener("wheel", event => {
   event.preventDefault();
   setScale(scale * (event.deltaY < 0 ? 1.1 : 1 / 1.1));
 }, { passive: false });
-
-function scheduleReadEvent() {
-  if (!libraryKey || !pdfDoc) {
-    return;
-  }
-  clearTimeout(readEventTimer);
-  readEventTimer = setTimeout(() => {
-    const position = pdfDoc.numPages > 0 ? (currentPageNumber - 1) / pdfDoc.numPages : 0;
-    postReadEvent(libraryKey, position).catch(error => {
-      throw readerError("MATHREAD-READ-EVENT-ERROR", error);
-    });
-  }, 2000);
-}
 
 async function downloadPdf() {
   if (pdfData === null || libraryKey === null) {

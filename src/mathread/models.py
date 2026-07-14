@@ -87,7 +87,6 @@ class LibraryEntry(BaseModel):
     has_note: bool
     first_read: str
     last_read: str
-    last_position: float
     invalid: bool = False
     error_message: str | None = None
 
@@ -107,7 +106,6 @@ class NoteImageResult(BaseModel):
 
 
 class ReadEventRequest(BaseModel):
-    model_config = ConfigDict(strict=True)
+    model_config = ConfigDict(strict=True, extra="forbid")
 
     key: str
-    position: float | None = None

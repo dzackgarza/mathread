@@ -27,7 +27,6 @@ export interface LibraryEntry {
   has_note: boolean;
   first_read: string; // ISO 8601
   last_read: string; // ISO 8601
-  last_position: number; // scroll fraction 0..1, 0 = first page
   invalid?: boolean | undefined;
   error_message?: string | undefined;
 }
@@ -112,7 +111,6 @@ function parseLibraryEntry(value: unknown): LibraryEntry {
   invariant(typeof value.has_note === 'boolean', 'MathRead library entry must declare has_note');
   invariant(typeof value.first_read === 'string', 'MathRead library entry must declare first_read');
   invariant(typeof value.last_read === 'string', 'MathRead library entry must declare last_read');
-  invariant(typeof value.last_position === 'number', 'MathRead library entry must declare last_position');
 
   return {
     key: value.key,
@@ -125,7 +123,6 @@ function parseLibraryEntry(value: unknown): LibraryEntry {
     has_note: value.has_note,
     first_read: value.first_read,
     last_read: value.last_read,
-    last_position: value.last_position,
     invalid: nullableBooleanField(value, 'invalid', 'MathRead library entry'),
     error_message: nullableStringField(value, 'error_message', 'MathRead library entry'),
   };
@@ -285,12 +282,12 @@ export async function deleteLibraryEntry(key: string): Promise<void> {
   await ok(await fetch(`${API_BASE}/library/${encodeURIComponent(key)}`, { method: 'DELETE' }));
 }
 
-export async function postReadEvent(key: string, position: number): Promise<void> {
+export async function postReadEvent(key: string): Promise<void> {
   await ok(
     await fetch(`${API_BASE}/read-event`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ key, position }),
+      body: JSON.stringify({ key }),
     }),
   );
 }

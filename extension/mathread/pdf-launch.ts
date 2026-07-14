@@ -24,6 +24,8 @@ type SourcePdf = {
   viewState: string | null;
 };
 
+const runtimeCaptureTimeoutMs = 30_000;
+
 void launchPdf().catch(renderLaunchError);
 
 async function launchPdf(): Promise<void> {
@@ -39,7 +41,7 @@ async function launchPdf(): Promise<void> {
   );
   const request = captureRequest(sourcePdf.pdfUrl, storedOrigin);
   const response = parseRuntimeCaptureResponse(
-    await chrome.runtime.sendMessage(runtimeCaptureMessage(request)),
+    await sendCaptureMessage(runtimeCaptureMessage(request)),
   );
   if (!response.ok) {
     throw new Error(response.error);
@@ -60,6 +62,18 @@ async function launchPdf(): Promise<void> {
   reader.src = readerUrl.href;
   document.body.replaceChildren(reader);
   reader.focus();
+}
+
+async function sendCaptureMessage(message: unknown): Promise<unknown> {
+  return Promise.race([chrome.runtime.sendMessage(message), captureTimeout()]);
+}
+
+function captureTimeout(): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    setTimeout(() => {
+      reject(new Error("MathRead capture request timed out"));
+    }, runtimeCaptureTimeoutMs);
+  });
 }
 
 function captureRequest(
