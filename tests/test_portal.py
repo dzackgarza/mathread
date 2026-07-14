@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from datetime import UTC, datetime
 from io import BytesIO
@@ -17,6 +18,17 @@ CAPTURED_PAPER_KEY = "https___example.edu_course_notes.pdf"
 
 def iso_mtime(path: Path) -> str:
     return datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat()
+
+
+def set_mtime(path: Path, timestamp: datetime) -> str:
+    os.utime(path, (timestamp.timestamp(), timestamp.timestamp()))
+    return iso_mtime(path)
+
+
+def parse_iso_timestamp(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    assert parsed.tzinfo is not None
+    return parsed
 
 
 @pytest.fixture
@@ -286,6 +298,7 @@ def test_read_history_uses_sqlite_transactions_for_parallel_open_events(
 
     root = tmp_path / "reading-root"
     keys = [capture(client, sample_pdf_bytes, f"paper-{index}.pdf") for index in range(8)]
+    first_reads = {key: set_mtime(stored_pdf_path(root, key), datetime(2020, 1, 1, tzinfo=UTC)) for key in keys}
 
     def record(index: int) -> None:
         response = client.post("/read-event", json={"key": keys[index]})
@@ -305,8 +318,8 @@ def test_read_history_uses_sqlite_transactions_for_parallel_open_events(
     assert columns == ["key", "first_read", "last_read"]
     assert set(rows) == set(keys)
     for key in keys:
-        assert isinstance(rows[key]["first_read"], str)
-        assert isinstance(rows[key]["last_read"], str)
+        assert rows[key]["first_read"] == first_reads[key]
+        assert parse_iso_timestamp(rows[key]["last_read"]) > parse_iso_timestamp(rows[key]["first_read"])
 
 
 def test_folder_scan_surfaces_local_and_invalid_pdfs_without_crashing(
@@ -335,9 +348,11 @@ def test_folder_scan_surfaces_local_and_invalid_pdfs_without_crashing(
 def test_parallel_open_events_update_each_entry_recency(
     client: TestClient,
     sample_pdf_bytes: bytes,
+    tmp_path: Path,
 ) -> None:
     import concurrent.futures
 
+    root = tmp_path / "reading-root"
     keys = [f"paper-{index}.pdf" for index in range(12)]
     for key in keys:
         client.post(
@@ -349,6 +364,7 @@ def test_parallel_open_events_update_each_entry_recency(
             },
             files={"pdf": (key, sample_pdf_bytes, "application/pdf")},
         )
+    first_reads = {key: set_mtime(stored_pdf_path(root, key), datetime(2020, 1, 1, tzinfo=UTC)) for key in keys}
 
     def record(index: int) -> None:
         response = client.post("/read-event", json={"key": keys[index]})
@@ -362,8 +378,8 @@ def test_parallel_open_events_update_each_entry_recency(
     entries = {entry["key"]: entry for entry in client.get("/library").json()}
     assert set(entries) == set(keys)
     for key in keys:
-        assert isinstance(entries[key]["first_read"], str)
-        assert isinstance(entries[key]["last_read"], str)
+        assert entries[key]["first_read"] == first_reads[key]
+        assert parse_iso_timestamp(entries[key]["last_read"]) > parse_iso_timestamp(entries[key]["first_read"])
 
 
 def test_delete_removes_pdf_note_clips_and_history(
