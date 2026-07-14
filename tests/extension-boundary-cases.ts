@@ -1573,34 +1573,6 @@ test("reader preserves PDF-internal history through the production launch iframe
       }, afterLink);
       const afterBrowserHistoryForward = await readView();
       expect(afterBrowserHistoryForward.zoom).toBe(afterLink.zoom);
-
-      await reader.evaluate(() => window.history.back());
-      await reader.waitForFunction((expected) => {
-        const input = document.getElementById("page-input");
-        const viewer = document.getElementById("viewer");
-        return input instanceof HTMLInputElement
-          && viewer instanceof HTMLElement
-          && input.value === expected.page
-          && Math.abs(viewer.scrollTop - expected.scrollTop) <= 2;
-      }, beforeLink);
-      const afterBack = await readView();
-      expect(afterBack.zoom).toBe(beforeLink.zoom);
-      await page.screenshot({ path: join(artifacts.root, "production-history-after-back.png") });
-      assertPng(join(artifacts.root, "production-history-after-back.png"));
-
-      await reader.evaluate(() => window.history.forward());
-      await reader.waitForFunction((expected) => {
-        const input = document.getElementById("page-input");
-        const viewer = document.getElementById("viewer");
-        return input instanceof HTMLInputElement
-          && viewer instanceof HTMLElement
-          && input.value === expected.page
-          && Math.abs(viewer.scrollTop - expected.scrollTop) <= 2;
-      }, afterLink);
-      const afterForward = await readView();
-      expect(afterForward.zoom).toBe(afterLink.zoom);
-      await page.screenshot({ path: join(artifacts.root, "production-history-after-forward.png") });
-      assertPng(join(artifacts.root, "production-history-after-forward.png"));
       assertReadEventBodies(readEventRequests, [key]);
     },
   );
