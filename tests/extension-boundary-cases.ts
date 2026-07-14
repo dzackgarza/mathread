@@ -1488,7 +1488,13 @@ test("reader hands Alt-Left to the browser without a PDF-internal back destinati
       await page.waitForURL(`${courseServer.url.origin}/course/`);
       await page.screenshot({ path: join(artifacts.root, "browser-history-parent.png") });
       assertPng(join(artifacts.root, "browser-history-parent.png"));
-      assertReadEventBodies(readEventRequests, [key]);
+      await page.goForward({ waitUntil: "domcontentloaded" });
+      await page.waitForURL((url) => (
+        url.pathname === "/reader/reader.html" && url.searchParams.get("key") === key
+      ));
+      await reader.locator("#viewer canvas").first().waitFor();
+      await waitForReadEventCount(readEventRequests, 2);
+      assertReadEventBodies(readEventRequests, [key, key]);
     },
   );
 }, 120_000);

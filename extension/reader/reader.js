@@ -1816,9 +1816,9 @@ function parseReaderCommand(event) {
   }
   switch (event.key) {
     case "ArrowLeft":
-      return { kind: "browser-history", direction: "back" };
+      return { kind: "browser-history" };
     case "ArrowRight":
-      return { kind: "browser-history", direction: "forward" };
+      return { kind: "browser-history" };
     default:
       return { kind: "reader-shortcut" };
   }

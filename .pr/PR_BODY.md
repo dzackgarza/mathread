@@ -14,8 +14,8 @@ PDF.js continues to own page, viewport, zoom, and navigation state.
 
 - Target issue: #34
 - Milestone: Reader navigation parity (#35)
-- Closes on merge:
-  - Closes #34
+- References only:
+  - Refs #34
 - References only:
   - Refs #35
   - Refs #5
@@ -56,7 +56,8 @@ PDF.js continues to own page, viewport, zoom, and navigation state.
   - Partial / not claimed: browser-wide history redesign, custom PDF engine work, PDF.js vendor API changes, backend persistence changes, or multi-client semantics.
   - Evidence required: one real built-extension browser run through `pdf-launch.html` and `mathreadReaderFrame`, with real Chrome Alt-left/right behavior covering all four paths; inspected screenshots for the internal navigation states; backend request evidence showing no view-state write.
   - Current evidence:
-    - The current focused test only establishes unconsumed DOM key events and programmatic history traversal. It does not establish the required real Chrome keyboard routing or a compliant explicit domain model.
+    - The current focused test only establishes unconsumed DOM key events and programmatic history traversal.
+      It does not establish the required real Chrome keyboard routing or a compliant explicit domain model.
     - The production screenshots were inspected for the initial and linked states only.
     - The current head passed the local push gate, but that is not proof of the unresolved navigation contract.
 
