@@ -1550,6 +1550,29 @@ test("reader preserves PDF-internal history through the production launch iframe
       await page.screenshot({ path: join(artifacts.root, "production-history-after-link.png") });
       assertPng(join(artifacts.root, "production-history-after-link.png"));
 
+      // A browser history gesture can return to the PDF's initial entry before the
+      // reader receives another Alt-arrow. The reader must still recognize the
+      // forward PDF.js entry that the link created.
+      await reader.evaluate(() => window.history.back());
+      await reader.waitForFunction((expected) => {
+        const input = document.getElementById("page-input");
+        const viewer = document.getElementById("viewer");
+        return input instanceof HTMLInputElement
+          && viewer instanceof HTMLElement
+          && input.value === expected.page
+          && Math.abs(viewer.scrollTop - expected.scrollTop) <= 2;
+      }, beforeLink);
+
+      await reader.locator("body").press("Alt+ArrowRight");
+      await reader.waitForFunction((expected) => {
+        const input = document.getElementById("page-input");
+        const viewer = document.getElementById("viewer");
+        return input instanceof HTMLInputElement
+          && viewer instanceof HTMLElement
+          && input.value === expected.page
+          && Math.abs(viewer.scrollTop - expected.scrollTop) <= 2;
+      }, afterLink);
+
       await reader.locator("body").press("Alt+ArrowLeft");
       await reader.waitForFunction((expected) => {
         const input = document.getElementById("page-input");
