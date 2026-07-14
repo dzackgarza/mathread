@@ -171,7 +171,6 @@ let noteVersion = "";
 let noteSaveTimer = null;
 let notesInitialized = false;
 let notesPreviewVisible = false;
-let readEventTimer = null;
 // User-tunable settings (see mathread/options.html); loaded before the editor mounts.
 const settingsDefaults = { autosaveMs: 800, fitWidthOnOpen: false, lineNumbers: true };
 let settings = settingsDefaults;
@@ -432,7 +431,7 @@ async function main() {
   await mountPdfDocument();
   pageInputEl.value = String(currentPageNumber);
   void initNotes();
-  postReadEvent(libraryKey, null).catch(error => {
+  postReadEvent(libraryKey).catch(error => {
     throw readerError("MATHREAD-READ-EVENT-ERROR", error);
   });
 }
@@ -559,7 +558,6 @@ function updateZoomLabel() {
 eventBus.on("pagechanging", ({ pageNumber }) => {
   currentPageNumber = pageNumber;
   pageInputEl.value = String(pageNumber);
-  scheduleReadEvent();
 });
 eventBus.on("scalechanging", ({ scale: nextScale }) => {
   scale = nextScale;
@@ -1866,19 +1864,6 @@ viewerEl.addEventListener("wheel", event => {
   event.preventDefault();
   setScale(scale * (event.deltaY < 0 ? 1.1 : 1 / 1.1));
 }, { passive: false });
-
-function scheduleReadEvent() {
-  if (!libraryKey || !pdfDoc) {
-    return;
-  }
-  clearTimeout(readEventTimer);
-  readEventTimer = setTimeout(() => {
-    const position = pdfDoc.numPages > 0 ? (currentPageNumber - 1) / pdfDoc.numPages : 0;
-    postReadEvent(libraryKey, position).catch(error => {
-      throw readerError("MATHREAD-READ-EVENT-ERROR", error);
-    });
-  }, 2000);
-}
 
 async function downloadPdf() {
   if (pdfData === null || libraryKey === null) {

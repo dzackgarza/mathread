@@ -64,7 +64,7 @@ def create_portal_router(
 
     @router.post("/read-event")
     def post_read_event(event: ReadEventRequest) -> Response:
-        library.record_read_event(root, event.key, event.position)
+        library.record_read_event(root, event.key)
         return Response(status_code=204)
 
     @router.delete("/library/{key}")

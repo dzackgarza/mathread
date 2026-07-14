@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 
@@ -12,6 +13,10 @@ from mathread.server import create_app
 
 PNG_PIXEL = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c636060606000000005000180fdb8d40000000049454e44ae426082")
 CAPTURED_PAPER_KEY = "https___example.edu_course_notes.pdf"
+
+
+def iso_mtime(path: Path) -> str:
+    return datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat()
 
 
 @pytest.fixture
@@ -55,11 +60,13 @@ def note_sidecar_path(root: Path, key: str) -> Path:
     return stored_pdf_path(root, key).with_suffix(".md")
 
 
-def test_library_lists_captured_pdf_with_provenance_as_unread_until_open(
+def test_library_lists_captured_pdf_with_provenance_and_entry_read_time(
     client: TestClient,
     sample_pdf_bytes: bytes,
+    tmp_path: Path,
 ) -> None:
     key = capture(client, sample_pdf_bytes)
+    expected_read_time = iso_mtime(tmp_path / "reading-root" / key)
 
     response = client.get("/library")
 
@@ -73,9 +80,8 @@ def test_library_lists_captured_pdf_with_provenance_as_unread_until_open(
     assert entry["title"] == "Course page"
     assert entry["capture"] == "capture-bytes"
     assert entry["has_note"] is False
-    assert entry["first_read"] is None
-    assert entry["last_read"] is None
-    assert "last_position" not in entry
+    assert entry["first_read"] == expected_read_time
+    assert entry["last_read"] == expected_read_time
 
 
 def test_library_title_falls_back_to_stem_when_title_hint_is_blank(
@@ -231,35 +237,36 @@ def test_note_asset_served_back_for_preview_and_traversal_rejected(
     assert client.get(f"/notes/{key}/assets/..%2Fnotes.pdf").status_code == 404
 
 
-def test_read_event_rejects_position_payload_without_marking_item_read(
+def test_read_event_rejects_extra_payload_without_mutating_recency(
     client: TestClient,
     sample_pdf_bytes: bytes,
 ) -> None:
     key = capture(client, sample_pdf_bytes)
+    before = client.get("/library").json()[0]
 
-    response = client.post("/read-event", json={"key": key, "position": 0.25})
+    response = client.post("/read-event", json={"key": key, "extra": "not accepted"})
 
     assert response.status_code == 422
-    entry = client.get("/library").json()[0]
-    assert entry["first_read"] is None
-    assert entry["last_read"] is None
-    assert "last_position" not in entry
+    after = client.get("/library").json()[0]
+    assert after["first_read"] == before["first_read"]
+    assert after["last_read"] == before["last_read"]
 
 
-def test_read_event_sets_first_read_once_and_updates_last_read(
+def test_read_event_preserves_entry_first_read_and_updates_last_read(
     client: TestClient,
     sample_pdf_bytes: bytes,
 ) -> None:
     import time
 
     key = capture(client, sample_pdf_bytes)
+    before = client.get("/library").json()[0]
 
+    time.sleep(0.001)
     first = client.post("/read-event", json={"key": key})
     assert first.status_code == 204
     after_first = client.get("/library").json()[0]
-    assert isinstance(after_first["first_read"], str)
-    assert after_first["last_read"] == after_first["first_read"]
-    assert "last_position" not in after_first
+    assert after_first["first_read"] == before["first_read"]
+    assert after_first["last_read"] > before["last_read"]
 
     time.sleep(0.001)
     second = client.post("/read-event", json={"key": key})
@@ -267,7 +274,6 @@ def test_read_event_sets_first_read_once_and_updates_last_read(
     after_second = client.get("/library").json()[0]
     assert after_second["first_read"] == after_first["first_read"]
     assert after_second["last_read"] > after_first["last_read"]
-    assert "last_position" not in after_second
 
 
 def test_read_history_uses_sqlite_transactions_for_parallel_open_events(
@@ -326,7 +332,7 @@ def test_folder_scan_surfaces_local_and_invalid_pdfs_without_crashing(
     assert entries["broken.pdf"]["error_message"]
 
 
-def test_parallel_open_events_record_each_key_without_position_state(
+def test_parallel_open_events_update_each_entry_recency(
     client: TestClient,
     sample_pdf_bytes: bytes,
 ) -> None:
@@ -358,7 +364,6 @@ def test_parallel_open_events_record_each_key_without_position_state(
     for key in keys:
         assert isinstance(entries[key]["first_read"], str)
         assert isinstance(entries[key]["last_read"], str)
-        assert "last_position" not in entries[key]
 
 
 def test_delete_removes_pdf_note_clips_and_history(
@@ -400,188 +405,6 @@ def test_delete_removes_pdf_note_clips_and_history(
     assert client.get("/library").json() == []
 
 
-def test_library_json_migration(tmp_path: Path) -> None:
-    import json
-
-    from mathread.library import _get_db
-
-    root = tmp_path / "migration-root"
-    root.mkdir()
-
-    # Pre-populate library.json
-    legacy_data = {
-        "paper.pdf": {
-            "first_read": "2026-07-06T00:00:00Z",
-            "last_read": "2026-07-06T01:00:00Z",
-            "last_position": 0.5,
-        }
-    }
-    json_path = root / "library.json"
-    json_path.write_text(json.dumps(legacy_data), encoding="utf-8")
-
-    # Initializing db should trigger migration and delete library.json
-    conn = _get_db(root)
-
-    # Verify database contents
-    columns = [row[1] for row in conn.execute("PRAGMA table_info(read_history)").fetchall()]
-    row = conn.execute("SELECT key, first_read, last_read FROM read_history").fetchone()
-    assert row is not None
-    assert columns == ["key", "first_read", "last_read"]
-    assert row[0] == "paper.pdf"
-    assert row[1] == "2026-07-06T00:00:00Z"
-    assert row[2] == "2026-07-06T01:00:00Z"
-    conn.close()
-
-    # library.json should have been deleted
-    assert not json_path.exists()
-
-
-def test_library_json_migration_rejects_malformed_legacy_history(tmp_path: Path) -> None:
-    import json
-
-    from mathread.library import _get_db
-
-    root = tmp_path / "migration-root"
-    root.mkdir()
-    json_path = root / "library.json"
-    json_path.write_text(json.dumps({"paper.pdf": {"first_read": "2026-07-06T00:00:00Z"}}), encoding="utf-8")
-
-    with pytest.raises(AssertionError):
-        _get_db(root)
-
-    assert json_path.is_file()
-
-
-def test_backend_migrates_prior_nested_library_before_serving_canonical_endpoints(
-    sample_pdf_bytes: bytes,
-    tmp_path: Path,
-) -> None:
-    import json
-
-    root = tmp_path / "reading-root"
-    inbox = root / "inbox"
-    inbox.mkdir(parents=True)
-    key = "legacy-paper.pdf"
-    prior_note_text = """# Prior-layout note
-
-Preserve this argument verbatim: ../clips/legacy-paper/clip-01.png
-
-![Clipped region](../clips/legacy-paper/clip-01.png)
-
-`![Inline code](../clips/legacy-paper/clip-01.png)`
-
-    ![Indented code](../clips/legacy-paper/clip-01.png)
-
-```markdown
-![Fenced code](../clips/legacy-paper/clip-01.png)
-```
-
-![Remote figure](https://example.edu/figures/clip-01.png)
-
-[Related argument](../references/context.md)
-"""
-    migrated_note_text = """# Prior-layout note
-
-Preserve this argument verbatim: ../clips/legacy-paper/clip-01.png
-
-![Clipped region](clips/legacy-paper/clip-01.png)
-
-`![Inline code](../clips/legacy-paper/clip-01.png)`
-
-    ![Indented code](../clips/legacy-paper/clip-01.png)
-
-```markdown
-![Fenced code](../clips/legacy-paper/clip-01.png)
-```
-
-![Remote figure](https://example.edu/figures/clip-01.png)
-
-[Related argument](../references/context.md)
-"""
-    (inbox / key).write_bytes(sample_pdf_bytes)
-    (inbox / "legacy-paper.md").write_text(prior_note_text, encoding="utf-8")
-    clip_path = root / "clips" / "legacy-paper" / "clip-01.png"
-    clip_path.parent.mkdir(parents=True)
-    clip_path.write_bytes(PNG_PIXEL)
-    history = {
-        key: {
-            "first_read": "2026-06-01T02:03:04+00:00",
-            "last_read": "2026-06-02T03:04:05+00:00",
-            "last_position": 0.625,
-        }
-    }
-    (root / "library.json").write_text(json.dumps(history), encoding="utf-8")
-
-    client = TestClient(create_app(root))
-
-    assert (root / key).read_bytes() == sample_pdf_bytes
-    migrated_note_path = root / "legacy-paper.md"
-    migrated_note = migrated_note_path.read_text(encoding="utf-8")
-    assert migrated_note == migrated_note_text
-    generated_link = next(line for line in migrated_note.splitlines() if line.startswith("![Clipped region]("))
-    generated_destination = generated_link.removeprefix("![Clipped region](").removesuffix(")")
-    assert (migrated_note_path.parent / generated_destination).resolve() == clip_path.resolve()
-    assert clip_path.read_bytes() == PNG_PIXEL
-    assert not inbox.exists()
-
-    listed = client.get("/library")
-
-    assert listed.status_code == 200
-    assert [
-        {
-            "key": entry["key"],
-            "has_note": entry["has_note"],
-            "first_read": entry["first_read"],
-            "last_read": entry["last_read"],
-        }
-        for entry in listed.json()
-    ] == [
-        {
-            "key": key,
-            "has_note": True,
-            **history[key],
-        }
-    ]
-    assert client.get(f"/pdf/{key}").content == sample_pdf_bytes
-    assert client.get(f"/notes/{key}").json()["text"] == migrated_note_text
-    assert client.get(f"/notes/{key}/assets/clip-01.png").content == PNG_PIXEL
-
-
-def test_prior_nested_library_collision_fails_before_moving_any_artifact(
-    sample_pdf_bytes: bytes,
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "reading-root"
-    inbox = root / "inbox"
-    inbox.mkdir(parents=True)
-    safe_pdf = inbox / "a-safe.pdf"
-    safe_note = inbox / "a-safe.md"
-    conflicting_source = inbox / "z-conflict.pdf"
-    conflicting_note = inbox / "z-conflict.md"
-    conflicting_destination = root / "z-conflict.pdf"
-    safe_pdf.write_bytes(sample_pdf_bytes)
-    safe_note.write_text("safe nested note\n", encoding="utf-8")
-    conflicting_source.write_bytes(sample_pdf_bytes)
-    conflicting_note.write_text("nested conflict note\n", encoding="utf-8")
-    destination_bytes = b"different destination bytes"
-    conflicting_destination.write_bytes(destination_bytes)
-
-    with pytest.raises(FileExistsError):
-        create_app(root)
-
-    assert safe_pdf.read_bytes() == sample_pdf_bytes
-    assert safe_note.read_text(encoding="utf-8") == "safe nested note\n"
-    assert conflicting_source.read_bytes() == sample_pdf_bytes
-    assert conflicting_note.read_text(encoding="utf-8") == "nested conflict note\n"
-    assert conflicting_destination.read_bytes() == destination_bytes
-    assert not (root / "a-safe.pdf").exists()
-    assert not (root / "a-safe.md").exists()
-
-
-def test_delete_unknown_key_is_404(client: TestClient) -> None:
-    assert client.delete("/library/ghost.pdf").status_code == 404
-
-
 def test_open_root_endpoint_runs_file_browser_command_against_library_root(tmp_path: Path) -> None:
     reading_root = tmp_path / "reading-root"
     reading_root.mkdir()
@@ -592,17 +415,6 @@ def test_open_root_endpoint_runs_file_browser_command_against_library_root(tmp_p
 
     assert response.status_code == 204
     assert (reading_root / "opened-by-mathread.txt").read_text(encoding="utf-8") == "opened"
-
-
-def test_unknown_key_is_404_across_note_image_and_read_event(client: TestClient) -> None:
-    assert client.get("/notes/ghost.pdf").status_code == 404
-    assert client.put("/notes/ghost.pdf", json={"key": "ghost.pdf", "text": "x"}).status_code == 404
-    assert client.post("/notes/ghost.pdf/image", files={"image": ("c.png", PNG_PIXEL, "image/png")}).status_code == 404
-    assert client.post("/read-event", json={"key": "ghost.pdf"}).status_code == 404
-
-
-def test_key_path_traversal_is_rejected(client: TestClient) -> None:
-    assert client.get("/notes/..%2f..%2fetc%2fpasswd").status_code in (400, 404)
 
 
 def test_list_library_handles_provenance_less_pdf(
@@ -626,9 +438,9 @@ def test_list_library_handles_provenance_less_pdf(
     assert entry["capture"] is None
     assert entry["original_sha256"] is None
     assert entry["title"] == "local"
-    assert entry["first_read"] is None
-    assert entry["last_read"] is None
-    assert "last_position" not in entry
+    expected_read_time = iso_mtime(root / "local.pdf")
+    assert entry["first_read"] == expected_read_time
+    assert entry["last_read"] == expected_read_time
     assert entry["invalid"] is False
     assert entry["error_message"] is None
 

@@ -12,7 +12,6 @@ Layout for ``<root>/<name>.pdf``:
 
 from __future__ import annotations
 
-import json
 import re
 import shutil
 import sqlite3
@@ -40,12 +39,10 @@ _INITIALIZED_DBS: set[Path] = set()
 class HistoryRecord(TypedDict):
     first_read: str
     last_read: str
-    last_position: float
 
 
 History = dict[str, HistoryRecord]
 
-FIRST_PAGE = 0.0
 type OpenRootCommand = tuple[str, ...]
 DEFAULT_OPEN_ROOT_COMMAND: OpenRootCommand = ("xdg-open",)
 
@@ -60,166 +57,6 @@ class InvalidNoteImageError(Exception):
 
 class NoteVersionConflictError(Exception):
     """Note has been modified elsewhere; version mismatch."""
-
-
-def _is_markdown_escaped(text: str, index: int) -> bool:
-    backslashes = 0
-    index -= 1
-    while index >= 0 and text[index] == "\\":
-        backslashes += 1
-        index -= 1
-    return backslashes % 2 == 1
-
-
-def _closing_markdown_delimiter(
-    text: str,
-    start: int,
-    opening: str,
-    closing: str,
-) -> int | None:
-    depth = 1
-    index = start
-    while index < len(text):
-        character = text[index]
-        if not _is_markdown_escaped(text, index):
-            if character == opening:
-                depth += 1
-            elif character == closing:
-                depth -= 1
-                if depth == 0:
-                    return index
-        index += 1
-    return None
-
-
-def _bare_markdown_destination_end(line: str, start: int) -> int | None:
-    depth = 0
-    index = start
-    while index < len(line):
-        character = line[index]
-        if _is_markdown_escaped(line, index):
-            index += 1
-            continue
-        if character == "(":
-            depth += 1
-        elif character == ")":
-            if depth == 0:
-                return index
-            depth -= 1
-        elif character.isspace():
-            return None
-        index += 1
-    return None
-
-
-def _inline_image_destination(line: str, image_start: int) -> tuple[int, int] | None:
-    label_end = _closing_markdown_delimiter(line, image_start + 2, "[", "]")
-    if label_end is None or label_end + 1 >= len(line) or line[label_end + 1] != "(":
-        return None
-
-    destination_start = label_end + 2
-    if destination_start >= len(line):
-        return None
-    destination_end = _bare_markdown_destination_end(line, destination_start)
-    return None if destination_end is None else (destination_start, destination_end)
-
-
-def _markdown_image_destination_spans(markdown: str) -> Iterator[tuple[int, int]]:
-    fence: tuple[str, int] | None = None
-    offset = 0
-    for line in markdown.splitlines(keepends=True):
-        content = line.rstrip("\r\n")
-        leading_spaces = len(content) - len(content.lstrip(" "))
-        stripped = content[leading_spaces:]
-        fence_character = stripped[:1]
-        fence_length = len(stripped) - len(stripped.lstrip(fence_character)) if fence_character in {"`", "~"} else 0
-        if fence is not None:
-            closes_fence = fence_character == fence[0] and fence_length >= fence[1] and not stripped[fence_length:].strip()
-            if closes_fence:
-                fence = None
-            offset += len(line)
-            continue
-        if leading_spaces <= 3 and fence_length >= 3:
-            fence = (fence_character, fence_length)
-            offset += len(line)
-            continue
-        if leading_spaces >= 4:
-            offset += len(line)
-            continue
-
-        index = 0
-        while index < len(content):
-            if content[index] == "`":
-                code_length = len(content[index:]) - len(content[index:].lstrip("`"))
-                closing_code = content.find("`" * code_length, index + code_length)
-                if closing_code == -1:
-                    index += code_length
-                else:
-                    index = closing_code + code_length
-                continue
-            if content.startswith("![", index) and not _is_markdown_escaped(content, index):
-                destination = _inline_image_destination(content, index)
-                if destination is not None:
-                    yield offset + destination[0], offset + destination[1]
-                    index = destination[1] + 1
-                    continue
-            index += 1
-        offset += len(line)
-
-
-def _rewrite_migrated_clip_destinations(
-    root: Path,
-    note_path: Path,
-    markdown: str,
-) -> str:
-    clips_root = (root / "clips").resolve()
-    edits: list[tuple[int, int, str]] = []
-    for start, end in _markdown_image_destination_spans(markdown):
-        old_destination = markdown[start:end]
-        clip_path = (note_path.parent / old_destination).resolve()
-        if clip_path.is_relative_to(clips_root) and clip_path.suffix.lower() == ".png":
-            edits.append((start, end, clip_path.relative_to(root.resolve()).as_posix()))
-
-    migrated = markdown
-    for start, end, destination in reversed(edits):
-        migrated = f"{migrated[:start]}{destination}{migrated[end:]}"
-    return migrated
-
-
-def migrate_prior_nested_layout(root: Path) -> None:
-    """Move the former ``root/inbox`` PDF and note ownership into ``root`` once."""
-    inbox = root / "inbox"
-    if not inbox.exists():
-        return
-
-    assert inbox.is_dir(), f"Prior MathRead library path must be a real directory before migration; path={inbox}"
-    sources = sorted(inbox.iterdir())
-    invalid_sources = [source for source in sources if not source.is_file() or source.suffix.lower() not in {".pdf", ".md"}]
-    assert not invalid_sources, (
-        f"Prior MathRead inbox contains ownership outside the PDF/note transition; unexpected={invalid_sources}; move or remove these entries before starting MathRead"
-    )
-
-    pdf_names = {source.name for source in sources if source.suffix.lower() == ".pdf"}
-    orphan_notes = [source for source in sources if source.suffix.lower() == ".md" and source.with_suffix(".pdf").name not in pdf_names]
-    assert not orphan_notes, f"Prior MathRead inbox contains notes without their owned PDFs; orphan_notes={orphan_notes}; restore the matching PDFs before starting MathRead"
-
-    moves = [(source, root / source.name) for source in sources]
-    collisions = [(source, destination) for source, destination in moves if destination.exists()]
-    if collisions:
-        raise FileExistsError(f"Prior MathRead inbox migration would overwrite canonical library artifacts; collisions={collisions}")
-
-    for source, destination in moves:
-        if source.suffix.lower() == ".md":
-            note = source.read_text(encoding="utf-8", newline="")
-            migrated_note = _rewrite_migrated_clip_destinations(root, source, note)
-            if migrated_note != note:
-                source.write_text(migrated_note, encoding="utf-8", newline="")
-        source.rename(destination)
-    inbox.rmdir()
-
-
-def history_path(root: Path) -> Path:
-    return root / "library.json"
 
 
 def open_library_root(root: Path, command: OpenRootCommand = DEFAULT_OPEN_ROOT_COMMAND) -> None:
@@ -280,7 +117,6 @@ def _invalid_entry(pdf: Path, note_path: Path, read_state: HistoryRecord, error:
         has_note=note_path.is_file(),
         first_read=read_state["first_read"],
         last_read=read_state["last_read"],
-        last_position=read_state["last_position"],
         invalid=True,
         error_message=str(error),
     )
@@ -298,7 +134,6 @@ def _local_entry(pdf: Path, note_path: Path, read_state: HistoryRecord) -> Libra
         has_note=note_path.is_file(),
         first_read=read_state["first_read"],
         last_read=read_state["last_read"],
-        last_position=read_state["last_position"],
         invalid=False,
     )
 
@@ -315,7 +150,6 @@ def _captured_entry(pdf: Path, note_path: Path, read_state: HistoryRecord, prove
         has_note=note_path.is_file(),
         first_read=read_state["first_read"],
         last_read=read_state["last_read"],
-        last_position=read_state["last_position"],
         invalid=False,
     )
 
@@ -327,12 +161,20 @@ def _entry_title(title_hint: str | None, pdf: Path) -> str:
 
 
 def _read_state(pdf: Path, history: History) -> HistoryRecord:
-    """A PDF always has a read-state: an explicit record once opened, else its capture
-    time (the moment it entered the reading library) at the first page."""
+    """A library entry always has read timestamps.
+
+    Explicit read-event history preserves the first navigation time and advances
+    recency. A PDF with no explicit event is still a library entry: use the file
+    modification time as the externally supplied entry/read time.
+    """
     if pdf.name in history:
         return history[pdf.name]
-    captured_at = datetime.fromtimestamp(pdf.stat().st_mtime, UTC).isoformat()
-    return HistoryRecord(first_read=captured_at, last_read=captured_at, last_position=FIRST_PAGE)
+    first_read = _file_read_timestamp(pdf)
+    return HistoryRecord(first_read=first_read, last_read=first_read)
+
+
+def _file_read_timestamp(pdf: Path) -> str:
+    return datetime.fromtimestamp(pdf.stat().st_mtime, UTC).isoformat()
 
 
 def _calculate_note_version(note_path: Path) -> str:
@@ -447,25 +289,20 @@ def delete_library_entry(root: Path, key: str) -> None:
         conn.commit()
 
 
-def record_read_event(root: Path, key: str, position: float | None) -> None:
-    resolve_pdf(root, key)  # validate the key exists before recording history
+def record_read_event(root: Path, key: str) -> None:
+    pdf = resolve_pdf(root, key)
     now = datetime.now(UTC).isoformat()
     with _db_connection(root) as conn:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT first_read, last_position FROM read_history WHERE key = ?", (key,)).fetchone()
-        if row:
-            first_read = row["first_read"]
-            last_position = row["last_position"] if position is None else position
-        else:
-            first_read = now
-            last_position = FIRST_PAGE if position is None else position
+        row = conn.execute("SELECT first_read FROM read_history WHERE key = ?", (key,)).fetchone()
+        first_read = row["first_read"] if row else _file_read_timestamp(pdf)
 
         conn.execute(
             """
-            INSERT OR REPLACE INTO read_history (key, first_read, last_read, last_position)
-            VALUES (?, ?, ?, ?)
+            INSERT OR REPLACE INTO read_history (key, first_read, last_read)
+            VALUES (?, ?, ?)
             """,
-            (key, first_read, now, last_position),
+            (key, first_read, now),
         )
         conn.commit()
 
@@ -491,16 +328,7 @@ def _mark_db_initialized(db_path: Path) -> None:
 
 def _initialize_db(root: Path, conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS read_history (
-            key TEXT PRIMARY KEY,
-            first_read TEXT NOT NULL,
-            last_read TEXT NOT NULL,
-            last_position REAL NOT NULL
-        );
-        """
-    )
+    _ensure_read_history_schema(conn)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS clips (
@@ -512,47 +340,25 @@ def _initialize_db(root: Path, conn: sqlite3.Connection) -> None:
     )
     conn.commit()
 
-    # Migration from legacy library.json
-    json_path = history_path(root)
-    if json_path.is_file():
-        with open(json_path, encoding="utf-8") as f:
-            data = json.load(f)
-        assert isinstance(data, dict), f"Legacy library.json must be an object keyed by PDF filename; found={type(data).__name__}; fix or delete {json_path}"
-        with conn:
-            for key, value in data.items():
-                assert isinstance(key, str), f"Legacy history key must be a string; key={key}; fix or delete {json_path}"
-                assert isinstance(value, dict), f"History record '{key}' must be a dictionary; data={value}; fix or delete {json_path}"
-                assert "first_read" in value, (
-                    f"History record '{key}' is missing required key 'first_read'; "
-                    f"data={value}; fix the legacy library.json file at the root or "
-                    "delete it to reconstruct history."
-                )
-                assert "last_read" in value, (
-                    f"History record '{key}' is missing required key 'last_read'; "
-                    f"data={value}; fix the legacy library.json file at the root or "
-                    "delete it to reconstruct history."
-                )
-                assert "last_position" in value, (
-                    f"History record '{key}' is missing required key 'last_position'; "
-                    f"data={value}; fix the legacy library.json file at the root or "
-                    "delete it to reconstruct history."
-                )
-                assert isinstance(value["first_read"], str), f"History record '{key}' first_read must be a string; data={value}"
-                assert isinstance(value["last_read"], str), f"History record '{key}' last_read must be a string; data={value}"
-                assert isinstance(value["last_position"], int | float), f"History record '{key}' last_position must be numeric; data={value}"
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO read_history (key, first_read, last_read, last_position)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (
-                        key,
-                        value["first_read"],
-                        value["last_read"],
-                        value["last_position"],
-                    ),
-                )
-        json_path.unlink(missing_ok=True)
+
+def _ensure_read_history_schema(conn: sqlite3.Connection) -> None:
+    columns = [row["name"] for row in conn.execute("PRAGMA table_info(read_history)").fetchall()]
+    current_columns = ["key", "first_read", "last_read"]
+    if columns == current_columns:
+        return
+    if not columns:
+        conn.execute(
+            """
+            CREATE TABLE read_history (
+                key TEXT PRIMARY KEY,
+                first_read TEXT NOT NULL,
+                last_read TEXT NOT NULL
+            );
+            """
+        )
+        return
+
+    assert columns == current_columns, f"read_history schema must be exactly {current_columns}; columns={columns}"
 
 
 def _get_db(root: Path) -> sqlite3.Connection:
@@ -580,11 +386,10 @@ def _db_connection(root: Path) -> Iterator[sqlite3.Connection]:
 def _load_history(root: Path) -> History:
     history: History = {}
     with _db_connection(root) as conn:
-        cursor = conn.execute("SELECT key, first_read, last_read, last_position FROM read_history")
+        cursor = conn.execute("SELECT key, first_read, last_read FROM read_history")
         for row in cursor:
             history[row["key"]] = HistoryRecord(
                 first_read=row["first_read"],
                 last_read=row["last_read"],
-                last_position=row["last_position"],
             )
     return history

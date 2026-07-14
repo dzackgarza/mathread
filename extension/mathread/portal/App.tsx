@@ -170,11 +170,10 @@ export default function App() {
       setNoteVersion('');
     }
     setIsSidebarOpen(false);
-    const entry = library.find((e) => e.key === key);
-    postReadEvent(key, entry ? entry.last_position : 0)
+    postReadEvent(key)
       .then(refreshLibrary)
       .catch((err) => failPortal('read event failed', err));
-  }, [dirty, selectedKey, note, noteVersion, library, refreshLibrary]);
+  }, [dirty, selectedKey, note, noteVersion, refreshLibrary]);
 
   // Poll for capture completion when a PDF URL is being captured.
   useEffect(() => {
