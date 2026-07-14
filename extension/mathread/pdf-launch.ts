@@ -32,7 +32,6 @@ async function launchPdf(): Promise<void> {
   const rawPdfUrl = pdfUrlFromLocation(location.search, location.pathname);
   assert(rawPdfUrl !== undefined, "MathRead PDF launch URL has no source PDF");
   const sourcePdf = canonicalSourcePdf(rawPdfUrl);
-  exposeSourceIdentity(sourcePdf.pdfUrl);
   setSourceLabel(sourcePdf.pdfUrl);
 
   const storedOrigin = await storedPdfLinkOrigin(
@@ -54,14 +53,7 @@ async function launchPdf(): Promise<void> {
     readerUrl.searchParams.set("mathread-view", sourcePdf.viewState);
   }
 
-  const reader = document.createElement("iframe");
-  reader.id = "mathread-reader-frame";
-  reader.name = "mathreadReaderFrame";
-  reader.title = "MathRead reader";
-  reader.allow = "clipboard-write";
-  reader.src = readerUrl.href;
-  document.body.replaceChildren(reader);
-  reader.focus();
+  location.replace(readerUrl.href);
 }
 
 async function sendCaptureMessage(message: unknown): Promise<unknown> {
@@ -158,12 +150,6 @@ function urlWithEntries(rawUrl: string, entries: [string, string][]): URL {
 
 function sourcePdfWithoutView(url: URL): SourcePdf {
   return { pdfUrl: url.href, viewState: null };
-}
-
-function exposeSourceIdentity(pdfUrl: string): void {
-  const visibleUrl = new URL(chrome.runtime.getURL("pdf-launch.html"));
-  visibleUrl.searchParams.set("source", pdfUrl);
-  history.replaceState(null, "", visibleUrl.href);
 }
 
 function setSourceLabel(pdfUrl: string): void {

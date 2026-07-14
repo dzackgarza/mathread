@@ -1810,12 +1810,30 @@ function isEditableTarget(target) {
     && (target.isContentEditable || target.closest("input, textarea, [contenteditable='true'], .cm-editor") !== null);
 }
 
+function parseReaderCommand(event) {
+  if (!event.altKey || event.ctrlKey || event.metaKey) {
+    return { kind: "reader-shortcut" };
+  }
+  switch (event.key) {
+    case "ArrowLeft":
+      return { kind: "browser-history", direction: "back" };
+    case "ArrowRight":
+      return { kind: "browser-history", direction: "forward" };
+    default:
+      return { kind: "reader-shortcut" };
+  }
+}
+
 document.addEventListener("keydown", event => {
   if (event.key === "Escape" && !clipOverlayEl.hidden) {
     endClip();
     return;
   }
   if (event.defaultPrevented || isEditableTarget(event.target) || pdfDoc === null) {
+    return;
+  }
+  const command = parseReaderCommand(event);
+  if (command.kind === "browser-history") {
     return;
   }
   if (event.ctrlKey || event.metaKey) {
@@ -1831,9 +1849,6 @@ document.addEventListener("keydown", event => {
       return;
     }
     event.preventDefault();
-    return;
-  }
-  if (event.altKey && !event.ctrlKey && !event.metaKey && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
     return;
   }
   const pageDelta = event.key === "PageDown" || event.key === "ArrowDown" || event.key === "ArrowRight"

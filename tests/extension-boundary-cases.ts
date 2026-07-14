@@ -242,20 +242,15 @@ test("reader Library panel lists, opens, and trashes captured items against the 
         .click();
       await waitForReaderFrame(page, secondKey);
       const visibleReaderUrl = new URL(page.url());
-      expect(visibleReaderUrl.pathname).toBe("/pdf-launch.html");
-      const visibleSourceUrl = visibleReaderUrl.searchParams.get("source");
-      assert(visibleSourceUrl !== null);
-      expect(new URL(visibleSourceUrl).pathname).toBe(
-        pdfPathForScenario("large-numdam-pdf"),
-      );
+      expect(visibleReaderUrl.pathname).toBe("/reader/reader.html");
+      expect(visibleReaderUrl.searchParams.get("key")).toBe(secondKey);
 
       const reader = await waitForReaderFrame(page, secondKey);
       // PDF.js owns a bounded canvas window; wait for the current page rather than
       // requiring every page canvas to exist simultaneously.
       await reader.locator("#viewer canvas").first().waitFor();
 
-      // Copy view link must work from the cross-origin reader iframe and carry a
-      // MathRead-owned view-state envelope without rewriting the source identity.
+      // Copy view link preserves the source identity after the top-level reader redirect.
       await reader.locator("#toggle-more").click();
       await reader.locator('.menu-item[data-action="copy-view-link"]').click();
       await page.waitForFunction(() =>
@@ -264,7 +259,10 @@ test("reader Library panel lists, opens, and trashes captured items against the 
       const copiedViewUrl = new URL(
         await page.evaluate(() => navigator.clipboard.readText()),
       );
-      const expectedViewUrl = new URL(visibleSourceUrl);
+      const expectedViewUrl = new URL(
+        pdfPathForScenario("large-numdam-pdf"),
+        courseServer.url.origin,
+      );
       expect(copiedViewUrl.origin).toBe(expectedViewUrl.origin);
       expect(copiedViewUrl.pathname).toBe(expectedViewUrl.pathname);
       const viewLinks = copiedViewUrl.searchParams.getAll("mathread-link");
@@ -1494,7 +1492,7 @@ test("reader hands Alt-Left to the browser without a PDF-internal back destinati
   );
 }, 120_000);
 
-test("reader preserves PDF-internal history through the production launch iframe", async () => {
+test("reader preserves PDF-internal history through the production launch redirect", async () => {
   await withExtensionReader(
     async ({ artifacts, backendPort, courseServer, page, readingRoot }) => {
       const sourceUrl = `${courseServer.url.origin}/internal-link.pdf`;
@@ -1510,8 +1508,8 @@ test("reader preserves PDF-internal history through the production launch iframe
       await reader.locator("#viewer canvas").first().waitFor();
       await waitForReadEventCount(readEventRequests, 1);
       const launchUrl = new URL(page.url());
-      expect(launchUrl.pathname).toBe("/pdf-launch.html");
-      expect(launchUrl.searchParams.get("source")).toBe(sourceUrl);
+      expect(launchUrl.pathname).toBe("/reader/reader.html");
+      expect(launchUrl.searchParams.get("key")).toBe(key);
 
       const readView = () => reader.evaluate(() => {
         const pageInput = document.getElementById("page-input");
@@ -2402,8 +2400,15 @@ async function waitForReaderFrame(
   page: Page,
   expectedKey: string,
 ): Promise<Frame> {
+  const isExpectedTopLevelReader = () => {
+    const url = new URL(page.url());
+    return url.pathname === "/reader/reader.html" && url.searchParams.get("key") === expectedKey;
+  };
   let lastUrlError: unknown = undefined;
   for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (isExpectedTopLevelReader()) {
+      return page.mainFrame();
+    }
     const frame = page.frames().find((candidate) => {
       if (candidate.name() !== "mathreadReaderFrame") {
         return false;
