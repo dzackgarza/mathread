@@ -2439,16 +2439,14 @@ async function waitForLibraryOrder(
           return key;
         }),
       );
-    if (
-      actualKeys[0] === expectedKeys[0] &&
-      expectedKeys.every((key) => actualKeys.includes(key))
-    ) {
+    const actualPrefix = actualKeys.slice(0, expectedKeys.length);
+    if (expectedKeys.every((key, index) => actualPrefix[index] === key)) {
       return;
     }
     await Bun.sleep(100);
   }
   throw new Error(
-    `Timed out waiting for library order headed by ${expectedKeys[0]}`,
+    `Timed out waiting for library order ${expectedKeys.join(", ")}`,
   );
 }
 
