@@ -506,6 +506,12 @@ test("extension synchronization removes legacy PDF redirect rules", async () => 
 }
 
 function registerCapturedSourceBoundaryTests(): void {
+  registerCapturedSourceLinkTests();
+  registerExtensionOwnedWorkflowTest();
+  registerCapturedRenderingBoundaryTests();
+}
+
+function registerCapturedSourceLinkTests(): void {
 
 test("reader exposes arXiv source links as a dedicated toolbar button", async () => {
   await withExtensionReader(async ({ backendPort, courseServer, extensionId, page }) => {
@@ -526,6 +532,9 @@ test("reader exposes arXiv source links as a dedicated toolbar button", async ()
     await popup.close();
   });
 }, 120_000);
+}
+
+function registerExtensionOwnedWorkflowTest(): void {
 
 test("reader, markdown, and library workflows remain extension-owned", async () => {
   await withExtensionReader(
@@ -668,6 +677,9 @@ test("reader, markdown, and library workflows remain extension-owned", async () 
     },
   );
 }, 120_000);
+}
+
+function registerCapturedRenderingBoundaryTests(): void {
 
 test("reader opens pre-2007 arXiv provenance with its full archive identifier", async () => {
   await withExtensionReader(async ({ backendPort, courseServer, extensionId, page }) => {
