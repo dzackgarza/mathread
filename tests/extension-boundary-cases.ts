@@ -1428,8 +1428,9 @@ function registerReaderHistoryBoundaryTest(): void {
 
 test("reader hands Alt-Left to the browser without a PDF-internal back destination", async () => {
   await withExtensionReader(
-    async ({ artifacts, courseServer, page, readingRoot }) => {
+    async ({ artifacts, backendPort, courseServer, page, readingRoot }) => {
       const sourceUrl = `${courseServer.url.origin}/internal-link.pdf`;
+      const readEventRequests = collectReadEventRequests(page, backendPort);
       await page.goto(`${courseServer.url.origin}/course/`, {
         waitUntil: "domcontentloaded",
       });
@@ -1439,14 +1440,124 @@ test("reader hands Alt-Left to the browser without a PDF-internal back destinati
       const key = storedKeyFromPath(storedPath);
       const reader = await waitForReaderFrame(page, key);
       await reader.locator("#viewer canvas").first().waitFor();
+      await waitForReadEventCount(readEventRequests, 1);
       expect(await reader.locator("#page-input").inputValue()).toBe("1");
+      expect(await reader.evaluate(() => {
+        document.body.focus();
+        return document.hasFocus() && document.activeElement === document.body;
+      })).toBe(true);
       await page.screenshot({ path: join(artifacts.root, "browser-history-reader.png") });
       assertPng(join(artifacts.root, "browser-history-reader.png"));
 
-      await page.keyboard.press("Alt+ArrowLeft");
+      await reader.evaluate(() => {
+        const recordAltLeft = (event: KeyboardEvent) => {
+          if (event.altKey && event.key === "ArrowLeft") {
+            (window as typeof window & { mathreadAltLeftDefaultPrevented?: boolean })
+              .mathreadAltLeftDefaultPrevented = event.defaultPrevented;
+            document.removeEventListener("keydown", recordAltLeft);
+          }
+        };
+        document.addEventListener("keydown", recordAltLeft);
+      });
+      await reader.locator("body").press("Alt+ArrowLeft");
+      await reader.waitForFunction(() => (
+        window as typeof window & { mathreadAltLeftDefaultPrevented?: boolean }
+      ).mathreadAltLeftDefaultPrevented !== undefined);
+      expect(await reader.evaluate(() => (
+        window as typeof window & { mathreadAltLeftDefaultPrevented?: boolean }
+      ).mathreadAltLeftDefaultPrevented)).toBe(false);
+      await page.goBack({ waitUntil: "domcontentloaded" });
       await page.waitForURL(`${courseServer.url.origin}/course/`);
       await page.screenshot({ path: join(artifacts.root, "browser-history-parent.png") });
       assertPng(join(artifacts.root, "browser-history-parent.png"));
+      assertReadEventBodies(readEventRequests, [key]);
+    },
+  );
+}, 120_000);
+
+test("reader preserves PDF-internal history through the production launch iframe", async () => {
+  await withExtensionReader(
+    async ({ artifacts, backendPort, courseServer, page, readingRoot }) => {
+      const sourceUrl = `${courseServer.url.origin}/internal-link.pdf`;
+      const readEventRequests = collectReadEventRequests(page, backendPort);
+      await page.goto(`${courseServer.url.origin}/course/`, {
+        waitUntil: "domcontentloaded",
+      });
+      await page.goto(sourceUrl, { waitUntil: "domcontentloaded" });
+
+      const storedPath = await waitForStoredPdf(readingRoot);
+      const key = storedKeyFromPath(storedPath);
+      const reader = await waitForReaderFrame(page, key);
+      await reader.locator("#viewer canvas").first().waitFor();
+      await waitForReadEventCount(readEventRequests, 1);
+      const launchUrl = new URL(page.url());
+      expect(launchUrl.pathname).toBe("/pdf-launch.html");
+      expect(launchUrl.searchParams.get("source")).toBe(sourceUrl);
+
+      const readView = () => reader.evaluate(() => {
+        const pageInput = document.getElementById("page-input");
+        const zoom = document.getElementById("zoom-level");
+        const viewer = document.getElementById("viewer");
+        if (
+          !(pageInput instanceof HTMLInputElement)
+          || !(zoom instanceof HTMLElement)
+          || !(viewer instanceof HTMLElement)
+          || zoom.textContent === null
+        ) {
+          throw new TypeError("Expected production reader navigation controls");
+        }
+        return {
+          page: pageInput.value,
+          scrollTop: viewer.scrollTop,
+          zoom: zoom.textContent,
+        };
+      });
+
+      await reader.locator("#zoom-in").click();
+      const beforeLink = await readView();
+      expect(beforeLink.page).toBe("1");
+      await page.screenshot({ path: join(artifacts.root, "production-history-before-link.png") });
+      assertPng(join(artifacts.root, "production-history-before-link.png"));
+
+      const internalLink = reader.locator('#pdf-viewer .annotationLayer a').first();
+      await internalLink.click();
+      await reader.waitForFunction(() => {
+        const input = document.getElementById("page-input");
+        return input instanceof HTMLInputElement && input.value === "2";
+      });
+      const afterLink = await readView();
+      expect(afterLink.page).toBe("2");
+      await page.screenshot({ path: join(artifacts.root, "production-history-after-link.png") });
+      assertPng(join(artifacts.root, "production-history-after-link.png"));
+
+      await reader.locator("body").press("Alt+ArrowLeft");
+      await reader.waitForFunction((expected) => {
+        const input = document.getElementById("page-input");
+        const viewer = document.getElementById("viewer");
+        return input instanceof HTMLInputElement
+          && viewer instanceof HTMLElement
+          && input.value === expected.page
+          && Math.abs(viewer.scrollTop - expected.scrollTop) <= 2;
+      }, beforeLink);
+      const afterBack = await readView();
+      expect(afterBack.zoom).toBe(beforeLink.zoom);
+      await page.screenshot({ path: join(artifacts.root, "production-history-after-back.png") });
+      assertPng(join(artifacts.root, "production-history-after-back.png"));
+
+      await reader.locator("body").press("Alt+ArrowRight");
+      await reader.waitForFunction((expected) => {
+        const input = document.getElementById("page-input");
+        const viewer = document.getElementById("viewer");
+        return input instanceof HTMLInputElement
+          && viewer instanceof HTMLElement
+          && input.value === expected.page
+          && Math.abs(viewer.scrollTop - expected.scrollTop) <= 2;
+      }, afterLink);
+      const afterForward = await readView();
+      expect(afterForward.zoom).toBe(afterLink.zoom);
+      await page.screenshot({ path: join(artifacts.root, "production-history-after-forward.png") });
+      assertPng(join(artifacts.root, "production-history-after-forward.png"));
+      assertReadEventBodies(readEventRequests, [key]);
     },
   );
 }, 120_000);
