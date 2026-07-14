@@ -1,6 +1,8 @@
 ## Intended result
 
-An installed MathRead reader delegates Alt-Left and Alt-Right to PDF.js only when that document has a traversable internal destination. Otherwise the browser retains its normal parent-tab navigation. PDF.js continues to own page, viewport, zoom, and navigation state.
+An installed MathRead reader delegates Alt-Left and Alt-Right to PDF.js only when that document has a traversable internal destination.
+Otherwise the browser retains its normal parent-tab navigation.
+PDF.js continues to own page, viewport, zoom, and navigation state.
 
 ## Scope
 
@@ -39,4 +41,5 @@ An installed MathRead reader delegates Alt-Left and Alt-Right to PDF.js only whe
 
 ## Review focus
 
-Review the owner boundary first: PDF.js must remain the sole internal navigator, Chrome must receive an unhandled Alt-arrow, and the backend must remain uninvolved in reader view state. Reject any proof that bypasses `pdf-launch.html`, uses private PDF.js fields, or would pass while browser navigation is still suppressed.
+Review the owner boundary first: PDF.js must remain the sole internal navigator, Chrome must receive an unhandled Alt-arrow, and the backend must remain uninvolved in reader view state.
+Reject any proof that bypasses `pdf-launch.html`, uses private PDF.js fields, or would pass while browser navigation is still suppressed.
