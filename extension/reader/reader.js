@@ -1891,7 +1891,10 @@ document.addEventListener("keydown", event => {
     event.preventDefault();
     return;
   }
-  if (event.altKey) {
+  if (
+    event.altKey
+    && (event.key === "ArrowLeft" || event.key === "ArrowRight")
+  ) {
     return;
   }
   const pageDelta = event.key === "PageDown" || event.key === "ArrowDown" || event.key === "ArrowRight"

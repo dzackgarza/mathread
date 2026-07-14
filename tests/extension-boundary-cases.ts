@@ -1449,23 +1449,43 @@ test("reader hands Alt-Left to the browser without a PDF-internal back destinati
       await page.screenshot({ path: join(artifacts.root, "browser-history-reader.png") });
       assertPng(join(artifacts.root, "browser-history-reader.png"));
 
-      await reader.evaluate(() => {
-        const recordAltLeft = (event: KeyboardEvent) => {
-          if (event.altKey && event.key === "ArrowLeft") {
-            (window as typeof window & { mathreadAltLeftDefaultPrevented?: boolean })
-              .mathreadAltLeftDefaultPrevented = event.defaultPrevented;
-            document.removeEventListener("keydown", recordAltLeft);
-          }
-        };
-        document.addEventListener("keydown", recordAltLeft);
+      const readerAltArrowDefaultPrevented = async (
+        expectedKey: "ArrowLeft" | "ArrowRight",
+      ) => {
+        await reader.evaluate((expectedKey) => {
+          const target = window as typeof window & {
+            mathreadAltArrowDefaultPrevented?: boolean;
+          };
+          delete target.mathreadAltArrowDefaultPrevented;
+          const recordAltArrow = (event: KeyboardEvent) => {
+            if (event.altKey && event.key === expectedKey) {
+              target.mathreadAltArrowDefaultPrevented = event.defaultPrevented;
+              document.removeEventListener("keydown", recordAltArrow);
+            }
+          };
+          document.addEventListener("keydown", recordAltArrow);
+        }, expectedKey);
+        await reader.locator("body").press(`Alt+${expectedKey}`);
+        await reader.waitForFunction(() => (
+          window as typeof window & { mathreadAltArrowDefaultPrevented?: boolean }
+        ).mathreadAltArrowDefaultPrevented !== undefined);
+        return reader.evaluate(() => (
+          window as typeof window & { mathreadAltArrowDefaultPrevented?: boolean }
+        ).mathreadAltArrowDefaultPrevented);
+      };
+
+      expect(await readerAltArrowDefaultPrevented("ArrowRight")).toBe(false);
+      expect(await readerAltArrowDefaultPrevented("ArrowLeft")).toBe(false);
+      await reader.locator("body").press("Alt+ArrowDown");
+      await reader.waitForFunction(() => {
+        const input = document.getElementById("page-input");
+        return input instanceof HTMLInputElement && input.value === "2";
       });
-      await reader.locator("body").press("Alt+ArrowLeft");
-      await reader.waitForFunction(() => (
-        window as typeof window & { mathreadAltLeftDefaultPrevented?: boolean }
-      ).mathreadAltLeftDefaultPrevented !== undefined);
-      expect(await reader.evaluate(() => (
-        window as typeof window & { mathreadAltLeftDefaultPrevented?: boolean }
-      ).mathreadAltLeftDefaultPrevented)).toBe(false);
+      await reader.locator("body").press("Alt+ArrowUp");
+      await reader.waitForFunction(() => {
+        const input = document.getElementById("page-input");
+        return input instanceof HTMLInputElement && input.value === "1";
+      });
       await page.goBack({ waitUntil: "domcontentloaded" });
       await page.waitForURL(`${courseServer.url.origin}/course/`);
       await page.screenshot({ path: join(artifacts.root, "browser-history-parent.png") });
