@@ -346,7 +346,8 @@ test("built extension intercepts a clicked PDF directly into an extension-owned 
   ).toBe(true);
   const visibleReaderUrl = new URL(evidence.visibleReaderUrl);
   expect(visibleReaderUrl.protocol).toBe("chrome-extension:");
-  expect(visibleReaderUrl.searchParams.get("source")).toBe(expectedPdfUrl);
+  expect(visibleReaderUrl.pathname).toBe("/reader/reader.html");
+  expect(visibleReaderUrl.searchParams.get("key")).toBe(evidence.key);
   assertReaderFrameUrl(evidence.readerFrameUrl, evidence.key);
 
   expect(evidence.metadata["/MathReadSourceURL"]).toBe(expectedCourseUrl);
