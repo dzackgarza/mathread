@@ -1842,6 +1842,15 @@ function canTraversePdfHistory(direction) {
   return direction === "back" ? uid > 0 : uid < greatestPdfHistoryUid;
 }
 
+for (const method of ["pushState", "replaceState"]) {
+  const historyMethod = window.history[method];
+  window.history[method] = function (...args) {
+    const result = historyMethod.apply(window.history, args);
+    observePdfHistoryEntry(window.history.state);
+    return result;
+  };
+}
+
 window.addEventListener("popstate", event => {
   observePdfHistoryEntry(event.state);
 });
