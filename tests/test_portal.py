@@ -55,7 +55,7 @@ def note_sidecar_path(root: Path, key: str) -> Path:
     return stored_pdf_path(root, key).with_suffix(".md")
 
 
-def test_library_lists_captured_pdf_with_provenance_and_capture_time_read_baseline(
+def test_library_lists_captured_pdf_with_provenance_as_unread_until_open(
     client: TestClient,
     sample_pdf_bytes: bytes,
 ) -> None:
@@ -73,10 +73,9 @@ def test_library_lists_captured_pdf_with_provenance_and_capture_time_read_baseli
     assert entry["title"] == "Course page"
     assert entry["capture"] == "capture-bytes"
     assert entry["has_note"] is False
-    # Never opened yet: read-state is seeded from the capture moment at the first page.
-    assert entry["first_read"] == entry["last_read"]
-    assert isinstance(entry["first_read"], str)
-    assert entry["last_position"] == 0.0
+    assert entry["first_read"] is None
+    assert entry["last_read"] is None
+    assert "last_position" not in entry
 
 
 def test_library_title_falls_back_to_stem_when_title_hint_is_blank(
@@ -232,26 +231,46 @@ def test_note_asset_served_back_for_preview_and_traversal_rejected(
     assert client.get(f"/notes/{key}/assets/..%2Fnotes.pdf").status_code == 404
 
 
-def test_read_event_sets_first_read_once_and_updates_last_position(
+def test_read_event_rejects_position_payload_without_marking_item_read(
     client: TestClient,
     sample_pdf_bytes: bytes,
 ) -> None:
     key = capture(client, sample_pdf_bytes)
 
-    first = client.post("/read-event", json={"key": key, "position": 0.25})
+    response = client.post("/read-event", json={"key": key, "position": 0.25})
+
+    assert response.status_code == 422
+    entry = client.get("/library").json()[0]
+    assert entry["first_read"] is None
+    assert entry["last_read"] is None
+    assert "last_position" not in entry
+
+
+def test_read_event_sets_first_read_once_and_updates_last_read(
+    client: TestClient,
+    sample_pdf_bytes: bytes,
+) -> None:
+    import time
+
+    key = capture(client, sample_pdf_bytes)
+
+    first = client.post("/read-event", json={"key": key})
     assert first.status_code == 204
     after_first = client.get("/library").json()[0]
-    assert after_first["first_read"] is not None
-    assert after_first["last_position"] == 0.25
+    assert isinstance(after_first["first_read"], str)
+    assert after_first["last_read"] == after_first["first_read"]
+    assert "last_position" not in after_first
 
-    client.post("/read-event", json={"key": key, "position": 0.9})
+    time.sleep(0.001)
+    second = client.post("/read-event", json={"key": key})
+    assert second.status_code == 204
     after_second = client.get("/library").json()[0]
     assert after_second["first_read"] == after_first["first_read"]
-    assert after_second["last_read"] is not None
-    assert after_second["last_position"] == 0.9
+    assert after_second["last_read"] > after_first["last_read"]
+    assert "last_position" not in after_second
 
 
-def test_read_history_uses_sqlite_transactions_for_concurrent_updates(
+def test_read_history_uses_sqlite_transactions_for_parallel_open_events(
     client: TestClient,
     sample_pdf_bytes: bytes,
     tmp_path: Path,
@@ -263,7 +282,7 @@ def test_read_history_uses_sqlite_transactions_for_concurrent_updates(
     keys = [capture(client, sample_pdf_bytes, f"paper-{index}.pdf") for index in range(8)]
 
     def record(index: int) -> None:
-        response = client.post("/read-event", json={"key": keys[index], "position": index / 10})
+        response = client.post("/read-event", json={"key": keys[index]})
         assert response.status_code == 204
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
@@ -274,11 +293,14 @@ def test_read_history_uses_sqlite_transactions_for_concurrent_updates(
     db_path = root / "library.db"
     assert db_path.is_file()
     conn = sqlite3.connect(str(db_path))
-    rows = dict(conn.execute("SELECT key, last_position FROM read_history").fetchall())
+    columns = [row[1] for row in conn.execute("PRAGMA table_info(read_history)").fetchall()]
+    rows = {key: {"first_read": first_read, "last_read": last_read} for key, first_read, last_read in conn.execute("SELECT key, first_read, last_read FROM read_history")}
     conn.close()
+    assert columns == ["key", "first_read", "last_read"]
     assert set(rows) == set(keys)
-    for index, key in enumerate(keys):
-        assert rows[key] == pytest.approx(index / 10)
+    for key in keys:
+        assert isinstance(rows[key]["first_read"], str)
+        assert isinstance(rows[key]["last_read"], str)
 
 
 def test_folder_scan_surfaces_local_and_invalid_pdfs_without_crashing(
@@ -304,21 +326,26 @@ def test_folder_scan_surfaces_local_and_invalid_pdfs_without_crashing(
     assert entries["broken.pdf"]["error_message"]
 
 
-def test_concurrent_read_events_persist_all_key_updates(
+def test_parallel_open_events_record_each_key_without_position_state(
     client: TestClient,
     sample_pdf_bytes: bytes,
-    tmp_path: Path,
 ) -> None:
     import concurrent.futures
 
-    root = tmp_path / "reading-root"
     keys = [f"paper-{index}.pdf" for index in range(12)]
     for key in keys:
-        (root / key).write_bytes(sample_pdf_bytes)
-    expected_positions = {key: (index + 1) / 10 for index, key in enumerate(keys)}
+        client.post(
+            "/capture-bytes",
+            data={
+                "source_url": f"https://example.edu/course/{key}",
+                "pdf_url": f"https://example.edu/course/{key}",
+                "title_hint": key,
+            },
+            files={"pdf": (key, sample_pdf_bytes, "application/pdf")},
+        )
 
     def record(index: int) -> None:
-        response = client.post("/read-event", json={"key": keys[index], "position": expected_positions[keys[index]]})
+        response = client.post("/read-event", json={"key": keys[index]})
         assert response.status_code == 204
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
@@ -327,9 +354,11 @@ def test_concurrent_read_events_persist_all_key_updates(
             future.result()
 
     entries = {entry["key"]: entry for entry in client.get("/library").json()}
-    assert set(entries) == set(expected_positions)
-    for key, expected_position in expected_positions.items():
-        assert entries[key]["last_position"] == pytest.approx(expected_position)
+    assert set(entries) == set(keys)
+    for key in keys:
+        assert isinstance(entries[key]["first_read"], str)
+        assert isinstance(entries[key]["last_read"], str)
+        assert "last_position" not in entries[key]
 
 
 def test_delete_removes_pdf_note_clips_and_history(
@@ -345,7 +374,7 @@ def test_delete_removes_pdf_note_clips_and_history(
 
     client.put(f"/notes/{key}", json={"key": key, "text": "notes"})
     client.post(f"/notes/{key}/image", files={"image": ("clip.png", PNG_PIXEL, "image/png")})
-    client.post("/read-event", json={"key": key, "position": 0.4})
+    client.post("/read-event", json={"key": key})
     assert (root / "notes.pdf").is_file()
     assert (root / "notes.md").is_file()
     assert (clips_dir / "clip-01.png").is_file()
@@ -394,12 +423,13 @@ def test_library_json_migration(tmp_path: Path) -> None:
     conn = _get_db(root)
 
     # Verify database contents
-    row = conn.execute("SELECT key, first_read, last_read, last_position FROM read_history").fetchone()
+    columns = [row[1] for row in conn.execute("PRAGMA table_info(read_history)").fetchall()]
+    row = conn.execute("SELECT key, first_read, last_read FROM read_history").fetchone()
     assert row is not None
+    assert columns == ["key", "first_read", "last_read"]
     assert row[0] == "paper.pdf"
     assert row[1] == "2026-07-06T00:00:00Z"
     assert row[2] == "2026-07-06T01:00:00Z"
-    assert row[3] == 0.5
     conn.close()
 
     # library.json should have been deleted
@@ -503,7 +533,6 @@ Preserve this argument verbatim: ../clips/legacy-paper/clip-01.png
             "has_note": entry["has_note"],
             "first_read": entry["first_read"],
             "last_read": entry["last_read"],
-            "last_position": entry["last_position"],
         }
         for entry in listed.json()
     ] == [
@@ -569,7 +598,7 @@ def test_unknown_key_is_404_across_note_image_and_read_event(client: TestClient)
     assert client.get("/notes/ghost.pdf").status_code == 404
     assert client.put("/notes/ghost.pdf", json={"key": "ghost.pdf", "text": "x"}).status_code == 404
     assert client.post("/notes/ghost.pdf/image", files={"image": ("c.png", PNG_PIXEL, "image/png")}).status_code == 404
-    assert client.post("/read-event", json={"key": "ghost.pdf", "position": 0.1}).status_code == 404
+    assert client.post("/read-event", json={"key": "ghost.pdf"}).status_code == 404
 
 
 def test_key_path_traversal_is_rejected(client: TestClient) -> None:
@@ -597,6 +626,9 @@ def test_list_library_handles_provenance_less_pdf(
     assert entry["capture"] is None
     assert entry["original_sha256"] is None
     assert entry["title"] == "local"
+    assert entry["first_read"] is None
+    assert entry["last_read"] is None
+    assert "last_position" not in entry
     assert entry["invalid"] is False
     assert entry["error_message"] is None
 
