@@ -59,6 +59,9 @@ const pdfBytes = new TextEncoder().encode(
     "",
   ].join("\n"),
 );
+const extractLinkPdfBytes = new Uint8Array(
+  readFileSync(join(import.meta.dir, "fixtures", "pdfjs", "extract_link.pdf")),
+);
 
 const cookieName = "mathread_session";
 const cookieValue = "extension-test";
@@ -93,6 +96,7 @@ type CaptureScenario =
   | "clicked-link"
   | "direct-pdf-tab"
   | "direct-pdf-without-extension"
+  | "internal-link-pdf"
   | "large-numdam-pdf"
   | "arxiv-pdf"
   | "legacy-arxiv-pdf";
@@ -1421,6 +1425,31 @@ registerInterceptedReaderShortcutsBoundaryTest();
 }
 
 function registerReaderHistoryBoundaryTest(): void {
+
+test("reader hands Alt-Left to the browser without a PDF-internal back destination", async () => {
+  await withExtensionReader(
+    async ({ artifacts, courseServer, page, readingRoot }) => {
+      const sourceUrl = `${courseServer.url.origin}/internal-link.pdf`;
+      await page.goto(`${courseServer.url.origin}/course/`, {
+        waitUntil: "domcontentloaded",
+      });
+      await page.goto(sourceUrl, { waitUntil: "domcontentloaded" });
+
+      const storedPath = await waitForStoredPdf(readingRoot);
+      const key = storedKeyFromPath(storedPath);
+      const reader = await waitForReaderFrame(page, key);
+      await reader.locator("#viewer canvas").first().waitFor();
+      expect(await reader.locator("#page-input").inputValue()).toBe("1");
+      await page.screenshot({ path: join(artifacts.root, "browser-history-reader.png") });
+      assertPng(join(artifacts.root, "browser-history-reader.png"));
+
+      await page.keyboard.press("Alt+ArrowLeft");
+      await page.waitForURL(`${courseServer.url.origin}/course/`);
+      await page.screenshot({ path: join(artifacts.root, "browser-history-parent.png") });
+      assertPng(join(artifacts.root, "browser-history-parent.png"));
+    },
+  );
+}, 120_000);
 
 test("reader preserves PDF-internal navigation history", async () => {
   await withExtensionReader(
@@ -2996,6 +3025,7 @@ function startCourseServer(
       }
       if (
         url.pathname === "/notes.pdf" ||
+        url.pathname === "/internal-link.pdf" ||
         url.pathname === "/pdf/2301.12345" ||
         url.pathname === "/item/AST_1992__211__1_0.pdf" ||
         url.pathname === "/arxiv/pdf/2301.12345"
@@ -3121,6 +3151,9 @@ function pdfSha256(): string {
 }
 
 function pdfPathForScenario(scenario: CaptureScenario): string {
+  if (scenario === "internal-link-pdf") {
+    return "/internal-link.pdf";
+  }
   if (scenario === "large-numdam-pdf") {
     return "/item/AST_1992__211__1_0.pdf";
   }
@@ -3137,6 +3170,9 @@ function pdfPathForScenario(scenario: CaptureScenario): string {
 }
 
 function pdfBytesForPath(path: string): Uint8Array<ArrayBuffer> {
+  if (path === "/internal-link.pdf") {
+    return extractLinkPdfBytes;
+  }
   if (path === "/item/AST_1992__211__1_0.pdf") {
     return multipagePdfBytes(6);
   }
