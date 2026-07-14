@@ -51,15 +51,14 @@ PDF.js continues to own page, viewport, zoom, and navigation state.
 
 ## Claim map
 
-- [x] **#34 — Reader/browser navigation handoff**
-  - Proof obligations claimed: native browser internal back and forward; native browser parent-history traversal; PDF.js page, viewport, and zoom restoration; source-preserving current-view links; no backend view-state writes.
+- **#34 — Reader/browser navigation handoff (not yet claimed; PR remains draft)**
+  - Required proof obligations: an explicit, policy-compliant keyboard command router; native browser internal back and forward; native browser parent-history traversal; PDF.js page, viewport, and zoom restoration; source-preserving current-view links; no backend view-state writes.
   - Partial / not claimed: browser-wide history redesign, custom PDF engine work, PDF.js vendor API changes, backend persistence changes, or multi-client semantics.
-  - Evidence required: one real built-extension browser run through `pdf-launch.html` and `mathreadReaderFrame`, with unconsumed Alt-arrow events and native browser history traversal covering all four paths; inspected screenshots for the internal navigation states; backend request evidence showing no view-state write.
+  - Evidence required: one real built-extension browser run through `pdf-launch.html` and `mathreadReaderFrame`, with real Chrome Alt-left/right behavior covering all four paths; inspected screenshots for the internal navigation states; backend request evidence showing no view-state write.
   - Current evidence:
-    - `bun test --max-concurrency=1 --test-name-pattern 'reader hands Alt-Left|production launch iframe|reader preserves PDF-internal navigation history' tests/extension-rendering-boundary.test.ts` passes unconsumed Alt-left/right, native browser internal back/forward, browser parent-history traversal, and retained Alt-Up/Down reader page navigation.
-    - The production screenshots were inspected for the initial and linked states; native back/forward assertions verify the corresponding restored page, viewport, and zoom state.
-    - `bun test --max-concurrency=1 tests/extension-numdam-rendering.test.ts` passes the installed-extension current-view/source-link proof.
-    - The full push gate is required on the current head before ready-for-review.
+    - The current focused test only establishes unconsumed DOM key events and programmatic history traversal. It does not establish the required real Chrome keyboard routing or a compliant explicit domain model.
+    - The production screenshots were inspected for the initial and linked states only.
+    - The current head passed the local push gate, but that is not proof of the unresolved navigation contract.
 
 ## Automated gates
 
