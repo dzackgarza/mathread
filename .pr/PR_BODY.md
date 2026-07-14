@@ -20,11 +20,11 @@ PDF.js continues to own page, viewport, zoom, and navigation state.
   - Refs #35
   - Refs #5
 
-## Implementation plan
+## Implementation
 
-1. Add an installed-extension red proof that enters through PDF interception and distinguishes PDF-internal from parent-browser Alt-arrow navigation.
-2. Gate keyboard cancellation on a parsed current-document browser history entry and delegate only to the existing PDF.js history API.
-3. Extend the production-path proof to cover both directions, restored PDF.js view state, source-preserving links, and the absence of backend navigation-state writes.
+1. The reader gates cancellation on the public browser history entry for the current PDF fingerprint and delegates handled traversal to the existing PDF.js history API.
+2. Alt-modified arrows bypass the ordinary reader page-turn branch when PDF.js has no matching internal destination.
+3. Production-path tests enter through PDF interception, `pdf-launch.html`, and `mathreadReaderFrame`.
 
 ## Claim map
 
@@ -32,12 +32,16 @@ PDF.js continues to own page, viewport, zoom, and navigation state.
   - Proof obligations claimed: handled internal back and forward; fall-through browser back and forward; PDF.js page, viewport, and zoom restoration; source-preserving current-view links; no backend view-state writes.
   - Partial / not claimed: browser-wide history redesign, custom PDF engine work, PDF.js vendor API changes, backend persistence changes, or multi-client semantics.
   - Evidence required: one real built-extension browser run through `pdf-launch.html` and `mathreadReaderFrame`, with real keyboard input that distinguishes all four paths; inspected screenshots for the internal navigation states; backend request evidence showing no view-state write.
-  - Current evidence: PR #26 proves only a top-level reader internal-history case and is insufficient for this production iframe handoff.
+  - Current evidence:
+    - `bun test --max-concurrency=1 --test-name-pattern 'reader hands Alt-Left|production launch iframe|reader preserves PDF-internal navigation history' tests/extension-rendering-boundary.test.ts` passes the handled and unhandled production paths.
+    - The production screenshots were inspected for the linked, back, and forward states; page 1 restores at 110% and page 2 restores at 78%.
+    - `bun test --max-concurrency=1 tests/extension-numdam-rendering.test.ts` passes the installed-extension current-view/source-link proof.
+    - The push gate passed the full Python/Bun suite, including all installed-extension boundary tests.
 
 ## Automated gates
 
 - The repository's commit and push hooks run the global Bun/Python QC layers.
-- The PR remains draft until the focused browser proof and claimed issue criteria have current evidence.
+- The PR becomes ready after the focused browser proof, manual screenshot inspection, and push gate complete.
 
 ## Review focus
 
