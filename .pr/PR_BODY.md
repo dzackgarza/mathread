@@ -1,59 +1,42 @@
 ## Intended result
 
-The extension-owned PDF reader offers two source-preserving copy actions:
-
-- **Copy current view link** copies the original PDF URL with MathRead page, viewport, and zoom state.
-- **Copy plain link** copies the original PDF URL without MathRead view state.
-
-Following a current-view link returns the reader to the copied view without exposing a backend-local reader identity.
+An installed MathRead reader delegates Alt-Left and Alt-Right to PDF.js only when that document has a traversable internal destination. Otherwise the browser retains its normal parent-tab navigation. PDF.js continues to own page, viewport, zoom, and navigation state.
 
 ## Scope
 
-Included:
-
-- Reader menu actions for current-view and plain source links.
-- Source URL state serialization and reader-launch restoration for page, viewport, and zoom.
-- Real-extension browser proof using the canonical Numdam PDF and the system clipboard.
-- Rendered screenshots of the reader copy-action menu at desktop and narrow viewports.
-
-Excluded:
-
-- Browser Alt-Left navigation behavior (#27).
-- Concurrent read-event response contracts (#28).
-- Moving reader and library workflows into the extension app (#10).
+- Included: the `reader.html` keyboard handoff and its real `pdf-launch.html`/`mathreadReaderFrame` proof path.
+- Excluded: a custom PDF navigation engine, PDF.js vendor modifications, backend-owned reader state, session or multi-client machinery, and unrelated shortcut changes.
+- Preserved: PDF.js links, current-view/source URLs, browser navigation, editor shortcut isolation, and key-only backend read-recency events.
 
 ## GitHub tracking
 
-- Target issue: #9
-- Milestone: Source-preserving PDF links
-- Closes on merge: `Closes #9`
-- References only: `Refs #29`
+- Target issue: #34
+- Milestone: Reader navigation parity (#35)
+- Closes on merge:
+  - Closes #34
+- References only:
+  - Refs #35
+  - Refs #5
+
+## Implementation plan
+
+1. Add an installed-extension red proof that enters through PDF interception and distinguishes PDF-internal from parent-browser Alt-arrow navigation.
+2. Gate keyboard cancellation on a parsed current-document browser history entry and delegate only to the existing PDF.js history API.
+3. Extend the production-path proof to cover both directions, restored PDF.js view state, source-preserving links, and the absence of backend navigation-state writes.
 
 ## Claim map
 
-- [x] **#9 — source-preserving PDF link copy actions**
-  - Proof obligations claimed:
-    - Current-view copying preserves the original PDF URL and encodes page, viewport, and zoom state.
-    - Plain-link copying preserves the original PDF URL and carries no MathRead view state.
-    - Neither copied value uses `markdown-editor.localhost` or a backend-local reader identity.
-    - The actions execute from the extension-owned reader and copied current-view links round-trip to the captured view.
-  - Evidence required:
-    - A real extension-browser run against the canonical Numdam PDF, exercising both menu actions through the system clipboard.
-    - Direct URL assertions for source identity and the current-view/plain-link distinction.
-    - Rendered desktop and narrow-viewport screenshots inspected for the menu state.
-  - Current evidence:
-    - `just build` passes.
-    - `bun test --max-concurrency=1 ./tests/extension-numdam-rendering.test.ts` passes 20 assertions across the installed extension, canonical source URL, system clipboard, DNR/pdf-launch handoff, and restored reader view.
-    - `bun test --max-concurrency=1 --test-name-pattern 'reader Library panel lists' ./tests/extension-capture-boundary.test.ts` passes 18 assertions for the existing source-link path.
-    - The generated desktop and 390 px menu screenshots were manually inspected after the menu animation completed.
+- [ ] **#34 — Reader/browser navigation handoff**
+  - Proof obligations claimed: handled internal back and forward; fall-through browser back and forward; PDF.js page, viewport, and zoom restoration; source-preserving current-view links; no backend view-state writes.
+  - Partial / not claimed: browser-wide history redesign, custom PDF engine work, PDF.js vendor API changes, backend persistence changes, or multi-client semantics.
+  - Evidence required: one real built-extension browser run through `pdf-launch.html` and `mathreadReaderFrame`, with real keyboard input that distinguishes all four paths; inspected screenshots for the internal navigation states; backend request evidence showing no view-state write.
+  - Current evidence: PR #26 proves only a top-level reader internal-history case and is insufficient for this production iframe handoff.
 
 ## Automated gates
 
-- Focused Numdam extension-browser test while iterating.
-- Repository commit hooks and push/CI gates.
+- The repository's commit and push hooks run the global Bun/Python QC layers.
+- The PR remains draft until the focused browser proof and claimed issue criteria have current evidence.
 
 ## Review focus
 
-- Query-state ownership and restoration must stay in the source URL / extension launch path.
-- Clipboard failures must not produce a success message or a fallback identity.
-- The proof must exercise the real extension reader and clipboard, not a helper-only or mocked path.
+Review the owner boundary first: PDF.js must remain the sole internal navigator, Chrome must receive an unhandled Alt-arrow, and the backend must remain uninvolved in reader view state. Reject any proof that bypasses `pdf-launch.html`, uses private PDF.js fields, or would pass while browser navigation is still suppressed.
