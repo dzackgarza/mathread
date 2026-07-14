@@ -22,7 +22,7 @@ PDF.js continues to own page, viewport, zoom, and navigation state.
 
 ## Implementation
 
-1. The reader gates cancellation on the public browser history entry for the current PDF fingerprint and delegates handled traversal to the existing PDF.js history API.
+1. The reader observes public browser history mutations and entries for the current PDF fingerprint, then delegates handled traversal to the existing PDF.js history API.
 2. Alt-modified arrows bypass the ordinary reader page-turn branch when PDF.js has no matching internal destination.
 3. Production-path tests enter through PDF interception, `pdf-launch.html`, and `mathreadReaderFrame`.
 
@@ -33,7 +33,7 @@ PDF.js continues to own page, viewport, zoom, and navigation state.
   - Partial / not claimed: browser-wide history redesign, custom PDF engine work, PDF.js vendor API changes, backend persistence changes, or multi-client semantics.
   - Evidence required: one real built-extension browser run through `pdf-launch.html` and `mathreadReaderFrame`, with real keyboard input that distinguishes all four paths; inspected screenshots for the internal navigation states; backend request evidence showing no view-state write.
   - Current evidence:
-    - `bun test --max-concurrency=1 --test-name-pattern 'reader hands Alt-Left|production launch iframe|reader preserves PDF-internal navigation history' tests/extension-rendering-boundary.test.ts` passes internal back/forward and unhandled browser back/forward, while retaining Alt-Up/Down reader page navigation.
+    - `bun test --max-concurrency=1 --test-name-pattern 'reader hands Alt-Left|production launch iframe|reader preserves PDF-internal navigation history' tests/extension-rendering-boundary.test.ts` passes internal back/forward, browser back/forward fall-through, browser-history back followed by PDF-internal Alt-Right, and retained Alt-Up/Down reader page navigation.
     - The production screenshots were inspected for the linked, back, and forward states; page 1 restores at 110% and page 2 restores at 78%.
     - `bun test --max-concurrency=1 tests/extension-numdam-rendering.test.ts` passes the installed-extension current-view/source-link proof.
     - The push gate passed the full Python/Bun suite, including all installed-extension boundary tests.
