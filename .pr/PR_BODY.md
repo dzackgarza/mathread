@@ -25,7 +25,7 @@ PDF.js continues to own page, viewport, zoom, and navigation state.
 - [x] Linked triaged issue: #34.
 - [x] This PR is returned to draft while the current-head policy gate and review loop run.
 - [x] The PR scope maps to #34's reader/browser navigation contract; unrelated reader and backend work is excluded.
-- [ ] Mark ready only after the current-head review and CI gates complete.
+- Mark ready only after the current-head review and CI gates complete.
 - [x] Accepted feedback has committed remediation; rejected feedback has a top-level `Review feedback disposition ledger`.
 
 ## Policy alignment gate — required
