@@ -511,6 +511,54 @@ test("reader exposes arXiv source links as a dedicated toolbar button", async ()
   });
 }, 120_000);
 
+test("reader, markdown, and library workflows remain extension-owned", async () => {
+  await withExtensionReader(
+    async ({ backendPort, courseServer, extensionId, page, readingRoot }) => {
+      const key = await preCapturePdfThroughBackend(
+        backendPort,
+        courseServer,
+        "direct-pdf-tab",
+      );
+      await page.goto(readerPageUrl(extensionId, key), {
+        waitUntil: "domcontentloaded",
+      });
+      await waitForCanvasCount(page, 1);
+
+      const visibleReaderUrl = new URL(page.url());
+      expect(visibleReaderUrl.protocol).toBe("chrome-extension:");
+      expect(visibleReaderUrl.hostname).toBe(extensionId);
+      expect(visibleReaderUrl.pathname).toBe("/reader/reader.html");
+      expect(visibleReaderUrl.searchParams.get("key")).toBe(key);
+      expect(page.url()).not.toContain("markdown-editor.localhost");
+
+      await page.locator('.nav-expand-btn[data-tab="keypoints"]').click({ force: true });
+      await expectElementText(
+        page.locator("#notes-path"),
+        (text) => text === key.replace(/\.pdf$/, ".md"),
+      );
+      const editor = page.locator("#ai-editor .cm-content");
+      await editor.click();
+      await page.keyboard.type("# issue10-probe\n");
+      await waitForNoteSaved(
+        backendPort,
+        key,
+        (text) => text.includes("issue10-probe"),
+      );
+      await expectElementText(
+        page.locator("#notes-status"),
+        (text) => text === "Saved",
+      );
+
+      await page.locator('.nav-expand-btn[data-tab="library"]').click({ force: true });
+      await waitForLibraryEntryCount(page, 1);
+      await expectElementText(
+        page.locator('[data-testid="library-folder-path"]'),
+        (text) => text === readingRoot,
+      );
+    },
+  );
+}, 120_000);
+
 test("reader opens pre-2007 arXiv provenance with its full archive identifier", async () => {
   await withExtensionReader(async ({ backendPort, courseServer, extensionId, page }) => {
     const key = await preCapturePdfThroughBackend(
