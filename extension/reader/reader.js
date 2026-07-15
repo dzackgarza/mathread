@@ -228,7 +228,9 @@ async function renderLibrary() {
     open.dataset.testid = "library-entry-open";
     open.textContent = entry.title;
     open.addEventListener("click", () => {
-      location.assign(`reader.html?file=${encodeURIComponent(backendPdfUrl(entry.key))}`);
+      const readerUrl = new URL(chrome.runtime.getURL("reader/reader.html"));
+      readerUrl.searchParams.set("file", backendPdfUrl(entry.key));
+      location.assign(readerUrl.href);
     });
     const meta = document.createElement("span");
     meta.className = "library-entry-meta";

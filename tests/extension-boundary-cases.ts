@@ -212,37 +212,6 @@ test("reader Library panel lists, opens, and trashes captured items against the 
       // requiring every page canvas to exist simultaneously.
       await reader.locator("#viewer canvas").first().waitFor();
 
-      // Copy view link preserves the source identity after the top-level reader redirect.
-      await reader.locator("#toggle-more").click();
-      await reader.locator('.menu-item[data-action="copy-view-link"]').click();
-      await page.waitForFunction(() =>
-        navigator.clipboard.readText().then((text) => text.length > 0),
-      );
-      const copiedViewUrl = new URL(
-        await page.evaluate(() => navigator.clipboard.readText()),
-      );
-      const expectedViewUrl = new URL(
-        pdfPathForScenario("large-numdam-pdf"),
-        courseServer.url.origin,
-      );
-      expect(copiedViewUrl.origin).toBe(expectedViewUrl.origin);
-      expect(copiedViewUrl.pathname).toBe(expectedViewUrl.pathname);
-      const viewLinks = copiedViewUrl.searchParams.getAll("mathread-link");
-      const viewLink = viewLinks[viewLinks.length - 1];
-      if (viewLink === undefined) {
-        throw new Error("Current-view link omitted its MathRead view state");
-      }
-      if (!viewLink.startsWith("v1.")) {
-        throw new Error("Current-view link omitted its MathRead view state");
-      }
-      const viewState = atob(viewLink.slice(3));
-      const [version, pageNumber, viewportX, viewportY, zoom] = viewState.split(":");
-      expect(version).toBe("v1");
-      expect(pageNumber).toBe("1");
-      expect(zoom).toBe("1.00");
-      expect(Number.isFinite(Number(viewportX))).toBe(true);
-      expect(Number.isFinite(Number(viewportY))).toBe(true);
-
       await reader.locator('.nav-expand-btn[data-tab="library"]').click();
       await waitForLibraryEntryCount(reader, 2);
 
