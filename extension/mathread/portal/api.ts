@@ -37,6 +37,11 @@ export interface NoteContent {
   version?: string | undefined;
 }
 
+export type NoteSaveResult =
+  | { kind: 'saved'; note: NoteContent }
+  | { kind: 'conflict'; message: string }
+  | { kind: 'unavailable'; message: string };
+
 export interface BackendStatus {
   backend_url: string;
   portal_url: string;
@@ -224,6 +229,29 @@ export async function putNote(key: string, text: string, version?: string): Prom
     }),
   );
   return parseNoteResponse(await response.json());
+}
+
+function conflictMessage(value: unknown): string {
+  invariant(isRecord(value), 'MathRead note conflict response must be an object');
+  invariant(typeof value.detail === 'string', 'MathRead note conflict response must declare detail');
+  return value.detail;
+}
+
+export async function saveNote(key: string, text: string, version: string): Promise<NoteSaveResult> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/notes/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key, text, version }),
+    });
+  } catch (error) {
+    return { kind: 'unavailable', message: `MathRead notes backend is unavailable: ${String(error)}` };
+  }
+  if (response.status === 409) {
+    return { kind: 'conflict', message: conflictMessage(await response.json()) };
+  }
+  return { kind: 'saved', note: parseNoteResponse(await ok(response).then(saved => saved.json())) };
 }
 
 export async function overwriteNote(key: string, text: string): Promise<NoteContent> {

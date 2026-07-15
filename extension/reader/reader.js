@@ -9,7 +9,7 @@ import {
   overwriteNote,
   pdfUrl as backendPdfUrl,
   postReadEvent,
-  putNote,
+  saveNote,
 } from "./vendor/backend.js";
 import {
   defaultHighlightStyle,
@@ -24,6 +24,7 @@ import {
   markdown,
   syntaxHighlighting,
 } from "./vendor/codemirror.mjs";
+import { upsertAnnotation } from "./annotations.js";
 
 function assert(condition, message) {
   if (!condition) {
@@ -115,6 +116,16 @@ assert(moreMenu instanceof HTMLElement, "MathRead actions menu is missing");
 let editor = null;
 let noteVersion;
 let saveTimer = null;
+let replacingEditorText = false;
+let pendingLegacyMigrationStorageKey = null;
+const documentEntry = launch.kind === "document"
+  ? getLibrary().then((entries) => {
+    const entry = entries.find((candidate) => candidate.key === launch.key);
+    assert(entry !== undefined, `MathRead library entry is missing for ${launch.key}`);
+    assert(typeof entry.source_url === "string", `MathRead source URL is missing for ${launch.key}`);
+    return entry;
+  })
+  : null;
 
 function selectOverlay(name) {
   panel.dataset.panel = name;
@@ -145,16 +156,41 @@ document.getElementById("toggle-more").addEventListener("click", () => {
 });
 
 document.querySelector('[data-action="copy-plain-link"]').addEventListener("click", async () => {
-  assert(launch.kind === "document", "A plain source link requires an open document");
-  await navigator.clipboard.writeText(location.href);
+  const source = await sourceUrl();
+  await navigator.clipboard.writeText(source.href);
   moreMenu.hidden = true;
 });
 
 document.querySelector('[data-action="copy-view-link"]').addEventListener("click", async () => {
-  assert(launch.kind === "document", "A current view link requires an open document");
-  await navigator.clipboard.writeText(location.href);
+  const source = await sourceUrl();
+  const view = currentPdfView();
+  const sourceHref = source.href;
+  source.searchParams.append("mathread-link", `v1.${btoa(`v1:${view.page}:${view.x}:${view.y}:${view.zoom.toFixed(2)}`)}`);
+  source.searchParams.append("mathread-source", `v1.${btoa(sourceHref)}`);
+  await navigator.clipboard.writeText(source.href);
   moreMenu.hidden = true;
 });
+
+async function sourceUrl() {
+  assert(launch.kind === "document", "A source link requires an open document");
+  assert(documentEntry !== null, "MathRead document entry must be loading");
+  const entry = await documentEntry;
+  return new URL(entry.source_url);
+}
+
+function currentPdfView() {
+  const state = new URLSearchParams(location.hash.slice(1));
+  const page = Number(state.get("page"));
+  const zoomParts = state.get("zoom")?.split(",");
+  assert(Number.isInteger(page) && page >= 1, "PDF.js did not publish a valid current page");
+  assert(zoomParts !== undefined, "PDF.js did not publish a current zoom");
+  const zoom = Number(zoomParts[0]);
+  assert(Number.isFinite(zoom) && zoom > 0, "PDF.js current zoom must be numeric to create a view link");
+  const x = zoomParts[1] === undefined ? 0 : Number(zoomParts[1]);
+  const y = zoomParts[2] === undefined ? 0 : Number(zoomParts[2]);
+  assert(Number.isFinite(x) && Number.isFinite(y), "PDF.js current viewport must be finite");
+  return { page, zoom: zoom / 100, x: Math.round(x), y: Math.round(y) };
+}
 
 async function renderLibrary() {
   const [status, entries] = await Promise.all([getBackendStatus(), getLibrary()]);
@@ -215,7 +251,7 @@ async function ensureNotes() {
         syntaxHighlighting(defaultHighlightStyle),
         EditorView.lineWrapping,
         EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
+          if (update.docChanged && !replacingEditorText) {
             queueSave();
           }
         }),
@@ -224,6 +260,7 @@ async function ensureNotes() {
   });
   renderNotesPreview();
   notesStatus.textContent = "Saved";
+  migrateLegacyHighlights();
 }
 
 function queueSave() {
@@ -238,16 +275,67 @@ async function saveNotes() {
   assert(launch.kind === "document", "Saving notes requires an open document");
   assert(editor !== null, "MathRead note editor must exist before saving");
   assert(typeof noteVersion === "string", "MathRead note version must be loaded before saving");
-  try {
-    const saved = await putNote(launch.key, editor.state.doc.toString(), noteVersion);
-    noteVersion = noteVersionFrom(saved);
-    notesStatus.textContent = "Saved";
-    notesError.hidden = true;
-  } catch (error) {
-    notesStatus.textContent = "Save failed";
-    notesError.hidden = false;
-    notesError.textContent = String(error);
+  const result = await saveNote(launch.key, editor.state.doc.toString(), noteVersion);
+  switch (result.kind) {
+    case "saved":
+      noteVersion = noteVersionFrom(result.note);
+      if (pendingLegacyMigrationStorageKey !== null) {
+        localStorage.removeItem(pendingLegacyMigrationStorageKey);
+        pendingLegacyMigrationStorageKey = null;
+      }
+      notesStatus.textContent = "Saved";
+      notesError.hidden = true;
+      return;
+    case "conflict":
+      notesStatus.textContent = "Save failed: conflict";
+      showNotesConflict(result.message);
+      return;
+    case "unavailable":
+      notesStatus.textContent = "Save failed: backend unavailable";
+      notesError.hidden = false;
+      notesError.textContent = result.message;
+      return;
   }
+}
+
+function replaceEditorText(text) {
+  assert(editor !== null, "MathRead note editor must exist before replacing its text");
+  replacingEditorText = true;
+  editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: text } });
+  replacingEditorText = false;
+  renderNotesPreview();
+}
+
+function showNotesConflict(message) {
+  notesError.hidden = false;
+  notesError.replaceChildren(message);
+  const load = document.createElement("button");
+  load.type = "button";
+  load.textContent = "Load from Disk";
+  load.addEventListener("click", () => void loadNotesFromDisk());
+  const overwrite = document.createElement("button");
+  overwrite.type = "button";
+  overwrite.textContent = "Overwrite Disk";
+  overwrite.addEventListener("click", () => void overwriteNotesOnDisk());
+  notesError.append(" ", load, " ", overwrite);
+}
+
+async function loadNotesFromDisk() {
+  assert(launch.kind === "document", "Loading notes requires an open document");
+  const note = await getNote(launch.key);
+  noteVersion = noteVersionFrom(note);
+  replaceEditorText(note.text);
+  notesStatus.textContent = "Saved";
+  notesError.hidden = true;
+}
+
+async function overwriteNotesOnDisk() {
+  assert(launch.kind === "document", "Overwriting notes requires an open document");
+  assert(editor !== null, "MathRead note editor must exist before overwriting");
+  const note = await overwriteNote(launch.key, editor.state.doc.toString());
+  noteVersion = noteVersionFrom(note);
+  notesStatus.textContent = "Saved";
+  notesError.hidden = true;
 }
 
 function renderNotesPreview() {
@@ -255,6 +343,113 @@ function renderNotesPreview() {
     return;
   }
   notesPreview.innerHTML = DOMPurify.sanitize(marked.parse(editor.state.doc.toString()));
+}
+
+function migrateLegacyHighlights() {
+  assert(launch.kind === "document", "Legacy annotation migration requires an open document");
+  assert(editor !== null, "Legacy annotation migration requires the note editor");
+  const storageKey = `mathread-legacy-highlights:${launch.key}`;
+  const raw = localStorage.getItem(storageKey);
+  if (raw === null) {
+    return;
+  }
+  const result = parseLegacyHighlights(raw);
+  if (result.kind === "invalid") {
+    notesError.hidden = false;
+    notesError.textContent = "Legacy highlights were not migrated because their saved shape is invalid.";
+    return;
+  }
+  const current = editor.state.doc.toString();
+  const migrated = result.annotations.reduce(
+    (text, annotation) => upsertAnnotation(text, annotation),
+    current,
+  );
+  if (migrated === current) {
+    return;
+  }
+  replaceEditorText(migrated);
+  pendingLegacyMigrationStorageKey = storageKey;
+  notesStatus.textContent = "Unsaved changes";
+}
+
+function parseLegacyHighlights(raw) {
+  let value;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return { kind: "invalid" };
+  }
+  if (!Array.isArray(value)) {
+    return { kind: "invalid" };
+  }
+  const annotations = [];
+  for (const candidate of value) {
+    const annotation = parseLegacyHighlight(candidate);
+    if (annotation.kind === "invalid") {
+      return annotation;
+    }
+    annotations.push(annotation.annotation);
+  }
+  return { kind: "valid", annotations };
+}
+
+function parseLegacyHighlight(value) {
+  if (typeof value !== "object" || value === null) {
+    return { kind: "invalid" };
+  }
+  const candidate = value;
+  if (
+    typeof candidate.id !== "string"
+    || !Number.isInteger(candidate.pageNumber)
+    || candidate.pageNumber < 1
+    || typeof candidate.color !== "string"
+    || typeof candidate.createdAt !== "string"
+    || !Array.isArray(candidate.rects)
+    || typeof candidate.text !== "string"
+    || typeof candidate.comment !== "string"
+  ) {
+    return { kind: "invalid" };
+  }
+  const created = new Date(candidate.createdAt);
+  if (!Number.isFinite(created.getTime())) {
+    return { kind: "invalid" };
+  }
+  const rects = [];
+  for (const legacyRect of candidate.rects) {
+    const rect = parseLegacyRect(legacyRect);
+    if (rect.kind === "invalid") {
+      return rect;
+    }
+    rects.push(rect.rect);
+  }
+  return {
+    kind: "valid",
+    annotation: {
+      id: candidate.id,
+      pageNumber: candidate.pageNumber,
+      color: candidate.color,
+      created: created.toISOString(),
+      rects,
+      text: candidate.text,
+      comment: candidate.comment,
+    },
+  };
+}
+
+function parseLegacyRect(value) {
+  if (typeof value !== "object" || value === null) {
+    return { kind: "invalid" };
+  }
+  const { xPct, yPct, wPct, hPct } = value;
+  if (
+    !Number.isFinite(xPct)
+    || !Number.isFinite(yPct)
+    || !Number.isFinite(wPct)
+    || !Number.isFinite(hPct)
+  ) {
+    return { kind: "invalid" };
+  }
+  return { kind: "valid", rect: { xPct, yPct, wPct, hPct } };
 }
 
 document.getElementById("notes-save").addEventListener("click", () => void saveNotes());

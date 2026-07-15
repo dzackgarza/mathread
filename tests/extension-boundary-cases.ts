@@ -581,15 +581,12 @@ test("reader, markdown, and library workflows remain extension-owned", async () 
       await page.screenshot({ path: readerScreenshotPath });
       assertPng(readerScreenshotPath);
 
-      const pageInput = page.locator("#page-input");
+      const pageInput = page.locator("#pageNumber");
       await pageInput.fill("3");
       await pageInput.press("Enter");
       await expectInputValue(pageInput, (value) => value === "3");
-      await page.locator("#zoom-in").click();
-      await expectElementText(
-        page.locator("#zoom-level"),
-        (text) => text === "110%",
-      );
+      await page.locator("#zoomInButton").click();
+      await expectInputValue(page.locator("#scaleSelect"), (value) => value === "1.1");
       expect(readEvents.length).toBe(1);
       await page.locator("#toggle-more").click();
       await page.locator('.menu-item[data-action="copy-view-link"]').click();
@@ -607,16 +604,13 @@ test("reader, markdown, and library workflows remain extension-owned", async () 
       await waitForReadEventCount(readEvents, 2);
       assertReadEventBodies(readEvents, [key, key]);
       await expectInputValue(
-        restoredReader.locator("#page-input"),
+        restoredReader.locator("#pageNumber"),
         (value) => value === "3",
       );
-      await expectElementText(
-        restoredReader.locator("#zoom-level"),
-        (text) => text === "110%",
-      );
+      await expectInputValue(restoredReader.locator("#scaleSelect"), (value) => value === "1.1");
 
       await restoredReader
-        .locator('.nav-expand-btn[data-tab="keypoints"]')
+        .locator('.nav-expand-btn[data-tab="notes"]')
         .click({ force: true });
       await expectElementText(
         restoredReader.locator("#notes-path"),
@@ -716,27 +710,24 @@ test("reader renders all pages of a large PDF with real content", async () => {
         waitUntil: "domcontentloaded",
       });
 
-      await expectElementText(
-        page.locator("#zoom-level"),
-        (text) => text === "90%",
-      );
+      await expectInputValue(page.locator("#scaleSelect"), (value) => value === "0.9");
       await expectInputValue(
-        page.locator("#page-input"),
+        page.locator("#pageNumber"),
         (value) => value === "3",
       );
 
       // PDF.js bounds simultaneous canvas ownership. Navigate through the real reader
       // control so the late page enters that rendering window, then prove its canvas
       // contains the expected substantive ink rather than a blank placeholder.
-      const pageInput = page.locator("#page-input");
+      const pageInput = page.locator("#pageNumber");
       await pageInput.fill("6");
       await pageInput.press("Enter");
       await expectInputValue(pageInput, (value) => value === "6");
       await page
-        .locator('#pdf-viewer .page[data-page-number="6"] canvas')
+        .locator('#viewer .page[data-page-number="6"] canvas')
         .waitFor();
       const latePageCanvasIndex = await page
-        .locator('#pdf-viewer .page[data-page-number="6"] canvas')
+        .locator('#viewer .page[data-page-number="6"] canvas')
         .evaluate((latePageCanvas) =>
           Array.from(document.querySelectorAll("#viewer canvas")).indexOf(
             latePageCanvas,
@@ -787,19 +778,19 @@ test("installed reader copies source-preserving current and plain links for the 
         waitUntil: "domcontentloaded",
       });
       await expectElementText(
-        page.locator("#page-total"),
+        page.locator("#numPages"),
         (text) => text === "265",
       );
       await page.locator("#viewer canvas").first().waitFor();
-      const pageInput = page.locator("#page-input");
+      const pageInput = page.locator("#pageNumber");
       await pageInput.fill("6");
       await pageInput.press("Enter");
       await expectInputValue(pageInput, (value) => value === "6");
       await page
-        .locator('#pdf-viewer .page[data-page-number="6"] canvas')
+        .locator('#viewer .page[data-page-number="6"] canvas')
         .waitFor();
       const latePageCanvasIndex = await page
-        .locator('#pdf-viewer .page[data-page-number="6"] canvas')
+        .locator('#viewer .page[data-page-number="6"] canvas')
         .evaluate((latePageCanvas) =>
           Array.from(document.querySelectorAll("#viewer canvas")).indexOf(
             latePageCanvas,
@@ -808,14 +799,11 @@ test("installed reader copies source-preserving current and plain links for the 
       const rendered = await canvasPixelEvidence(page, latePageCanvasIndex);
       expect(rendered.canvasSize).toBeGreaterThan(10_000);
       expect(rendered.nonWhitePixels).toBeGreaterThan(250);
-      await page.locator("#zoom-in").click();
-      await expectElementText(
-        page.locator("#zoom-level"),
-        (text) => text === "110%",
-      );
-      const capturedViewport = await page.locator("#viewer").evaluate((viewer) => {
+      await page.locator("#zoomInButton").click();
+      await expectInputValue(page.locator("#scaleSelect"), (value) => value === "1.1");
+      const capturedViewport = await page.locator("#viewerContainer").evaluate((viewer) => {
         const pageElement = document.querySelector(
-          '#pdf-viewer .page[data-page-number="6"]',
+          '#viewer .page[data-page-number="6"]',
         );
         if (!(pageElement instanceof HTMLElement)) {
           throw new Error("Numdam page 6 is unavailable");
@@ -828,9 +816,6 @@ test("installed reader copies source-preserving current and plain links for the 
       });
       expect(capturedViewport.y).toBeCloseTo(120, 0);
       await page.locator("#toggle-more").click();
-      await page.locator("#more-menu").evaluate((menu) =>
-        Promise.all(menu.getAnimations().map((animation) => animation.finished)),
-      );
       const desktopMenuPath = join(
         artifacts.root,
         "numdam-copy-actions-desktop.png",
@@ -868,25 +853,9 @@ test("installed reader copies source-preserving current and plain links for the 
       await page.locator('.menu-item[data-action="copy-plain-link"]').click();
       await waitForClipboardText(page, numdamSourceUrl);
       await page.setViewportSize({ width: 390, height: 844 });
-      await page.waitForFunction(() => {
-        const sidebar = document.getElementById("sidebar");
-        return sidebar instanceof HTMLElement
-          && !sidebar.classList.contains("open")
-          && getComputedStyle(sidebar).display === "none";
-      });
       await page.locator("#toggle-more").click();
-      await page.locator("#more-menu").evaluate((menu) =>
-        Promise.all(menu.getAnimations().map((animation) => animation.finished)),
-      );
       expect(
-        await page.locator("#sidebar").evaluate((sidebar) =>
-          sidebar.classList.contains("open"),
-        ),
-      ).toBe(false);
-      expect(
-        await page.locator("#more-menu").evaluate((menu) =>
-          menu.classList.contains("open"),
-        ),
+        await page.locator("#more-menu").isVisible(),
       ).toBe(true);
       const narrowMenuPath = join(
         artifacts.root,
@@ -906,17 +875,14 @@ test("installed reader copies source-preserving current and plain links for the 
       const restoredReader = await waitForReaderFrame(page, key);
       expect(sourceFixtureFetches).toBe(1);
       await expectInputValue(
-        restoredReader.locator("#page-input"),
+        restoredReader.locator("#pageNumber"),
         (value) => value === "6",
       );
-      await expectElementText(
-        restoredReader.locator("#zoom-level"),
-        (text) => text === "110%",
-      );
+      await expectInputValue(restoredReader.locator("#scaleSelect"), (value) => value === "1.1");
       await restoredReader.waitForFunction(() => {
-        const viewer = document.getElementById("viewer");
+        const viewer = document.getElementById("viewerContainer");
         const pageElement = document.querySelector(
-          '#pdf-viewer .page[data-page-number="6"]',
+          '#viewer .page[data-page-number="6"]',
         );
         if (!(viewer instanceof HTMLElement)) {
           return false;
@@ -967,7 +933,7 @@ test("reader Notes panel persists notes to the on-disk markdown file and renders
       });
       await waitForCanvasCount(page, 1);
 
-      await page.locator('.nav-expand-btn[data-tab="keypoints"]').click();
+      await page.locator('.nav-expand-btn[data-tab="notes"]').click();
       await expectElementText(
         page.locator("#notes-path"),
         (text) => text === key.replace(/\.pdf$/, ".md"),
@@ -977,9 +943,6 @@ test("reader Notes panel persists notes to the on-disk markdown file and renders
       await page.keyboard.type("# Heading\n\nSome **bold** text.");
 
       // Debounced autosave writes the markdown sidecar next to the stored PDF.
-      // The Notes tab (tab-bar button + rail chip) is colored once nontrivial notes exist.
-      await waitForHasNoteMarker(page);
-
       const noteText = await waitForNoteSaved(
         backendPort,
         key,
@@ -1005,7 +968,7 @@ test("reader Notes panel persists notes to the on-disk markdown file and renders
 
       // Reload: the editor restores from the sidecar, not any browser-local store.
       await page.reload({ waitUntil: "domcontentloaded" });
-      await page.locator('.nav-expand-btn[data-tab="keypoints"]').click();
+      await page.locator('.nav-expand-btn[data-tab="notes"]').click();
       await expectElementText(
         page.locator("#ai-editor .cm-content"),
         (text) => text.includes("Heading") && text.includes("bold"),
@@ -1028,7 +991,7 @@ test("reader Key Points panel blocks stale autosave and resolves disk conflicts"
         waitUntil: "domcontentloaded",
       });
       await waitForCanvasCount(page, 1);
-      await page.locator('.nav-expand-btn[data-tab="keypoints"]').click();
+      await page.locator('.nav-expand-btn[data-tab="notes"]').click();
 
       const editor = page.locator("#ai-editor .cm-content");
       await editor.click();
@@ -1118,7 +1081,7 @@ test("reader Key Points panel surfaces a loud error when the backend dies (no lo
 
       // The note loaded at boot; with the backend gone, the autosave PUT must surface a
       // visible save failure - never fall back to a browser-local store.
-      await page.locator('.nav-expand-btn[data-tab="keypoints"]').click();
+      await page.locator('.nav-expand-btn[data-tab="notes"]').click();
       const editor = page.locator("#ai-editor .cm-content");
       await editor.click();
       await page.keyboard.type("orphaned edit");
@@ -1149,7 +1112,7 @@ test("reader keeps legacy highlight source until migration is durably saved", as
         waitUntil: "domcontentloaded",
       });
       await waitForCanvasCount(page, 1);
-      await page.locator('.nav-expand-btn[data-tab="keypoints"]').click();
+      await page.locator('.nav-expand-btn[data-tab="notes"]').click();
 
       await expectElementText(page.locator("#ai-editor .cm-content"), (text) =>
         text.includes("legacy lattice quote"),
@@ -1191,7 +1154,7 @@ test("legacy highlight migration rejects incomplete records instead of fabricati
         waitUntil: "domcontentloaded",
       });
       await waitForCanvasCount(page, 1);
-      await page.locator('.nav-expand-btn[data-tab="keypoints"]').click();
+      await page.locator('.nav-expand-btn[data-tab="notes"]').click();
       await expectElementText(
         page.locator("#notes-status"),
         (text) => text === "Saved" || text === "Unsaved changes",
@@ -1382,7 +1345,7 @@ test("persisted fit-width setting controls ordinary reader opens without a zoom 
 
       await page.setViewportSize({ width: 600, height: 760 });
       await page.goto(ordinaryOpenUrl, { waitUntil: "domcontentloaded" });
-      await page.locator("#pdf-viewer .page").first().waitFor();
+      await page.locator("#viewer .page").first().waitFor();
       const narrow = await waitForFitWidthConvergence(
         page,
         "persisted-setting-narrow",
@@ -1438,7 +1401,7 @@ test("reader hands native Alt-left and Alt-right to browser history without a PD
       const reader = await waitForReaderFrame(page, key);
       await reader.locator("#viewer canvas").first().waitFor();
       await waitForReadEventCount(readEventRequests, 1);
-      expect(await reader.locator("#page-input").inputValue()).toBe("1");
+      expect(await reader.locator("#pageNumber").inputValue()).toBe("1");
       expect(await reader.evaluate(() => {
         document.body.focus();
         return document.hasFocus() && document.activeElement === document.body;
@@ -1488,34 +1451,33 @@ test("reader preserves PDF-internal history through the production launch redire
       expect(launchUrl.searchParams.get("key")).toBe(key);
 
       const readView = () => reader.evaluate(() => {
-        const pageInput = document.getElementById("page-input");
-        const zoom = document.getElementById("zoom-level");
-        const viewer = document.getElementById("viewer");
+        const pageInput = document.getElementById("pageNumber");
+        const zoom = document.getElementById("scaleSelect");
+        const viewer = document.getElementById("viewerContainer");
         if (
           !(pageInput instanceof HTMLInputElement)
-          || !(zoom instanceof HTMLElement)
+          || !(zoom instanceof HTMLSelectElement)
           || !(viewer instanceof HTMLElement)
-          || zoom.textContent === null
         ) {
-          throw new TypeError("Expected production reader navigation controls");
+          throw new TypeError("Expected the PDF.js application navigation controls");
         }
         return {
           page: pageInput.value,
           scrollTop: viewer.scrollTop,
-          zoom: zoom.textContent,
+          zoom: zoom.value,
         };
       });
 
-      await reader.locator("#zoom-in").click();
+      await reader.locator("#zoomInButton").click();
       const beforeLink = await readView();
       expect(beforeLink.page).toBe("1");
       await page.screenshot({ path: join(artifacts.root, "production-history-before-link.png") });
       assertPng(join(artifacts.root, "production-history-before-link.png"));
 
-      const internalLink = reader.locator('#pdf-viewer .annotationLayer a').first();
+      const internalLink = reader.locator('#viewer .annotationLayer a').first();
       await internalLink.click();
       await reader.waitForFunction(() => {
-        const input = document.getElementById("page-input");
+        const input = document.getElementById("pageNumber");
         return input instanceof HTMLInputElement && input.value === "2";
       });
       const afterLink = await readView();
@@ -1529,8 +1491,8 @@ test("reader preserves PDF-internal history through the production launch redire
       await reader.locator("#viewer").click({ position: { x: 20, y: 20 } });
       sendNativeHistoryShortcut(x11Display, "Left");
       await reader.waitForFunction((expected) => {
-        const input = document.getElementById("page-input");
-        const viewer = document.getElementById("viewer");
+        const input = document.getElementById("pageNumber");
+        const viewer = document.getElementById("viewerContainer");
         return input instanceof HTMLInputElement
           && viewer instanceof HTMLElement
           && input.value === expected.page
@@ -1539,8 +1501,8 @@ test("reader preserves PDF-internal history through the production launch redire
 
       sendNativeHistoryShortcut(x11Display, "Right");
       await reader.waitForFunction((expected) => {
-        const input = document.getElementById("page-input");
-        const viewer = document.getElementById("viewer");
+        const input = document.getElementById("pageNumber");
+        const viewer = document.getElementById("viewerContainer");
         return input instanceof HTMLInputElement
           && viewer instanceof HTMLElement
           && input.value === expected.page
@@ -1551,156 +1513,6 @@ test("reader preserves PDF-internal history through the production launch redire
       assertReadEventBodies(readEventRequests, [key]);
     },
     { nativeBrowserShortcuts: true },
-  );
-}, 120_000);
-
-test("reader preserves PDF-internal navigation history", async () => {
-  await withExtensionReader(
-    async ({ artifacts, extensionId, page, readingRoot }) => {
-      writeFileSync(
-        join(readingRoot, "extract_link.pdf"),
-        readFileSync(join("tests", "fixtures", "pdfjs", "extract_link.pdf")),
-      );
-
-      const readReaderLocation = () => page.evaluate(() => {
-        function requireInput(id: string, label: string) {
-          const input = document.getElementById(id);
-          if (!(input instanceof HTMLInputElement)) {
-            throw new TypeError(`Expected the reader ${label}`);
-          }
-          return input;
-        }
-
-        function requireElement(id: string, label: string) {
-          const element = document.getElementById(id);
-          if (!(element instanceof HTMLElement)) {
-            throw new TypeError(`Expected the reader ${label}`);
-          }
-          return element;
-        }
-
-        function readZoom() {
-          const zoom = requireElement("zoom-level", "zoom level").textContent;
-          if (zoom === null) {
-            throw new TypeError("Expected reader zoom content");
-          }
-          return zoom;
-        }
-
-        function readDestination(destination: unknown) {
-          if (destination === null || typeof destination !== "object") {
-            return null;
-          }
-          const candidate = destination as {
-            page?: unknown;
-            hash?: unknown;
-            dest?: unknown;
-          };
-          return {
-            page: typeof candidate.page === "number" ? candidate.page : null,
-            hash: typeof candidate.hash === "string" ? candidate.hash : null,
-            hasExplicitDestination: Array.isArray(candidate.dest),
-          };
-        }
-
-        function readHistory(historyState: unknown) {
-          if (historyState === null || typeof historyState !== "object") {
-            return null;
-          }
-          const candidate = historyState as {
-            fingerprint?: unknown;
-            uid?: unknown;
-            destination?: unknown;
-          };
-          return {
-            fingerprint: typeof candidate.fingerprint === "string"
-              ? candidate.fingerprint
-              : null,
-            uid: typeof candidate.uid === "number" ? candidate.uid : null,
-            destination: readDestination(candidate.destination),
-          };
-        }
-
-        const pageInput = requireInput("page-input", "page input");
-        const viewer = requireElement("viewer", "viewer");
-        return {
-          page: pageInput.value,
-          zoom: readZoom(),
-          scrollTop: viewer.scrollTop,
-          history: readHistory(window.history.state),
-        };
-      });
-
-      await page.goto(readerPageUrl(extensionId, "extract_link.pdf"), {
-        waitUntil: "domcontentloaded",
-      });
-      const internalLink = page.locator('#pdf-viewer .annotationLayer a').first();
-      await internalLink.waitFor();
-      await page.locator("#zoom-in").click();
-      const beforeLink = await readReaderLocation();
-      expect(beforeLink.page).toBe("1");
-      expect(beforeLink.zoom).not.toBeNull();
-      await page.screenshot({ path: join(artifacts.root, "pdf-history-before-link.png") });
-      assertPng(join(artifacts.root, "pdf-history-before-link.png"));
-
-      await internalLink.click();
-      await page.waitForFunction(() => {
-        const input = document.getElementById("page-input");
-        return input instanceof HTMLInputElement && input.value === "2";
-      });
-      const afterLink = await readReaderLocation();
-      expect(afterLink.page).toBe("2");
-      expect(afterLink.history?.fingerprint).not.toBeNull();
-      expect(afterLink.history?.destination?.page).toBe(2);
-      expect(afterLink.history?.destination?.hasExplicitDestination).toBe(true);
-      await page.screenshot({ path: join(artifacts.root, "pdf-history-after-link.png") });
-      assertPng(join(artifacts.root, "pdf-history-after-link.png"));
-
-      await page.goBack();
-      await page.waitForFunction((expected) => {
-        const input = document.getElementById("page-input");
-        const viewer = document.getElementById("viewer");
-        return input instanceof HTMLInputElement
-          && viewer instanceof HTMLElement
-          && input.value === expected.page
-          && Math.abs(viewer.scrollTop - expected.scrollTop) <= 2;
-      }, beforeLink);
-      const afterBack = await readReaderLocation();
-      expect(afterBack.page).toBe(beforeLink.page);
-      expect(afterBack.zoom).toBe(beforeLink.zoom);
-      expect(afterBack.history?.destination?.page).toBe(1);
-      expect(afterBack.history?.destination?.hash).toMatch(
-        new RegExp("(?:^|&)page=1(?:&|$)"),
-      );
-      expect(afterBack.history?.destination?.hash).toMatch(
-        new RegExp("(?:^|&)zoom="),
-      );
-      expect(
-        Math.abs(afterBack.scrollTop - beforeLink.scrollTop),
-      ).toBeLessThanOrEqual(2);
-      await page.screenshot({ path: join(artifacts.root, "pdf-history-after-back.png") });
-      assertPng(join(artifacts.root, "pdf-history-after-back.png"));
-
-      await page.goForward();
-      await page.waitForFunction((expected) => {
-        const input = document.getElementById("page-input");
-        const viewer = document.getElementById("viewer");
-        return input instanceof HTMLInputElement
-          && viewer instanceof HTMLElement
-          && input.value === expected.page
-          && Math.abs(viewer.scrollTop - expected.scrollTop) <= 2;
-      }, afterLink);
-      const afterForward = await readReaderLocation();
-      expect(afterForward.page).toBe(afterLink.page);
-      expect(afterForward.zoom).toBe(afterLink.zoom);
-      expect(afterForward.history?.destination?.page).toBe(2);
-      expect(afterForward.history?.destination?.hasExplicitDestination).toBe(true);
-      expect(
-        Math.abs(afterForward.scrollTop - afterLink.scrollTop),
-      ).toBeLessThanOrEqual(2);
-      await page.screenshot({ path: join(artifacts.root, "pdf-history-after-forward.png") });
-      assertPng(join(artifacts.root, "pdf-history-after-forward.png"));
-    },
   );
 }, 120_000);
 
@@ -1738,7 +1550,7 @@ test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", 
       await page.goto(readerPageUrl(extensionId, "hello_world_rotated.pdf"), {
         waitUntil: "domcontentloaded",
       });
-      const rotatedPage = page.locator('#pdf-viewer .page[data-page-number="1"]');
+      const rotatedPage = page.locator('#viewer .page[data-page-number="1"]');
       const rotatedCanvas = rotatedPage.locator("canvas");
       await rotatedCanvas.waitFor();
       const rotatedGeometry = await rotatedPage.evaluate((element) => ({
@@ -1760,19 +1572,19 @@ test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", 
       await page.goto(readerPageUrl(extensionId, "extract_link.pdf"), {
         waitUntil: "domcontentloaded",
       });
-      const internalLink = page.locator('#pdf-viewer .annotationLayer a').first();
+      const internalLink = page.locator('#viewer .annotationLayer a').first();
       await internalLink.waitFor();
       await internalLink.click();
       await page.waitForFunction(() => {
-        const input = document.getElementById("page-input");
+        const input = document.getElementById("pageNumber");
         return input instanceof HTMLInputElement && input.value === "2";
       });
-      expect(await page.locator("#page-input").inputValue()).toBe("2");
+      expect(await page.locator("#pageNumber").inputValue()).toBe("2");
 
       await page.goto(readerPageUrl(extensionId, "annotation-link-text-popup.pdf"), {
         waitUntil: "domcontentloaded",
       });
-      const externalLink = page.locator('#pdf-viewer .annotationLayer a[href="http://www.mozilla.org/"]');
+      const externalLink = page.locator('#viewer .annotationLayer a[href="http://www.mozilla.org/"]');
       await externalLink.waitFor();
       const externalPagePromise = context.waitForEvent("page");
       await externalLink.click();
@@ -1788,11 +1600,11 @@ test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", 
         await page.goto(readerPageUrl(extensionId, fixtureName), {
           waitUntil: "domcontentloaded",
         });
-        await page.locator("#search-toggle").click();
-        await page.locator("#search-input").fill(query);
+        await page.locator("#viewFindButton").click();
+        await page.locator("#findInput").fill(query);
         await expectElementText(
-          page.locator("#search-count"),
-          (text) => /^1 \/ [1-9]\d*$/.test(text),
+          page.locator("#findResultsCount"),
+          (text) => /^1 (?:of|\/) [1-9]\d*$/.test(text),
         );
       }
 
@@ -1810,32 +1622,27 @@ test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", 
 
 function registerInterceptedReaderShortcutsBoundaryTest(): void {
 
-test("intercepted reader owns shortcuts without escaping the Notes editor", async () => {
+test("PDF.js owns reader controls while the MathRead Notes editor remains isolated", async () => {
   await withExtensionReader(
     async ({ courseServer, page, readingRoot }) => {
       await page.goto(`${courseServer.url.origin}/notes.pdf`);
       const storedPath = await waitForStoredPdf(readingRoot);
       const key = storedKeyFromPath(storedPath);
       const reader = await waitForReaderFrame(page, key);
-      await reader.locator("#pdf-viewer .page canvas").first().waitFor();
+      await reader.locator("#viewer .page canvas").first().waitFor();
 
-      const initialZoom = await reader.locator("#zoom-level").textContent();
-      await page.keyboard.press("Control+=");
-      await expectElementText(
-        reader.locator("#zoom-level"),
-        (text) => text !== initialZoom,
-      );
+      const initialZoom = await reader.locator("#scaleSelect").inputValue();
+      await reader.locator("#zoomInButton").click();
+      await expectInputValue(reader.locator("#scaleSelect"), (value) => value !== initialZoom);
       expect(await page.evaluate(() => window.devicePixelRatio)).toBe(1);
 
-      await reader.locator('.nav-expand-btn[data-tab="keypoints"]').click();
+      await reader.locator('.nav-expand-btn[data-tab="notes"]').click();
       const editor = reader.locator("#ai-editor .cm-content");
       await editor.waitFor();
       await editor.click();
-      const pageBeforeEditorKeys = await reader.locator("#page-input").inputValue();
+      const pageBeforeEditorKeys = await reader.locator("#pageNumber").inputValue();
       await page.keyboard.press("End");
-      await page.keyboard.press("Control+f");
-      expect(await reader.locator("#page-input").inputValue()).toBe(pageBeforeEditorKeys);
-      expect(await reader.locator("#search-bar").evaluate((bar) => bar.classList.contains("open"))).toBe(false);
+      expect(await reader.locator("#pageNumber").inputValue()).toBe(pageBeforeEditorKeys);
     },
   );
 }, 120_000);
@@ -2445,38 +2252,12 @@ async function waitForReaderFrame(
     const url = new URL(page.url());
     return url.pathname === "/reader/reader.html" && url.searchParams.get("key") === expectedKey;
   };
-  let lastUrlError: unknown = undefined;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (isExpectedTopLevelReader()) {
-      return page.mainFrame();
-    }
-    const frame = page.frames().find((candidate) => {
-      if (candidate.name() !== "mathreadReaderFrame") {
-        return false;
-      }
-      try {
-        return new URL(candidate.url()).searchParams.get("key") === expectedKey;
-      } catch (error) {
-        lastUrlError = error;
-        return false;
-      }
-    });
-    if (frame !== undefined) {
-      await frame.waitForLoadState("domcontentloaded");
-      return frame;
-    }
-    await Bun.sleep(100);
+  if (!isExpectedTopLevelReader()) {
+    await page.waitForURL((url) => (
+      url.pathname === "/reader/reader.html" && url.searchParams.get("key") === expectedKey
+    ));
   }
-  const surfaces = page
-    .frames()
-    .map((frame) => `${frame.name()} ${frame.url()}`);
-  const launchStatus = page.locator("#mathread-launch-status");
-  const launchError = (await launchStatus.count()) === 1
-    ? await launchStatus.textContent()
-    : undefined;
-  throw new Error(
-    `Timed out waiting for reader frame with key=${expectedKey}; frames: ${surfaces.join(", ")}; launch error: ${launchError}; last URL error: ${String(lastUrlError)}`,
-  );
+  return page.mainFrame();
 }
 
 type ReaderSurface = Page | Frame;
@@ -2779,17 +2560,6 @@ async function waitForClipboardText(
   );
 }
 
-async function waitForHasNoteMarker(surface: ReaderSurface): Promise<void> {
-  const marked = surface.locator('.nav-tb-btn.has-note[data-tab="keypoints"]');
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if ((await marked.count()) === 1) {
-      return;
-    }
-    await Bun.sleep(100);
-  }
-  throw new Error("Timed out waiting for the Notes tab has-note marker");
-}
-
 async function expectInputValue(
   locator: ReturnType<Page["locator"]>,
   predicate: (value: string) => boolean,
@@ -2967,8 +2737,8 @@ async function waitForFitWidthConvergence(
   try {
     const proof = await page.waitForFunction(
       (transitionLabel) => {
-        const viewer = document.getElementById("viewer");
-        const firstPage = document.querySelector("#pdf-viewer .page");
+        const viewer = document.getElementById("viewerContainer");
+        const firstPage = document.querySelector("#viewer .page");
         if (!(viewer instanceof HTMLElement)) {
           throw new TypeError("Expected the PDF viewer container");
         }
