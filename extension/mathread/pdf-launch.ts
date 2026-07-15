@@ -2,6 +2,7 @@ import {
   type CaptureRequest,
   type ExtensionLocalStorage,
   type PdfLinkOrigin,
+  backendOriginFromManifest,
   libraryKeyFromStoredPath,
   parseRuntimeCaptureResponse,
   pdfUrlFromLocation,
@@ -13,6 +14,7 @@ declare const chrome: {
   runtime: {
     getURL(path: string): string;
     sendMessage(message: unknown): Promise<unknown>;
+    getManifest(): { host_permissions?: string[] };
   };
   storage: {
     local: ExtensionLocalStorage;
@@ -48,12 +50,28 @@ async function launchPdf(): Promise<void> {
 
   const key = libraryKeyFromStoredPath(response.result.stored_path);
   const readerUrl = new URL(chrome.runtime.getURL("reader/reader.html"));
-  readerUrl.searchParams.set("key", key);
-  if (sourcePdf.viewState !== null) {
-    readerUrl.searchParams.set("mathread-view", sourcePdf.viewState);
-  }
+  const pdfUrl = new URL(`/pdf/${encodeURIComponent(key)}`, backendOriginFromManifest(chrome.runtime.getManifest()));
+  readerUrl.searchParams.set("file", pdfUrl.href);
+  readerUrl.hash = pdfHashFromView(sourcePdf.viewState);
 
   location.replace(readerUrl.href);
+}
+
+function pdfHashFromView(viewState: string | null): string {
+  if (viewState === null) {
+    return "";
+  }
+  const fields = viewState.split(":");
+  assert(fields.length === 5 && fields[0] === "v1", "MathRead PDF link view state is invalid");
+  const [, pageText, xText, yText, zoomText] = fields;
+  const page = Number(pageText);
+  const x = Number(xText);
+  const y = Number(yText);
+  const zoom = Number(zoomText);
+  assert(Number.isInteger(page) && page >= 1, "MathRead PDF link page must be positive");
+  assert(Number.isFinite(x) && Number.isFinite(y), "MathRead PDF link viewport must be finite");
+  assert(Number.isFinite(zoom) && zoom > 0, "MathRead PDF link zoom must be positive");
+  return `page=${page}&zoom=${Math.round(zoom * 100)},${Math.round(x)},${Math.round(y)}`;
 }
 
 async function sendCaptureMessage(message: unknown): Promise<unknown> {

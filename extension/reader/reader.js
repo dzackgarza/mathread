@@ -33,75 +33,25 @@ function assert(condition, message) {
 }
 
 function parseLaunch(params) {
-  const key = params.get("key");
-  if (key === null) {
+  const file = params.get("file");
+  if (file === null) {
     return { kind: "library" };
   }
-  assert(key.length > 0, "MathRead reader key must not be empty");
+  const url = new URL(file);
+  const path = url.pathname.split("/");
+  const key = path.at(-1);
+  assert(
+    path.at(-2) === "pdf" && key !== undefined && key.length > 0,
+    "MathRead reader file URL must name a backend library PDF",
+  );
   assert(!key.includes("/"), "MathRead reader key must be a library filename");
-  return { kind: "document", key, view: parseInitialView(params) };
-}
-
-function parseInitialView(params) {
-  const serialized = params.get("mathread-view");
-  if (serialized !== null) {
-    const fields = serialized.split(":");
-    assert(fields.length === 5 && fields[0] === "v1", "MathRead reader view state is invalid");
-    return parseViewFields(fields[1], fields[2], fields[3], fields[4]);
-  }
-  const page = params.get("page");
-  const zoom = params.get("zoom");
-  if (page === null && zoom === null) {
-    return null;
-  }
-  assert(page !== null && zoom !== null, "MathRead reader view state requires page and zoom");
-  return parseViewFields(page, null, null, zoom);
-}
-
-function parseViewFields(pageText, xText, yText, zoomText) {
-  const page = Number(pageText);
-  const zoom = Number(zoomText);
-  assert(Number.isInteger(page) && page >= 1, "MathRead reader view state requires a positive page");
-  assert(Number.isFinite(zoom) && zoom > 0, "MathRead reader view state requires a positive zoom");
-  if (xText === null || yText === null) {
-    return { page, zoom, x: null, y: null };
-  }
-  const x = Number(xText);
-  const y = Number(yText);
-  assert(Number.isFinite(x) && Number.isFinite(y), "MathRead reader viewport must be finite");
-  return { page, zoom, x, y };
-}
-
-function hashForView(view) {
-  const percent = Math.round(view.zoom * 100);
-  const zoom = view.x === null ? `${percent}` : `${percent},${view.x},${view.y}`;
-  return `page=${view.page}&zoom=${zoom}`;
+  return { kind: "document", key: decodeURIComponent(key) };
 }
 
 const launch = parseLaunch(new URLSearchParams(location.search));
 
-document.addEventListener("webviewerloaded", () => {
-  window.PDFViewerApplicationOptions.set("historyUpdateUrl", true);
-  if (launch.kind === "library") {
-    document.body.classList.add("mathread-library-mode");
-    window.PDFViewerApplicationOptions.set("defaultUrl", "");
-    return;
-  }
-  window.PDFViewerApplicationOptions.set("defaultUrl", "");
-  if (launch.view !== null) {
-    location.hash = hashForView(launch.view);
-  }
-  void openBackendDocument(launch.key);
-});
-
-async function openBackendDocument(key) {
-  await window.PDFViewerApplication.initializedPromise;
-  const response = await fetch(backendPdfUrl(key));
-  assert(response.ok, `MathRead PDF load failed with ${response.status} ${response.statusText}`);
-  await window.PDFViewerApplication.open({
-    data: await response.arrayBuffer(),
-    filename: key,
-  });
+if (launch.kind === "library") {
+  document.body.classList.add("mathread-library-mode");
 }
 
 const overlay = document.getElementById("mathread-overlay");
@@ -158,6 +108,10 @@ function noteVersionFrom(note) {
 
 for (const button of document.querySelectorAll(".nav-expand-btn")) {
   button.addEventListener("click", () => selectOverlay(button.dataset.tab));
+}
+
+if (launch.kind === "library") {
+  selectOverlay("library");
 }
 
 document.getElementById("mathread-close-panel").addEventListener("click", () => {
@@ -223,7 +177,7 @@ async function renderLibrary() {
     open.dataset.testid = "library-entry-open";
     open.textContent = entry.title;
     open.addEventListener("click", () => {
-      location.assign(`reader.html?key=${encodeURIComponent(entry.key)}`);
+      location.assign(`reader.html?file=${encodeURIComponent(backendPdfUrl(entry.key))}`);
     });
     const meta = document.createElement("span");
     meta.className = "library-entry-meta";

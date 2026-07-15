@@ -176,7 +176,7 @@ async function withArxivReader(
       }
     });
     await page.goto(
-      `chrome-extension://${extensionId}/reader/reader.html?key=${encodeURIComponent(key)}`,
+      `chrome-extension://${extensionId}/reader/reader.html?file=${encodeURIComponent(`http://127.0.0.1:${backendPort}/pdf/${encodeURIComponent(key)}`)}`,
     );
 
     try {

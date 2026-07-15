@@ -3,7 +3,7 @@
   "name": "MathRead PDF Viewer",
   "version": "1.0.0",
   "description": "Capture PDFs to the local MathRead service and read them in the MathRead reader.",
-  "permissions": ["storage", "cookies", "declarativeNetRequestWithHostAccess"],
+  "permissions": ["storage", "cookies", "declarativeNetRequestWithHostAccess", "webRequest", "webNavigation"],
   "host_permissions": ["http://127.0.0.1:8765/*", "http://*/*", "https://*/*"],
   "background": {
     "service_worker": "mathread/background.js",

@@ -1,3 +1,6 @@
+import "./vendor/pdfjs-preserve-referer.js";
+import "./vendor/pdfjs-extension-router.js";
+
 import {
   type CaptureRequest,
   type CaptureResult,
@@ -99,7 +102,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 });
 
 chrome.action.onClicked.addListener(() => {
-  void chrome.tabs.create({ url: chrome.runtime.getURL("reader/reader.html") });
+  void chrome.tabs.create({ url: chrome.runtime.getURL("reader/library.html") });
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

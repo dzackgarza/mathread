@@ -29,18 +29,19 @@ See https://github.com/adobe-type-tools/cmap-resources
 
   <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self'; img-src 'self' blob: data:; media-src blob:; font-src 'self' data:; connect-src * blob: data:; base-uri 'none'; form-action 'none';"
+      content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self'; img-src 'self' blob: data:; media-src blob:; font-src 'self' data:; connect-src * file: chrome-extension: blob: data: filesystem: drive:; base-uri 'self'; form-action 'none';"
     />
 
-<!-- This snippet is used in production (included from viewer.html) -->
-<link rel="resource" type="application/l10n" href="vendor/pdfjs/generic/web/locale/locale.json" />
-<script src="vendor/pdfjs/generic/build/pdf.mjs" type="module"></script>
+<!-- PDF.js's Chromium build assumes this extension-root asset location. -->
+<base href="/reader/vendor/pdfjs/chromium/web/" />
+<link rel="resource" type="application/l10n" href="locale/locale.json" />
+<script src="../build/pdf.mjs" type="module"></script>
 
-    <link rel="stylesheet" href="vendor/pdfjs/generic/web/viewer.css" />
-    <link rel="stylesheet" href="reader.css" />
+    <link rel="stylesheet" href="viewer.css" />
+    <link rel="stylesheet" href="../../../../reader.css" />
 
-  <script src="reader.js" type="module"></script>
-  <script src="vendor/pdfjs/generic/web/viewer.mjs" type="module"></script>
+  <script src="../../../../reader.js" type="module"></script>
+  <script src="viewer.mjs" type="module"></script>
   </head>
 
   <body tabindex="0">
@@ -581,12 +582,8 @@ See https://github.com/adobe-type-tools/cmap-resources
                   >
                     <span data-l10n-id="pdfjs-tools-button-label"></span>
                   </button>
-                  <div id="secondaryToolbar" class="hidden doorHangerRight menu">
+                    <div id="secondaryToolbar" class="hidden doorHangerRight menu">
                     <div id="secondaryToolbarButtonContainer" class="menuContainer">
-                      <button id="secondaryOpenFile" class="toolbarButton labeled" type="button" tabindex="0" data-l10n-id="pdfjs-open-file-button">
-                        <span data-l10n-id="pdfjs-open-file-button-label"></span>
-                      </button>
-
                       <div class="visibleMediumView">
                         <button id="secondaryPrint" class="toolbarButton labeled" type="button" tabindex="0" data-l10n-id="pdfjs-print-button">
                           <span data-l10n-id="pdfjs-print-button-label"></span>
@@ -598,7 +595,7 @@ See https://github.com/adobe-type-tools/cmap-resources
 
                       </div>
 
-                      <div class="horizontalToolbarSeparator"></div>
+              <div class="horizontalToolbarSeparator"></div>
 
                       <button id="presentationMode" class="toolbarButton labeled" type="button" tabindex="0" data-l10n-id="pdfjs-presentation-mode-button">
                         <span data-l10n-id="pdfjs-presentation-mode-button-label"></span>
@@ -1189,6 +1186,22 @@ See https://github.com/adobe-type-tools/cmap-resources
           </div>
           <div class="buttonRow">
             <button id="printCancel" class="dialogButton" type="button"><span data-l10n-id="pdfjs-print-progress-close-button"></span></button>
+          </div>
+        </dialog>
+        <dialog id="chromeFileAccessDialog">
+          <div class="row">
+            <p id="chrome-pdfjs-logo-bg">
+              Click on "<span id="chrome-file-access-label">Allow access to file URLs</span>" at
+              <a id="chrome-link-to-extensions-page">chrome://extensions</a>
+              <br />
+              to view <span id="chrome-url-of-local-file">this PDF file.</span>
+            </p>
+          </div>
+          <div class="row">
+            <p>
+              or select the file again:
+              <input type="file" id="chrome-file-fallback" accept=".pdf" />
+            </p>
           </div>
         </dialog>
       </div>

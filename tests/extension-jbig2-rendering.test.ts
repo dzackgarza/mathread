@@ -50,8 +50,9 @@ test("extension reader renders the PDF.js JBig2 fixture as visible pixels", asyn
     });
     const extensionId = await extensionIdFor(context);
     const page = await context.newPage();
+    const file = `http://127.0.0.1:${backendPort}/pdf/${encodeURIComponent(libraryKey)}`;
     await page.goto(
-      `chrome-extension://${extensionId}/reader/reader.html?key=${encodeURIComponent(libraryKey)}`,
+      `chrome-extension://${extensionId}/reader/reader.html?file=${encodeURIComponent(file)}`,
       { waitUntil: "domcontentloaded" },
     );
 

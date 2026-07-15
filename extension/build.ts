@@ -27,7 +27,7 @@ for (const asset of ["pdf-launch.html", "pdf-launch.css"]) {
 // through bun corrupts identifiers. Only backend.ts (already built to reader/vendor/backend.js
 // by the bun build step) goes through the bundler.
 mkdirSync(join(distExt, "reader", "vendor", "pdfjs"), { recursive: true });
-for (const asset of ["reader.html", "reader.css", "reader.js"]) {
+for (const asset of ["library.html", "reader.html", "reader.css", "reader.js"]) {
   copyFileSync(join("extension", "reader", asset), join(distExt, "reader", asset));
 }
 copyFileSync(
@@ -35,8 +35,8 @@ copyFileSync(
   join(distExt, "reader", "vendor", "codemirror.mjs"),
 );
 cpSync(
-  join("extension", "reader", "vendor", "pdfjs", "generic"),
-  join(distExt, "reader", "vendor", "pdfjs", "generic"),
+  join("extension", "reader", "vendor", "pdfjs", "chromium"),
+  join(distExt, "reader", "vendor", "pdfjs", "chromium"),
   { recursive: true },
 );
 

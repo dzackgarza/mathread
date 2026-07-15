@@ -192,7 +192,7 @@ test("reader Library panel lists, opens, and trashes captured items against the 
         "existing note\n",
       );
 
-      await page.goto(readerPageUrl(extensionId, firstKey), {
+      await page.goto(readerPageUrl(extensionId, backendPort, firstKey), {
         waitUntil: "domcontentloaded",
       });
       await page.locator('.nav-expand-btn[data-tab="library"]').click();
@@ -231,8 +231,7 @@ test("reader Library panel lists, opens, and trashes captured items against the 
         .click();
       await waitForReaderFrame(page, secondKey);
       const visibleReaderUrl = new URL(page.url());
-      expect(visibleReaderUrl.pathname).toBe("/reader/reader.html");
-      expect(visibleReaderUrl.searchParams.get("key")).toBe(secondKey);
+      assertReaderFrameUrl(visibleReaderUrl.href, secondKey);
 
       const reader = await waitForReaderFrame(page, secondKey);
       // PDF.js owns a bounded canvas window; wait for the current page rather than
@@ -301,7 +300,7 @@ test("reader Library panel opens provenance-less local PDFs from the backend cop
   await withExtensionReader(async ({ extensionId, page, readingRoot }) => {
     writeFileSync(join(readingRoot, "local.pdf"), pdfBytes);
 
-    await page.goto(`chrome-extension://${extensionId}/reader/reader.html`, {
+    await page.goto(`chrome-extension://${extensionId}/reader/library.html`, {
       waitUntil: "domcontentloaded",
     });
     await waitForLibraryEntryCount(page, 1);
@@ -310,9 +309,9 @@ test("reader Library panel opens provenance-less local PDFs from the backend cop
       .locator('[data-testid="library-entry-open"]')
       .click();
 
-    await page.waitForURL(/reader\/reader\.html\?key=local\.pdf$/);
+    await waitForReaderFrame(page, "local.pdf");
     await waitForCanvasCount(page, 1);
-    expect(new URL(page.url()).searchParams.get("key")).toBe("local.pdf");
+    assertReaderFrameUrl(page.url(), "local.pdf");
   });
 }, 60_000);
 
@@ -334,9 +333,7 @@ test("built extension intercepts a clicked PDF directly into an extension-owned 
     ),
   ).toBe(true);
   const visibleReaderUrl = new URL(evidence.visibleReaderUrl);
-  expect(visibleReaderUrl.protocol).toBe("chrome-extension:");
-  expect(visibleReaderUrl.pathname).toBe("/reader/reader.html");
-  expect(visibleReaderUrl.searchParams.get("key")).toBe(evidence.key);
+  assertReaderFrameUrl(visibleReaderUrl.href, evidence.key);
   assertReaderFrameUrl(evidence.readerFrameUrl, evidence.key);
 
   expect(evidence.metadata["/MathReadSourceURL"]).toBe(expectedCourseUrl);
@@ -507,7 +504,7 @@ function registerCapturedSourceLinkTests(): void {
 test("reader exposes arXiv source links as a dedicated toolbar button", async () => {
   await withExtensionReader(async ({ backendPort, courseServer, extensionId, page }) => {
     const key = await preCapturePdfThroughBackend(backendPort, courseServer, "arxiv-pdf");
-    await page.goto(readerPageUrl(extensionId, key), { waitUntil: "domcontentloaded" });
+    await page.goto(readerPageUrl(extensionId, backendPort, key), { waitUntil: "domcontentloaded" });
     await waitForCanvasCount(page, 1);
 
     const arxivButton = page.locator("#open-arxiv");
@@ -548,7 +545,7 @@ test("reader, markdown, and library workflows remain extension-owned", async () 
       }
       const readEvents = collectReadEventRequests(page, backendPort);
 
-      await page.goto(readerPageUrl(extensionId, key), {
+      await page.goto(readerPageUrl(extensionId, backendPort, key), {
         waitUntil: "domcontentloaded",
       });
       await page.locator("#viewer canvas").first().waitFor();
@@ -569,10 +566,8 @@ test("reader, markdown, and library workflows remain extension-owned", async () 
       }
 
       const visibleReaderUrl = new URL(page.url());
-      expect(visibleReaderUrl.protocol).toBe("chrome-extension:");
       expect(visibleReaderUrl.hostname).toBe(extensionId);
-      expect(visibleReaderUrl.pathname).toBe("/reader/reader.html");
-      expect(visibleReaderUrl.searchParams.get("key")).toBe(key);
+      assertReaderFrameUrl(visibleReaderUrl.href, key);
       expect(page.url()).not.toContain("markdown-editor.localhost");
       const readerScreenshotPath = join(
         artifacts.root,
@@ -673,7 +668,7 @@ test("reader opens pre-2007 arXiv provenance with its full archive identifier", 
       courseServer,
       "legacy-arxiv-pdf",
     );
-    await page.goto(readerPageUrl(extensionId, key), {
+    await page.goto(readerPageUrl(extensionId, backendPort, key), {
       waitUntil: "domcontentloaded",
     });
     await waitForCanvasCount(page, 1);
@@ -706,7 +701,7 @@ test("reader renders all pages of a large PDF with real content", async () => {
       );
       // View-link restore: page/zoom params (forwarded from mrpage/mrzoom on the source
       // URL by pdf-launch) re-open the document at that view.
-      await page.goto(`${readerPageUrl(extensionId, key)}&page=3&zoom=0.9`, {
+      await page.goto(`${readerPageUrl(extensionId, backendPort, key)}#page=3&zoom=90`, {
         waitUntil: "domcontentloaded",
       });
 
@@ -774,7 +769,7 @@ test("installed reader copies source-preserving current and plain links for the 
           });
         },
       );
-      await page.goto(readerPageUrl(extensionId, key), {
+      await page.goto(readerPageUrl(extensionId, backendPort, key), {
         waitUntil: "domcontentloaded",
       });
       await page.locator("#viewer canvas").first().waitFor();
@@ -928,7 +923,7 @@ test("reader Notes panel persists notes to the on-disk markdown file and renders
         courseServer,
         "direct-pdf-tab",
       );
-      await page.goto(readerPageUrl(extensionId, key), {
+      await page.goto(readerPageUrl(extensionId, backendPort, key), {
         waitUntil: "domcontentloaded",
       });
       await waitForCanvasCount(page, 1);
@@ -987,7 +982,7 @@ test("reader Key Points panel blocks stale autosave and resolves disk conflicts"
       );
       const sidecarPath = join(readingRoot, key.replace(/\.pdf$/, ".md"));
 
-      await page.goto(readerPageUrl(extensionId, key), {
+      await page.goto(readerPageUrl(extensionId, backendPort, key), {
         waitUntil: "domcontentloaded",
       });
       await waitForCanvasCount(page, 1);
@@ -1071,7 +1066,7 @@ test("reader Key Points panel surfaces a loud error when the backend dies (no lo
         courseServer,
         "direct-pdf-tab",
       );
-      await page.goto(readerPageUrl(extensionId, key), {
+      await page.goto(readerPageUrl(extensionId, backendPort, key), {
         waitUntil: "domcontentloaded",
       });
       await waitForCanvasCount(page, 1);
@@ -1108,7 +1103,7 @@ test("reader keeps legacy highlight source until migration is durably saved", as
         15_000,
       );
 
-      await page.goto(readerPageUrl(extensionId, key), {
+      await page.goto(readerPageUrl(extensionId, backendPort, key), {
         waitUntil: "domcontentloaded",
       });
       await waitForCanvasCount(page, 1);
@@ -1150,7 +1145,7 @@ test("legacy highlight migration rejects incomplete records instead of fabricati
         15_000,
       );
 
-      await page.goto(readerPageUrl(extensionId, key), {
+      await page.goto(readerPageUrl(extensionId, backendPort, key), {
         waitUntil: "domcontentloaded",
       });
       await waitForCanvasCount(page, 1);
@@ -1181,13 +1176,13 @@ export function registerReaderRenderingBoundaryTests(): void {
 function registerReaderNavigationBoundaryTests(): void {
 test("reader presents the MathRead library without constructing a custom PDF viewer", async () => {
   await withExtensionReader(async ({ artifacts, extensionId, page }) => {
-    await page.goto(`chrome-extension://${extensionId}/reader/reader.html`, {
+    await page.goto(`chrome-extension://${extensionId}/reader/library.html`, {
       waitUntil: "domcontentloaded",
     });
     await page.locator('.nav-expand-btn[data-tab="library"]').click();
     await page.locator('[data-testid="library-open-root"]').waitFor();
-    expect(await page.locator("#viewer").count()).toBe(1);
-    expect(await page.locator("#page-input").count()).toBe(0);
+    expect(await page.locator("#viewer").count()).toBe(0);
+    expect(await page.locator("#pageNumber").count()).toBe(0);
     const screenshotPath = join(artifacts.root, "reader-library.png");
     await page.screenshot({ path: screenshotPath });
     assertPng(screenshotPath);
@@ -1204,7 +1199,7 @@ test("reader delegates stable responsive navigation to the PDF.js viewer", async
         courseServer,
         "large-numdam-pdf",
       );
-      await page.goto(readerPageUrl(extensionId, key), {
+      await page.goto(readerPageUrl(extensionId, backendPort, key), {
         waitUntil: "domcontentloaded",
       });
       const pages = page.locator("#viewer .page");
@@ -1311,7 +1306,7 @@ test("reader exposes the upstream PDF.js application controls", async () => {
         courseServer,
         "large-numdam-pdf",
       );
-      await page.goto(readerPageUrl(extensionId, key), {
+      await page.goto(readerPageUrl(extensionId, backendPort, key), {
         waitUntil: "domcontentloaded",
       });
       await page.locator("#viewer canvas").first().waitFor();
@@ -1343,7 +1338,7 @@ test("persisted fit-width setting controls ordinary reader opens without a zoom 
         "large-numdam-pdf",
       );
       await persistFitWidthOnOpen(context);
-      const ordinaryOpenUrl = readerPageUrl(extensionId, key);
+      const ordinaryOpenUrl = readerPageUrl(extensionId, backendPort, key);
       expect(new URL(ordinaryOpenUrl).searchParams.has("zoom")).toBe(false);
 
       await page.setViewportSize({ width: 600, height: 760 });
@@ -1420,7 +1415,7 @@ test("reader hands native Alt-left and Alt-right to browser history without a PD
       await page.screenshot({ path: join(artifacts.root, "browser-history-parent.png") });
       assertPng(join(artifacts.root, "browser-history-parent.png"));
       const atReader = page.waitForURL((url) => (
-        url.pathname === "/reader/reader.html" && url.searchParams.get("key") === key
+        isReaderDocumentUrl(url, key)
       ));
       sendNativeHistoryShortcut(x11Display, "Right");
       await atReader;
@@ -1450,8 +1445,7 @@ test("reader preserves PDF-internal history through the production launch redire
       await reader.locator("#viewer canvas").first().waitFor();
       await waitForReadEventCount(readEventRequests, 1);
       const launchUrl = new URL(page.url());
-      expect(launchUrl.pathname).toBe("/reader/reader.html");
-      expect(launchUrl.searchParams.get("key")).toBe(key);
+      assertReaderFrameUrl(launchUrl.href, key);
 
       const readView = () => reader.evaluate(() => {
         const pageInput = document.getElementById("pageNumber");
@@ -1525,7 +1519,7 @@ function registerReaderPdfJsSemanticsBoundaryTest(): void {
 
 test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", async () => {
   await withExtensionReader(
-    async ({ context, extensionId, page, readingRoot }) => {
+    async ({ backendPort, context, extensionId, page, readingRoot }) => {
       const fixtureRoot = join("tests", "fixtures", "pdfjs");
       const fixtureNames = [
         "annotation-link-text-popup.pdf",
@@ -1550,7 +1544,7 @@ test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", 
         mobile: false,
       });
 
-      await page.goto(readerPageUrl(extensionId, "hello_world_rotated.pdf"), {
+      await page.goto(readerPageUrl(extensionId, backendPort, "hello_world_rotated.pdf"), {
         waitUntil: "domcontentloaded",
       });
       const rotatedPage = page.locator('#viewer .page[data-page-number="1"]');
@@ -1572,7 +1566,7 @@ test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", 
       expect(dprGeometry.devicePixelRatio).toBe(2);
       expect(Math.abs(dprGeometry.backingWidth - 2 * dprGeometry.cssWidth)).toBeLessThanOrEqual(2);
 
-      await page.goto(readerPageUrl(extensionId, "extract_link.pdf"), {
+      await page.goto(readerPageUrl(extensionId, backendPort, "extract_link.pdf"), {
         waitUntil: "domcontentloaded",
       });
       const internalLink = page.locator('#viewer .annotationLayer a').first();
@@ -1584,7 +1578,7 @@ test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", 
       });
       expect(await page.locator("#pageNumber").inputValue()).toBe("2");
 
-      await page.goto(readerPageUrl(extensionId, "annotation-link-text-popup.pdf"), {
+      await page.goto(readerPageUrl(extensionId, backendPort, "annotation-link-text-popup.pdf"), {
         waitUntil: "domcontentloaded",
       });
       const externalLink = page.locator('#viewer .annotationLayer a[href="http://www.mozilla.org/"]');
@@ -1600,7 +1594,7 @@ test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", 
         ["copy_paste_ligatures.pdf", "ffi"],
         ["cross-span-search.pdf", "theorem 4.2"],
       ] as const) {
-        await page.goto(readerPageUrl(extensionId, fixtureName), {
+        await page.goto(readerPageUrl(extensionId, backendPort, fixtureName), {
           waitUntil: "domcontentloaded",
         });
         await page.locator("#viewFindButton").click();
@@ -1611,7 +1605,7 @@ test("reader preserves PDF.js rotation, DPR, links, find, and JBig2 semantics", 
         );
       }
 
-      await page.goto(readerPageUrl(extensionId, "bitmap-symbol-textcomposite.pdf"), {
+      await page.goto(readerPageUrl(extensionId, backendPort, "bitmap-symbol-textcomposite.pdf"), {
         waitUntil: "domcontentloaded",
       });
       const jbig2Evidence = await canvasPixelEvidence(page, 0);
@@ -1651,15 +1645,19 @@ test("PDF.js owns reader controls while the MathRead Notes editor remains isolat
 }, 120_000);
 }
 
-function readerPageUrl(extensionId: string, key: string): string {
-  return `chrome-extension://${extensionId}/reader/reader.html?key=${encodeURIComponent(key)}`;
+function readerPageUrl(extensionId: string, backendPort: number, key: string): string {
+  const file = `http://127.0.0.1:${backendPort}/pdf/${encodeURIComponent(key)}`;
+  return `chrome-extension://${extensionId}/reader/reader.html?file=${encodeURIComponent(file)}`;
 }
 
 function assertReaderFrameUrl(url: string, expectedKey: string): void {
   const parsed = new URL(url);
   expect(parsed.protocol).toBe("chrome-extension:");
-  expect(parsed.pathname).toContain("/reader/reader.html");
-  expect(parsed.searchParams.get("key")).toBe(expectedKey);
+  expect(isReaderDocumentUrl(parsed, expectedKey)).toBe(true);
+}
+
+function isReaderDocumentUrl(url: URL, expectedKey: string): boolean {
+  return decodeURIComponent(url.pathname).endsWith(`/pdf/${expectedKey}`);
 }
 
 async function runBackendUnavailable(): Promise<void> {
@@ -2253,12 +2251,10 @@ async function waitForReaderFrame(
 ): Promise<Frame> {
   const isExpectedTopLevelReader = () => {
     const url = new URL(page.url());
-    return url.pathname === "/reader/reader.html" && url.searchParams.get("key") === expectedKey;
+    return isReaderDocumentUrl(url, expectedKey);
   };
   if (!isExpectedTopLevelReader()) {
-    await page.waitForURL((url) => (
-      url.pathname === "/reader/reader.html" && url.searchParams.get("key") === expectedKey
-    ));
+    await page.waitForURL(url => isReaderDocumentUrl(url, expectedKey));
   }
   return page.mainFrame();
 }
