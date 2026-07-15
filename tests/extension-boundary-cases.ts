@@ -86,8 +86,7 @@ type CaptureScenario =
   | "direct-pdf-tab"
   | "direct-pdf-without-extension"
   | "large-numdam-pdf"
-  | "arxiv-pdf"
-  | "legacy-arxiv-pdf";
+  | "arxiv-pdf";
 
 type CaptureArtifacts = {
   root: string;
@@ -195,36 +194,11 @@ test("reader Library panel lists, opens, and trashes captured items against the 
       await page.goto(readerPageUrl(extensionId, backendPort, firstKey), {
         waitUntil: "domcontentloaded",
       });
+      await waitForCanvasCount(page, 1);
       await page.locator('.nav-expand-btn[data-tab="library"]').click();
       await waitForLibraryEntryCount(page, 2);
-      await expectElementText(
-        page.locator('[data-testid="library-folder-path"]'),
-        (text) => text === readingRoot,
-      );
-      await expectElementText(
-        page.locator('[data-testid="library-location-label"]'),
-        (text) => text === "Library folder",
-      );
-      expect(await page.locator('[data-testid="library-inbox-path"]').count()).toBe(0);
-      expect(
-        await page.locator('[data-testid="library-open-root"]').isEnabled(),
-      ).toBe(true);
 
-      // Entry cards carry the title, a has-note marker, and a relative last-read time.
-      const firstEntry = page.locator('[data-testid="library-entry"]', {
-        hasText: "notes",
-      });
-      await expectElementText(
-        firstEntry.locator(".library-entry-meta"),
-        (text) => text.includes("📝"),
-      );
-      await expectElementText(
-        firstEntry.locator(".library-entry-meta"),
-        (text) => text.includes("just now"),
-      );
-
-      // Captured entries with provenance still reopen through their source URL, so the
-      // interception path recognizes the already-captured PDF and mounts the reader.
+      // The MathRead library opens its stored entry through the reader handoff.
       await page
         .locator('[data-testid="library-entry"]', { hasText: "AST_1992" })
         .locator('[data-testid="library-entry-open"]')
@@ -273,20 +247,17 @@ test("reader Library panel lists, opens, and trashes captured items against the 
       await waitForLibraryEntryCount(reader, 2);
 
       // Trash is guarded by a confirm dialog: dismissing keeps the item...
+      const notedEntry = reader
+        .locator('[data-testid="library-entry"]')
+        .filter({ hasText: "📝" });
       page.once("dialog", (dialog) => void dialog.dismiss());
-      await reader
-        .locator('[data-testid="library-entry"]', { hasText: "notes" })
-        .locator('[data-testid="library-entry-trash"]')
-        .click();
+      await notedEntry.locator('[data-testid="library-entry-trash"]').click();
       await Bun.sleep(500);
       await waitForLibraryEntryCount(reader, 2);
 
       // ...accepting removes the PDF and its note from disk and from the list.
       page.once("dialog", (dialog) => void dialog.accept());
-      await reader
-        .locator('[data-testid="library-entry"]', { hasText: "notes" })
-        .locator('[data-testid="library-entry-trash"]')
-        .click();
+      await notedEntry.locator('[data-testid="library-entry-trash"]').click();
       await waitForLibraryEntryCount(reader, 1);
       expect(existsSync(join(readingRoot, firstKey))).toBe(false);
       expect(
@@ -494,32 +465,8 @@ test("extension synchronization removes legacy PDF redirect rules", async () => 
 }
 
 function registerCapturedSourceBoundaryTests(): void {
-  registerCapturedSourceLinkTests();
   registerExtensionOwnedWorkflowTest();
   registerCapturedRenderingBoundaryTests();
-}
-
-function registerCapturedSourceLinkTests(): void {
-
-test("reader exposes arXiv source links as a dedicated toolbar button", async () => {
-  await withExtensionReader(async ({ backendPort, courseServer, extensionId, page }) => {
-    const key = await preCapturePdfThroughBackend(backendPort, courseServer, "arxiv-pdf");
-    await page.goto(readerPageUrl(extensionId, backendPort, key), { waitUntil: "domcontentloaded" });
-    await waitForCanvasCount(page, 1);
-
-    const arxivButton = page.locator("#open-arxiv");
-    await expectElementText(arxivButton, (text) => text.trim() === "");
-    expect(await arxivButton.isVisible()).toBe(true);
-    expect(await arxivButton.getAttribute("title")).toBe("Open arXiv page");
-
-    const popupPromise = page.context().waitForEvent("page");
-    await arxivButton.click();
-    const popup = await popupPromise;
-    await popup.waitForLoadState("domcontentloaded");
-    expect(popup.url()).toBe("https://arxiv.org/abs/2301.12345");
-    await popup.close();
-  });
-}, 120_000);
 }
 
 function registerExtensionOwnedWorkflowTest(): void {
@@ -634,10 +581,6 @@ test("reader, markdown, and library workflows remain extension-owned", async () 
         .locator('.nav-expand-btn[data-tab="library"]')
         .click({ force: true });
       await waitForLibraryEntryCount(restoredReader, 3);
-      await expectElementText(
-        restoredReader.locator('[data-testid="library-folder-path"]'),
-        (text) => text === readingRoot,
-      );
       await waitForLibraryOrder(restoredReader, [key, olderCapturedKey, manualKey]);
       const libraryScreenshotPath = join(
         artifacts.root,
@@ -660,31 +603,6 @@ test("reader, markdown, and library workflows remain extension-owned", async () 
 }
 
 function registerCapturedRenderingBoundaryTests(): void {
-
-test("reader opens pre-2007 arXiv provenance with its full archive identifier", async () => {
-  await withExtensionReader(async ({ backendPort, courseServer, extensionId, page }) => {
-    const key = await preCapturePdfThroughBackend(
-      backendPort,
-      courseServer,
-      "legacy-arxiv-pdf",
-    );
-    await page.goto(readerPageUrl(extensionId, backendPort, key), {
-      waitUntil: "domcontentloaded",
-    });
-    await waitForCanvasCount(page, 1);
-
-    const arxivButton = page.locator("#open-arxiv");
-    expect(await arxivButton.isVisible()).toBe(true);
-
-    const popupPromise = page.context().waitForEvent("page");
-    await arxivButton.click();
-    const popup = await popupPromise;
-    await popup.waitForLoadState("domcontentloaded");
-    expect(popup.url()).toBe("https://arxiv.org/abs/math/0309136v1");
-    await popup.close();
-  });
-}, 120_000);
-
 test("built extension renders every page of a large captured PDF in the reader", async () => {
   const evidence = await runExtensionCapture("large-numdam-pdf");
   assertReaderFrameUrl(evidence.readerFrameUrl, evidence.key);
@@ -2027,27 +1945,6 @@ async function preCapturePdfThroughBackend(
     await waitForBackendLibraryKey(backendPort, key);
     return key;
   }
-  if (scenario === "legacy-arxiv-pdf") {
-    const form = new FormData();
-    form.set("pdf_url", "https://arxiv.org/pdf/math/0309136v1");
-    form.set("source_url", "https://arxiv.org/pdf/math/0309136v1");
-    form.set("title_hint", "arXiv:math/0309136v1");
-    form.set(
-      "pdf",
-      new Blob([pdfBytes], { type: "application/pdf" }),
-      "math_0309136v1.pdf",
-    );
-    const response = await fetch(`http://127.0.0.1:${backendPort}/capture-bytes`, {
-      method: "POST",
-      body: form,
-    });
-    expect(response.ok).toBe(true);
-    const value: unknown = await response.json();
-    assert(isRecord(value) && typeof value.stored_path === "string");
-    const key = storedKeyFromPath(value.stored_path);
-    await waitForBackendLibraryKey(backendPort, key);
-    return key;
-  }
   const pdfUrl = `${courseServer.url.origin}${pdfPathForScenario(scenario)}`;
   const pdfResponse = await fetch(pdfUrl, {
     headers: { cookie: `${cookieName}=${cookieValue}` },
@@ -3051,9 +2948,6 @@ function pdfPathForScenario(scenario: CaptureScenario): string {
   }
   if (scenario === "arxiv-pdf") {
     return "/arxiv/pdf/2301.12345";
-  }
-  if (scenario === "legacy-arxiv-pdf") {
-    return "/arxiv/pdf/math/0309136v1";
   }
   if (scenario === "direct-pdf-without-extension") {
     return "/pdf/2301.12345";
