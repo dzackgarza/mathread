@@ -113,7 +113,7 @@ assert(editorHost instanceof HTMLElement, "MathRead notes editor is missing");
 assert(moreMenu instanceof HTMLElement, "MathRead actions menu is missing");
 
 let editor = null;
-let noteVersion = "";
+let noteVersion;
 let saveTimer = null;
 
 function selectOverlay(name) {
@@ -125,6 +125,11 @@ function selectOverlay(name) {
   } else if (launch.kind === "document") {
     void ensureNotes();
   }
+}
+
+function noteVersionFrom(note) {
+  assert(typeof note.version === "string", "MathRead note response must declare a version");
+  return note.version;
 }
 
 for (const button of document.querySelectorAll(".nav-expand-btn")) {
@@ -195,7 +200,7 @@ async function ensureNotes() {
     return;
   }
   const note = await getNote(launch.key);
-  noteVersion = note.version ?? "";
+  noteVersion = noteVersionFrom(note);
   notesPath.textContent = launch.key.replace(/\.pdf$/, ".md");
   editor = new EditorView({
     parent: editorHost,
@@ -232,9 +237,10 @@ function queueSave() {
 async function saveNotes() {
   assert(launch.kind === "document", "Saving notes requires an open document");
   assert(editor !== null, "MathRead note editor must exist before saving");
+  assert(typeof noteVersion === "string", "MathRead note version must be loaded before saving");
   try {
     const saved = await putNote(launch.key, editor.state.doc.toString(), noteVersion);
-    noteVersion = saved.version ?? "";
+    noteVersion = noteVersionFrom(saved);
     notesStatus.textContent = "Saved";
     notesError.hidden = true;
   } catch (error) {
