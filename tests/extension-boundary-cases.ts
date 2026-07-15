@@ -1366,6 +1366,33 @@ test("reader delegates stable responsive navigation to the PDF.js viewer", async
   );
 }, 120_000);
 
+test("reader exposes the upstream PDF.js application controls", async () => {
+  await withExtensionReader(
+    async ({ backendPort, courseServer, extensionId, page }) => {
+      const key = await preCapturePdfThroughBackend(
+        backendPort,
+        courseServer,
+        "large-numdam-pdf",
+      );
+      await page.goto(readerPageUrl(extensionId, key), {
+        waitUntil: "domcontentloaded",
+      });
+      await page.locator("#viewer canvas").first().waitFor();
+
+      const pageNumber = page.locator("#pageNumber");
+      await expectInputValue(pageNumber, (value) => value === "1");
+      await page.locator("#next").click();
+      await expectInputValue(pageNumber, (value) => value === "2");
+
+      await page.locator("#viewFindButton").click();
+      await page.locator("#findInput").fill("MathRead");
+      await page.locator("#findbar").evaluate((element) =>
+        !element.classList.contains("hidden"),
+      );
+    },
+  );
+}, 120_000);
+
 }
 
 function registerReaderRenderingSemanticsBoundaryTests(): void {
