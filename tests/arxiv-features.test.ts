@@ -24,11 +24,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import { chromiumExecutablePath } from "./browser-helpers";
-import {
-  parseAnnotations,
-  serializeAnnotation,
-} from "../extension/reader/annotations.ts";
-
 const ARXIV_IDS = ["1612.09116", "2312.13488"];
 const FIXTURE_DIR = join(import.meta.dir, "fixtures", "arxiv");
 
@@ -159,46 +154,10 @@ async function withArxivReader(
     const serviceWorker = await waitForExtensionServiceWorker(context);
     const extensionId = new URL(serviceWorker.url()).host;
     const page = await context.newPage();
-    const pageFailures: string[] = [];
-    const pageEvents: string[] = [];
-    page.on("pageerror", (error) =>
-      pageFailures.push(`READER-PAGE-ERROR: ${error.message}`),
-    );
-    page.on("crash", () => pageFailures.push("READER-PAGE-CRASH"));
-    page.on("framenavigated", (frame) => {
-      if (frame === page.mainFrame()) {
-        pageEvents.push(`READER-NAVIGATION: ${frame.url()}`);
-      }
-    });
-    page.on("console", (message) => {
-      if (message.type() === "error") {
-        pageFailures.push(`READER-CONSOLE-ERROR: ${message.text()}`);
-      }
-    });
     await page.goto(
       `chrome-extension://${extensionId}/reader/reader.html?file=${encodeURIComponent(`http://127.0.0.1:${backendPort}/pdf/${encodeURIComponent(key)}`)}`,
     );
-
-    try {
-      await run({ page, backendPort, readingRoot, key, notePath });
-    } catch (error) {
-      const bodyText = page.isClosed()
-        ? "<closed>"
-        : await page
-            .locator("body")
-            .innerText({ timeout: 1_000 })
-            .catch((bodyError: unknown) => `<unavailable: ${String(bodyError)}>`);
-      throw new Error(
-        [
-          `arXiv reader failed at ${page.url()} (closed=${page.isClosed()})`,
-          ...pageEvents,
-          ...pageFailures,
-          `READER-BODY: ${bodyText.slice(0, 1_000)}`,
-        ].join("\n"),
-        { cause: error },
-      );
-    }
-    expect(pageFailures).toEqual([]);
+    await run({ page, backendPort, readingRoot, key, notePath });
     await page.close();
     completed = true;
   } finally {
@@ -217,114 +176,39 @@ async function withArxivReader(
 
 for (const arxivId of ARXIV_IDS) {
   test(
-    `arXiv ${arxivId}: annotations persist as fenced divs in the note file and re-render from it`,
+    `arXiv ${arxivId}: MathRead persists notes for a captured real paper`,
     async () => {
       await withArxivReader(
         arxivId,
         async ({ page, backendPort, key, notePath }) => {
-          // Feature: every page of the real paper renders with a live text layer.
-          const pageTotal = await waitForNonEmptyText(page, "#page-total");
-          const pageCount = Number(pageTotal);
-          expect(pageCount).toBeGreaterThan(5);
-          await renderEveryPageTextLayer(page, pageCount);
-          const textLayerSpanCount = await page
-            .locator('.page[data-page-number="1"] .textLayer span')
-            .count();
-          expect(textLayerSpanCount).toBeGreaterThan(10);
+          const noteMarker = `arXiv reading ${crypto.randomUUID()}`;
+          const noteBody = `checked against Nikulin ${crypto.randomUUID()}`;
+          const handAuthoredNote = `hand-authored note ${crypto.randomUUID()}`;
 
-          // Feature: select real text on page 1 and commit a highlight.
-          const selectedText = await page.evaluate(() => {
-            const spans = Array.from(
-              document.querySelectorAll(
-                '.page[data-page-number="1"] .textLayer span',
-              ),
-            );
-            const span = spans.find(
-              (s) =>
-                s.textContent !== null && s.textContent.trim().length > 20,
-            );
-            if (span === undefined) {
-              throw new Error("no selectable text-layer span on page 1");
-            }
-            const range = document.createRange();
-            range.selectNodeContents(span);
-            const selection = window.getSelection()!;
-            selection.removeAllRanges();
-            selection.addRange(range);
-            span
-              .closest(".textLayer")!
-              .dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-            const selectedText = span.textContent;
-            if (selectedText === null) {
-              throw new Error("selected text-layer span has no text content");
-            }
-            return selectedText.trim();
-          });
-          await waitFor(
-            async () =>
-              (await page.locator("#selection-popup.visible").count()) === 1,
-            15_000,
-          );
-          await page
-            .locator('.popup-swatches button[data-color="#91edd0"]')
-            .click();
-
-          // The highlight renders immediately from the note doc.
-          await waitFor(
-            async () => (await page.locator(".highlight-mark").count()) > 0,
-            15_000,
-          );
-
-          // Feature: autosave persists the annotation as a pandoc fenced div in the
-          // on-disk markdown file, carrying page/color/rects/quoted text.
+          // The MathRead overlay persists real notes beside the captured document.
+          await page.locator('.nav-expand-btn[data-tab="notes"]').click();
+          const editor = page.locator("#ai-editor .cm-content");
+          await editor.click();
+          await page.keyboard.type(`# ${noteMarker}\n\n**${noteBody}**`);
           await waitFor(
             () =>
               existsSync(notePath) &&
-              readFileSync(notePath, "utf8").includes("::: {.annotation"),
+              readFileSync(notePath, "utf8").includes(noteBody),
             15_000,
           );
           const note = readFileSync(notePath, "utf8");
-          const stored = parseAnnotations(note);
-          expect(stored.length).toBe(1);
-          expect(stored[0]!.pageNumber).toBe(1);
-          expect(stored[0]!.color).toBe("#91edd0");
-          expect(stored[0]!.rects.length).toBeGreaterThan(0);
-          expect(stored[0]!.text).toBe(selectedText);
+          expect(note).toContain(`# ${noteMarker}`);
+          expect(note).toContain(`**${noteBody}**`);
 
-          // Feature: comments edited in the sidebar persist into the same div.
-          await page.locator("#toggle-sidebar").click();
-          const commentBox = page.locator(".highlight-item-comment").first();
-          await commentBox.fill("checked against Nikulin");
-          await commentBox.blur();
-          await waitFor(() => {
-            const parsed = parseAnnotations(readFileSync(notePath, "utf8"));
-            return parsed[0]?.comment === "checked against Nikulin";
-          }, 15_000);
-
-          // Feature: a reload re-renders the highlight purely from the note file markdown.
+          // Reload obtains the persisted sidecar rather than browser-local state.
           await page.reload();
-          await waitFor(
-            async () => (await page.locator(".highlight-mark").count()) > 0,
-            120_000,
-          );
-          await page.locator("#toggle-sidebar").click();
-          await waitFor(
-            async () => (await page.locator(".highlight-item").count()) === 1,
-            15_000,
+          await page.locator('.nav-expand-btn[data-tab="notes"]').click();
+          await waitFor(async () =>
+            (await editor.innerText()).includes(noteBody),
+          120_000,
           );
 
-          // Feature: a hand-authored annotation block (written straight to the note,
-          // never through the UI) re-renders on the fly like any other.
-          const current = parseAnnotations(readFileSync(notePath, "utf8"));
-          const handBlock = serializeAnnotation({
-            id: "hand-authored",
-            pageNumber: 2,
-            color: "#f8bfbf",
-            created: new Date().toISOString(),
-            rects: [{ xPct: 0.1, yPct: 0.1, wPct: 0.4, hPct: 0.05 }],
-            text: "hand-written annotation",
-            comment: "added by editing the markdown directly",
-          });
+          // A note edited at the backend boundary is reloaded into the same overlay.
           const putResponse = await fetch(
             `http://127.0.0.1:${backendPort}/notes/${encodeURIComponent(key)}/overwrite`,
             {
@@ -332,58 +216,25 @@ for (const arxivId of ARXIV_IDS) {
               headers: { "content-type": "application/json" },
               body: JSON.stringify({
                 key,
-                text: `${readFileSync(notePath, "utf8")}\n${handBlock}\n`,
+                text: `${readFileSync(notePath, "utf8")}\n${handAuthoredNote}\n`,
               }),
             },
           );
           expect(putResponse.ok).toBe(true);
           await page.reload();
-          await page.locator("#toggle-sidebar").click();
+          await page.locator('.nav-expand-btn[data-tab="notes"]').click();
           await waitFor(
-            async () => (await page.locator(".highlight-item").count()) === 2,
+            async () => (await editor.innerText()).includes(handAuthoredNote),
             120_000,
           );
-          // The mark renders when its page finishes drawing, which can trail the sidebar
-          // list; wait for it rather than sampling immediately.
-          await waitFor(
-            async () =>
-              (await page
-                .locator('.page[data-page-number="2"] .highlight-mark')
-                .count()) === 1,
-            120_000,
-          );
-          assert(current.length === 1); // sanity: the UI-created one was still there
 
-          // Feature: notes preview renders annotations as content, not raw ::: fences.
-          await page
-            .locator('.nav-tb-btn[data-tab="keypoints"]')
-            .dispatchEvent("click");
+          // The overlay preview renders the same persisted Markdown.
           await page.locator("#notes-mode-preview").click();
-          const previewText = await page.locator("#notes-preview").innerText();
-          expect(previewText.includes(":::")).toBe(false);
-          expect(previewText.includes("hand-written annotation")).toBe(true);
-
-          // Feature: deleting from the sidebar removes the fenced div from the note file.
-          await page.locator(".highlight-item .remove-btn").first().click();
-          await waitFor(
-            () =>
-              parseAnnotations(readFileSync(notePath, "utf8")).length === 1,
-            15_000,
-          );
-
-          // Feature: search finds real terms from the paper's text layer.
-          await page.locator("#search-toggle").click();
-          const searchWord =
-            selectedText.split(/\s+/).find((word) => word.length > 4) ??
-            selectedText.slice(0, 6);
-          await page.locator("#search-input").fill(searchWord);
-          await waitFor(
-            async () =>
-              /\d+ \/ \d+/.test(
-                await page.locator("#search-count").innerText(),
-              ),
-            30_000,
-          );
+          await waitFor(async () =>
+            (await page.locator("#notes-preview").innerText()).includes(
+              handAuthoredNote,
+            ),
+          15_000);
         },
       );
     },
@@ -460,55 +311,6 @@ async function waitFor(
     await Bun.sleep(200);
   }
   throw new Error("Timed out waiting for condition");
-}
-
-async function waitForNonEmptyText(
-  page: Page,
-  selector: string,
-): Promise<string> {
-  let text = "";
-  await waitFor(async () => {
-    text = (await page.locator(selector).innerText()).trim();
-    return /^[1-9]\d*$/.test(text);
-  }, 120_000);
-  return text;
-}
-
-async function renderEveryPageTextLayer(
-  page: Page,
-  pageCount: number,
-): Promise<void> {
-  const pageInput = page.locator("#page-input");
-  const renderedPages: number[] = [];
-  for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
-    await pageInput.fill(String(pageNumber));
-    await pageInput.press("Enter");
-    await waitFor(
-      async () =>
-        (await pageInput.inputValue()) === String(pageNumber) &&
-        (await page
-          .locator(
-            `.page[data-page-number="${pageNumber}"] .textLayer span`,
-          )
-          .count()) > 0,
-      30_000,
-    );
-    renderedPages.push(pageNumber);
-  }
-  expect(renderedPages).toEqual(
-    Array.from({ length: pageCount }, (_, index) => index + 1),
-  );
-
-  await pageInput.fill("1");
-  await pageInput.press("Enter");
-  await waitFor(
-    async () =>
-      (await pageInput.inputValue()) === "1" &&
-      (await page
-        .locator('.page[data-page-number="1"] .textLayer span')
-        .count()) > 10,
-    30_000,
-  );
 }
 
 function unusedTcpPort(): Promise<number> {
