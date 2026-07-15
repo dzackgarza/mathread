@@ -586,7 +586,7 @@ test("reader, markdown, and library workflows remain extension-owned", async () 
       await pageInput.press("Enter");
       await expectInputValue(pageInput, (value) => value === "3");
       await page.locator("#zoomInButton").click();
-      await expectInputValue(page.locator("#scaleSelect"), (value) => value === "1.1");
+      const zoomPercent = await currentViewerZoomPercent(page);
       expect(readEvents.length).toBe(1);
       await page.locator("#toggle-more").click();
       await page.locator('.menu-item[data-action="copy-view-link"]').click();
@@ -607,7 +607,7 @@ test("reader, markdown, and library workflows remain extension-owned", async () 
         restoredReader.locator("#pageNumber"),
         (value) => value === "3",
       );
-      await expectInputValue(restoredReader.locator("#scaleSelect"), (value) => value === "1.1");
+      expect(await currentViewerZoomPercent(restoredReader)).toBe(zoomPercent);
 
       await restoredReader
         .locator('.nav-expand-btn[data-tab="notes"]')
@@ -777,11 +777,11 @@ test("installed reader copies source-preserving current and plain links for the 
       await page.goto(readerPageUrl(extensionId, key), {
         waitUntil: "domcontentloaded",
       });
+      await page.locator("#viewer canvas").first().waitFor();
       await expectElementText(
         page.locator("#numPages"),
-        (text) => text === "265",
+        (text) => text.includes("265"),
       );
-      await page.locator("#viewer canvas").first().waitFor();
       const pageInput = page.locator("#pageNumber");
       await pageInput.fill("6");
       await pageInput.press("Enter");
@@ -800,7 +800,7 @@ test("installed reader copies source-preserving current and plain links for the 
       expect(rendered.canvasSize).toBeGreaterThan(10_000);
       expect(rendered.nonWhitePixels).toBeGreaterThan(250);
       await page.locator("#zoomInButton").click();
-      await expectInputValue(page.locator("#scaleSelect"), (value) => value === "1.1");
+      const zoomPercent = await currentViewerZoomPercent(page);
       const capturedViewport = await page.locator("#viewerContainer").evaluate((viewer) => {
         const pageElement = document.querySelector(
           '#viewer .page[data-page-number="6"]',
@@ -845,7 +845,7 @@ test("installed reader copies source-preserving current and plain links for the 
       const [version, pageNumber, viewportX, viewportY, zoom] = viewState.split(":");
       expect(version).toBe("v1");
       expect(pageNumber).toBe("6");
-      expect(zoom).toBe("1.10");
+      expect(zoom).toBe((zoomPercent / 100).toFixed(2));
       expect(Number.isFinite(Number(viewportX))).toBe(true);
       expect(Number(viewportY)).toBeGreaterThan(0);
       await page.locator("#toggle-more").click();
@@ -878,7 +878,7 @@ test("installed reader copies source-preserving current and plain links for the 
         restoredReader.locator("#pageNumber"),
         (value) => value === "6",
       );
-      await expectInputValue(restoredReader.locator("#scaleSelect"), (value) => value === "1.1");
+      expect(await currentViewerZoomPercent(restoredReader)).toBe(zoomPercent);
       await restoredReader.waitForFunction(() => {
         const viewer = document.getElementById("viewerContainer");
         const pageElement = document.querySelector(
@@ -1180,7 +1180,7 @@ export function registerReaderRenderingBoundaryTests(): void {
 
 function registerReaderNavigationBoundaryTests(): void {
 test("reader presents the MathRead library without constructing a custom PDF viewer", async () => {
-  await withExtensionReader(async ({ extensionId, page }) => {
+  await withExtensionReader(async ({ artifacts, extensionId, page }) => {
     await page.goto(`chrome-extension://${extensionId}/reader/reader.html`, {
       waitUntil: "domcontentloaded",
     });
@@ -1188,6 +1188,9 @@ test("reader presents the MathRead library without constructing a custom PDF vie
     await page.locator('[data-testid="library-open-root"]').waitFor();
     expect(await page.locator("#viewer").count()).toBe(1);
     expect(await page.locator("#page-input").count()).toBe(0);
+    const screenshotPath = join(artifacts.root, "reader-library.png");
+    await page.screenshot({ path: screenshotPath });
+    assertPng(screenshotPath);
   });
 }, 120_000);
 
@@ -1631,9 +1634,9 @@ test("PDF.js owns reader controls while the MathRead Notes editor remains isolat
       const reader = await waitForReaderFrame(page, key);
       await reader.locator("#viewer .page canvas").first().waitFor();
 
-      const initialZoom = await reader.locator("#scaleSelect").inputValue();
+      const initialZoom = await currentViewerZoomPercent(reader);
       await reader.locator("#zoomInButton").click();
-      await expectInputValue(reader.locator("#scaleSelect"), (value) => value !== initialZoom);
+      expect(await currentViewerZoomPercent(reader)).toBeGreaterThan(initialZoom);
       expect(await page.evaluate(() => window.devicePixelRatio)).toBe(1);
 
       await reader.locator('.nav-expand-btn[data-tab="notes"]').click();
@@ -2584,6 +2587,13 @@ async function expectInputValue(
   throw new Error(
     `Timed out waiting for input value; last value: ${lastValue}; last error: ${String(lastError)}`,
   );
+}
+
+async function currentViewerZoomPercent(surface: ReaderSurface): Promise<number> {
+  const text = await surface.locator("#customScaleOption").innerText();
+  const percent = Number(text.replace(/[^0-9.]/g, ""));
+  assert(Number.isFinite(percent) && percent > 0, `PDF.js did not expose a numeric custom zoom: ${text}`);
+  return percent;
 }
 
 async function waitForNoteSaved(

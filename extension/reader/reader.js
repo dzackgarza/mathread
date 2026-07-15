@@ -81,15 +81,28 @@ function hashForView(view) {
 const launch = parseLaunch(new URLSearchParams(location.search));
 
 document.addEventListener("webviewerloaded", () => {
+  window.PDFViewerApplicationOptions.set("historyUpdateUrl", true);
   if (launch.kind === "library") {
     document.body.classList.add("mathread-library-mode");
+    window.PDFViewerApplicationOptions.set("defaultUrl", "");
     return;
   }
-  window.PDFViewerApplicationOptions.set("defaultUrl", backendPdfUrl(launch.key));
+  window.PDFViewerApplicationOptions.set("defaultUrl", "");
   if (launch.view !== null) {
     location.hash = hashForView(launch.view);
   }
+  void openBackendDocument(launch.key);
 });
+
+async function openBackendDocument(key) {
+  await window.PDFViewerApplication.initializedPromise;
+  const response = await fetch(backendPdfUrl(key));
+  assert(response.ok, `MathRead PDF load failed with ${response.status} ${response.statusText}`);
+  await window.PDFViewerApplication.open({
+    data: await response.arrayBuffer(),
+    filename: key,
+  });
+}
 
 const overlay = document.getElementById("mathread-overlay");
 const panel = document.getElementById("mathread-panel");
