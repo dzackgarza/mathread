@@ -744,6 +744,8 @@ export function registerNumdamRenderingBoundaryTest(): void {
 test("installed reader copies source-preserving current and plain links for the canonical Numdam PDF", async () => {
   await withExtensionReader(
     async ({ artifacts, backendPort, context, extensionId, page }) => {
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(String(error)));
       const numdamBytes = await numdamFixtureBytes();
       const numdamSourceUrl = `${numdamRegressionPdfUrl}?title=source%20owned~query&mathread-view=source-owned&mathread-link=v1.source-owned`;
       const key = await preCaptureExternalPdfThroughBackend(
@@ -904,6 +906,7 @@ test("installed reader copies source-preserving current and plain links for the 
         desktopMenuPath,
         narrowMenuPath,
       });
+      expect(pageErrors).toEqual([]);
     },
   );
 }, 120_000);

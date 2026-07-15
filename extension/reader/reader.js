@@ -81,6 +81,8 @@ let noteVersion;
 let saveTimer = null;
 let replacingEditorText = false;
 let pendingLegacyMigrationStorageKey = null;
+let pdfViewerState = { kind: "awaiting" };
+let currentPdfViewState = { kind: "awaiting" };
 const documentEntry = launch.kind === "document"
   ? getLibrary().then((entries) => {
     const entry = entries.find((candidate) => candidate.key === launch.key);
@@ -89,6 +91,53 @@ const documentEntry = launch.kind === "document"
     return entry;
   })
   : null;
+
+if (launch.kind === "document") {
+  document.addEventListener("DOMContentLoaded", waitForPdfViewer, { once: true });
+}
+
+function waitForPdfViewer() {
+  const application = window.PDFViewerApplication;
+  assert(application !== null && typeof application === "object", "PDF.js application is unavailable");
+  const initialized = application.initializedPromise;
+  assert(initialized !== null && typeof initialized === "object" && typeof initialized.then === "function", "PDF.js initialization is unavailable");
+  void initialized.then(() => observePdfView(application));
+}
+
+function observePdfView(application) {
+  const eventBus = application.eventBus;
+  const pdfViewer = application.pdfViewer;
+  assert(eventBus !== null && typeof eventBus === "object" && typeof eventBus.on === "function", "PDF.js view event bus is unavailable");
+  assert(pdfViewer !== null && typeof pdfViewer === "object" && typeof pdfViewer.update === "function", "PDF.js viewer is unavailable");
+  pdfViewerState = { kind: "ready", pdfViewer };
+  eventBus.on("updateviewarea", ({ location }) => {
+    currentPdfViewState = parsePdfView(location);
+  });
+}
+
+function parsePdfView(location) {
+  assert(location !== null && typeof location === "object", "PDF.js view update has no location");
+  const { pageNumber, scale, left, top } = location;
+  assert(Number.isInteger(pageNumber) && pageNumber >= 0, "PDF.js view page must be nonnegative");
+  if (
+    pageNumber === 0
+    || typeof scale !== "number"
+    || !Number.isFinite(scale)
+    || scale === 0
+  ) {
+    return { kind: "awaiting" };
+  }
+  assert(pageNumber >= 1, "PDF.js view page must be positive");
+  assert(scale > 0, "PDF.js view zoom must be positive");
+  assert(Number.isFinite(left) && Number.isFinite(top), "PDF.js view coordinates must be finite");
+  return {
+    kind: "available",
+    page: pageNumber,
+    zoom: scale / 100,
+    x: Math.round(left),
+    y: Math.round(top),
+  };
+}
 
 function selectOverlay(name) {
   panel.dataset.panel = name;
@@ -146,17 +195,19 @@ async function sourceUrl() {
 }
 
 function currentPdfView() {
-  const state = new URLSearchParams(location.hash.slice(1));
-  const page = Number(state.get("page"));
-  const zoomParts = state.get("zoom")?.split(",");
-  assert(Number.isInteger(page) && page >= 1, "PDF.js did not publish a valid current page");
-  assert(zoomParts !== undefined, "PDF.js did not publish a current zoom");
-  const zoom = Number(zoomParts[0]);
-  assert(Number.isFinite(zoom) && zoom > 0, "PDF.js current zoom must be numeric to create a view link");
-  const x = zoomParts[1] === undefined ? 0 : Number(zoomParts[1]);
-  const y = zoomParts[2] === undefined ? 0 : Number(zoomParts[2]);
-  assert(Number.isFinite(x) && Number.isFinite(y), "PDF.js current viewport must be finite");
-  return { page, zoom: zoom / 100, x: Math.round(x), y: Math.round(y) };
+  switch (pdfViewerState.kind) {
+    case "awaiting":
+      throw new Error("PDF.js viewer has not initialized");
+    case "ready":
+      pdfViewerState.pdfViewer.update();
+      break;
+  }
+  switch (currentPdfViewState.kind) {
+    case "available":
+      return currentPdfViewState;
+    case "awaiting":
+      throw new Error("PDF.js has not published a current view");
+  }
 }
 
 async function renderLibrary() {
