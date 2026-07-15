@@ -77,17 +77,6 @@ const numdamFixtureSha256 =
   "0b81cacbf796f3ea72d35ab0faaeec2215a8f390e050c9142d621cfd6922976e";
 const numdamFixtureChunkCount = 8;
 const numdamFixtureFetchAttempts = 4;
-const documentControlIds = [
-  "prev-page",
-  "next-page",
-  "page-input",
-  "zoom-out",
-  "zoom-in",
-  "fit-width",
-  "rotate",
-  "download",
-];
-
 type ExtensionManifest = {
   host_permissions: string[];
 };
@@ -1227,15 +1216,15 @@ export function registerReaderRenderingBoundaryTests(): void {
 }
 
 function registerReaderNavigationBoundaryTests(): void {
-test("reader disables document-only toolbar actions when no document key is open", async () => {
+test("reader presents the MathRead library without constructing a custom PDF viewer", async () => {
   await withExtensionReader(async ({ extensionId, page }) => {
     await page.goto(`chrome-extension://${extensionId}/reader/reader.html`, {
       waitUntil: "domcontentloaded",
     });
-    const state = await waitForNoDocumentReaderState(page);
-    expect(state.docTitle).toBe("MathRead Library");
-    expect(state.viewerText).toContain("No document open");
-    expect(state.enabledDocumentControls).toEqual([]);
+    await page.locator('.nav-expand-btn[data-tab="library"]').click();
+    await page.locator('[data-testid="library-open-root"]').waitFor();
+    expect(await page.locator("#viewer").count()).toBe(1);
+    expect(await page.locator("#page-input").count()).toBe(0);
   });
 }, 120_000);
 
@@ -1252,28 +1241,26 @@ test("reader delegates stable responsive navigation to the PDF.js viewer", async
       await page.goto(readerPageUrl(extensionId, key), {
         waitUntil: "domcontentloaded",
       });
-      const pages = page.locator("#pdf-viewer .page");
+      const pages = page.locator("#viewer .page");
       await pages.first().waitFor();
-      await expectElementText(page.locator("#page-total"), (text) => /^\d+$/.test(text));
-      const pageTotal = Number(await page.locator("#page-total").textContent());
-      expect(await pages.count()).toBe(pageTotal);
-      expect(await page.getByRole("textbox", { name: "Page number" }).count()).toBe(1);
+      await expectInputValue(page.locator("#pageNumber"), (value) => value === "1");
+      expect(await page.locator("#page-input").count()).toBe(0);
 
       await pages.first().evaluate((element) => {
         element.setAttribute("data-stability-witness", "original-page-view");
       });
-      await page.locator("#zoom-in").click();
-      await page.locator("#rotate").click();
-      await page.locator("#zoom-out").click();
+      await page.locator("#zoomInButton").click();
+      await page.locator("#rotateCwButton").click();
+      await page.locator("#zoomOutButton").click();
       expect(await page.locator('[data-stability-witness="original-page-view"]').count()).toBe(1);
 
       await page.locator("body").click({ position: { x: 700, y: 300 } });
       await page.keyboard.press("PageDown");
       await page.keyboard.press("PageDown");
-      expect(await page.locator("#page-input").inputValue()).toBe("3");
+      await expectInputValue(page.locator("#pageNumber"), (value) => value === "3");
       await page.screenshot({ path: join(artifacts.root, "viewer-desktop.png") });
 
-      await page.locator("#fit-width").click();
+      await page.locator("#scaleSelect").selectOption("page-width");
       await page.evaluate(() => {
         document.documentElement.dataset.resizeProofCount = "0";
         window.addEventListener("resize", () => {
@@ -1287,32 +1274,16 @@ test("reader delegates stable responsive navigation to the PDF.js viewer", async
         });
       });
 
-      const collapsedNavGeometry = await waitForFitWidthConvergence(
+      const initialGeometry = await waitForFitWidthConvergence(
         page,
-        "nav-collapsed-initial",
+        "initial",
       );
       await page.locator('.nav-expand-btn[data-tab="library"]').click();
-      const expandedNavGeometry = await waitForFitWidthConvergence(
+      const overlayGeometry = await waitForFitWidthConvergence(
         page,
-        "nav-expanded",
+        "library-overlay",
       );
-      expect(expandedNavGeometry.clientWidth).toBeLessThan(
-        collapsedNavGeometry.clientWidth,
-      );
-      expect(expandedNavGeometry.scrollWidth).toBeLessThanOrEqual(
-        expandedNavGeometry.clientWidth + 1,
-      );
-      await page.locator("#nav-collapse").click();
-      const recollapsedNavGeometry = await waitForFitWidthConvergence(
-        page,
-        "nav-recollapsed",
-      );
-      expect(recollapsedNavGeometry.clientWidth).toBe(
-        collapsedNavGeometry.clientWidth,
-      );
-      expect(recollapsedNavGeometry.scrollWidth).toBeLessThanOrEqual(
-        recollapsedNavGeometry.clientWidth + 1,
-      );
+      expect(overlayGeometry.clientWidth).toBe(initialGeometry.clientWidth);
 
       const pageWidths: number[] = [];
       for (const viewport of [
@@ -1357,7 +1328,7 @@ test("reader delegates stable responsive navigation to the PDF.js viewer", async
         scrollWidth: toolbar.scrollWidth,
       }));
       expect(toolbarGeometry.scrollWidth).toBeLessThanOrEqual(toolbarGeometry.clientWidth);
-      expect(await page.locator("#fit-width").isVisible()).toBe(true);
+      expect(await page.locator("#scaleSelect").isVisible()).toBe(true);
       expect(pageErrors).toEqual([]);
       expect(
         await page.locator("html").getAttribute("data-resize-proof-error"),
@@ -2867,70 +2838,6 @@ async function waitForNoteSaved(
   }
   throw new Error(
     `Timed out waiting for saved note text; last text: ${lastText}`,
-  );
-}
-
-async function waitForNoDocumentReaderState(page: Page): Promise<{
-  docTitle: string;
-  enabledDocumentControls: string[];
-  viewerText: string;
-}> {
-  let lastState = {
-    docTitle: "",
-    enabledDocumentControls: [] as string[],
-    viewerText: "",
-  };
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    lastState = await page.evaluate((ids) => {
-      const disabledCapable = (
-        element: HTMLElement,
-      ): element is HTMLButtonElement | HTMLInputElement => {
-        return (
-          element instanceof HTMLButtonElement ||
-          element instanceof HTMLInputElement
-        );
-      };
-      const enabledDocumentControlSelector = (
-        id: string,
-      ): string | undefined => {
-        const element = document.getElementById(id);
-        if (
-          element === null ||
-          !disabledCapable(element) ||
-          !element.disabled
-        ) {
-          return `#${id}`;
-        }
-        return undefined;
-      };
-      const enabledDocumentControls = ids.flatMap((id) => {
-        const selector = enabledDocumentControlSelector(id);
-        return selector === undefined ? [] : [selector];
-      });
-      const docTitle = document.getElementById("doc-title")?.textContent;
-      const viewerText = document.getElementById("viewer")?.textContent;
-      if (docTitle === undefined || docTitle === null) {
-        throw new Error("reader document title is missing");
-      }
-      if (viewerText === undefined || viewerText === null) {
-        throw new Error("reader viewer text is missing");
-      }
-      return {
-        docTitle,
-        enabledDocumentControls,
-        viewerText,
-      };
-    }, documentControlIds);
-    if (
-      lastState.docTitle === "MathRead Library" &&
-      lastState.viewerText.includes("No document open")
-    ) {
-      return lastState;
-    }
-    await Bun.sleep(100);
-  }
-  throw new Error(
-    `Timed out waiting for no-document reader state: ${JSON.stringify(lastState)}`,
   );
 }
 
