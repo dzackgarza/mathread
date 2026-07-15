@@ -34,29 +34,10 @@ copyFileSync(
   join("extension", "reader", "vendor", "codemirror.mjs"),
   join(distExt, "reader", "vendor", "codemirror.mjs"),
 );
-for (const asset of ["pdf.min.mjs", "pdf.worker.min.mjs", "LICENSE"]) {
-  copyFileSync(
-    join("extension", "reader", "vendor", "pdfjs", asset),
-    join(distExt, "reader", "vendor", "pdfjs", asset),
-  );
-}
-for (const asset of ["pdf_viewer.mjs", "pdf_viewer.css"]) {
-  copyFileSync(
-    join("node_modules", "pdfjs-dist", "web", asset),
-    join(distExt, "reader", "vendor", "pdfjs", asset),
-  );
-}
 cpSync(
-  join("node_modules", "pdfjs-dist", "web", "images"),
-  join(distExt, "reader", "vendor", "pdfjs", "images"),
+  join("extension", "reader", "vendor", "pdfjs", "generic"),
+  join(distExt, "reader", "vendor", "pdfjs", "generic"),
   { recursive: true },
 );
-for (const directory of ["cmaps", "standard_fonts", "wasm"]) {
-  cpSync(
-    join("node_modules", "pdfjs-dist", directory),
-    join(distExt, "reader", "vendor", "pdfjs", directory),
-    { recursive: true },
-  );
-}
 
 console.log("Extension assembled at dist/extension.");

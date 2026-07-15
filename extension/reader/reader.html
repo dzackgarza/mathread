@@ -1211,5 +1211,35 @@ See https://github.com/adobe-type-tools/cmap-resources
     </div>
     <!-- outerContainer -->
     <div id="printContainer"></div>
+
+    <aside id="mathread-overlay" aria-label="MathRead tools">
+      <section id="mathread-panel" data-panel="closed">
+        <header class="mathread-panel-header">
+          <span>MathRead</span>
+          <button id="mathread-close-panel" type="button" aria-label="Close MathRead panel">Close</button>
+        </header>
+        <section id="library-list" hidden></section>
+        <section id="notes-panel" hidden>
+          <div class="notes-toolbar">
+            <button id="notes-save" type="button">Save</button>
+            <button id="notes-mode-preview" type="button">Preview</button>
+            <span id="notes-status" role="status"></span>
+          </div>
+          <div id="notes-path"></div>
+          <div id="ai-editor"></div>
+          <article id="notes-preview" hidden></article>
+          <div id="notes-error" hidden></div>
+        </section>
+      </section>
+      <div class="mathread-overlay-actions">
+        <button class="nav-expand-btn" data-tab="library" type="button">Library</button>
+        <button class="nav-expand-btn" data-tab="notes" type="button">Notes</button>
+        <button id="toggle-more" type="button">More</button>
+      </div>
+      <menu id="more-menu" class="more-menu" hidden>
+        <button class="menu-item" data-action="copy-view-link" type="button">Copy current view link</button>
+        <button class="menu-item" data-action="copy-plain-link" type="button">Copy plain link</button>
+      </menu>
+    </aside>
   </body>
 </html>
