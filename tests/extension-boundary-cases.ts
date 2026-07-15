@@ -793,7 +793,7 @@ test("reader Key Points panel blocks stale autosave and resolves disk conflicts"
         (text) => text === "Save failed: conflict",
       );
       await expectElementText(page.locator("#notes-error"), (text) =>
-        text.includes("modified on disk"),
+        text.includes("Version mismatch"),
       );
       expect(readFileSync(sidecarPath, "utf8")).toBe(
         "disk edit from another tab\n",
@@ -854,14 +854,15 @@ test("reader Key Points panel surfaces a loud error when the backend dies (no lo
         waitUntil: "domcontentloaded",
       });
       await waitForCanvasCount(page, 1);
+      await page.locator('.nav-expand-btn[data-tab="notes"]').click();
+      const editor = page.locator("#ai-editor .cm-content");
+      await editor.waitFor();
 
       backend.process.kill();
       await backend.process.exited;
 
-      // The note loaded at boot; with the backend gone, the autosave PUT must surface a
-      // visible save failure - never fall back to a browser-local store.
-      await page.locator('.nav-expand-btn[data-tab="notes"]').click();
-      const editor = page.locator("#ai-editor .cm-content");
+      // With a loaded note editor and no backend, autosave must surface a visible
+      // failure instead of falling back to a browser-local store.
       await editor.click();
       await page.keyboard.type("orphaned edit");
       await expectElementText(page.locator("#notes-status"), (text) =>
