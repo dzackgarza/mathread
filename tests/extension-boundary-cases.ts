@@ -2720,7 +2720,11 @@ function unusedTcpPort(): Promise<number> {
   });
 }
 
-const testRootMaxAgeMs = 3 * 24 * 60 * 60 * 1000;
+// Evidence from anything but the latest run is worthless: if it passed there is
+// nothing to inspect, and a new failure supersedes an old one. Each test process
+// therefore deletes every prior root at startup. The two-hour guard only protects
+// a concurrently running suite's roots from deletion mid-flight.
+const testRootMaxAgeMs = 2 * 60 * 60 * 1000;
 let prunedStaleTestRoots = false;
 
 function mkdtemp(prefix: string): string {
@@ -2732,10 +2736,9 @@ function mkdtemp(prefix: string): string {
 }
 
 /**
- * Failed runs retain evidence (see cleanupTestRoot), so roots accumulate across
- * sessions: 1,800 of them filled the disk and starved later browser launches
- * into arbitrary timeouts (#34, absorbed #37). Prune roots past the evidence
- * window once per test process.
+ * Failed runs retain evidence (see cleanupTestRoot). Without pruning, roots
+ * accumulate across sessions: 1,800 of them filled the disk and starved later
+ * browser launches into arbitrary timeouts (#34, absorbed #37).
  */
 function pruneStaleTestRoots(): void {
   for (const entry of readdirSync(tmpdir())) {
