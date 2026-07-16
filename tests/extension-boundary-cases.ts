@@ -2314,6 +2314,11 @@ function attachPageDiagnostics(
   artifacts: CaptureArtifacts,
   scenario: CaptureScenario,
 ): void {
+  void page.addInitScript(() => {
+    setInterval(() => {
+      console.log(`mathread-heartbeat ${Date.now()}`);
+    }, 2000);
+  });
   page.on("console", (message) => {
     appendEvent(artifacts.eventsLogPath, {
       type: "browser-console",
@@ -2484,7 +2489,11 @@ function createCaptureArtifacts(
 }
 
 function appendEvent(logPath: string, event: PersistedEvent): void {
-  appendFileSync(logPath, `${JSON.stringify(event)}\n`);
+  // ts is the bun-side arrival time. The page-side heartbeat (see
+  // attachPageDiagnostics) carries its own emit time, so a stalled run's log
+  // distinguishes a browser that stopped emitting from a test process that
+  // stopped receiving.
+  appendFileSync(logPath, `${JSON.stringify({ ts: new Date().toISOString(), ...event })}\n`);
 }
 
 function assertEvidenceArtifacts(
