@@ -112,7 +112,9 @@ async function capturePdf(sourceUrl: string): Promise<string> {
       }),
   );
   if (!response.ok) {
-    throw new Error(response.error);
+    // A capture that fails inside the worker can also be manifest skew (a
+    // permission the loaded extension no longer grants); diagnose either way.
+    throw await describeCaptureFailure(new Error(response.error));
   }
   return libraryKeyFromStoredPath(response.result.stored_path);
 }

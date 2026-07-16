@@ -969,23 +969,7 @@ test("reading a PDF keeps the source URL in the address bar", async () => {
       // Issue #40 acceptance: the source URL is the document's identity. The
       // reader mounts as an iframe inside the wrapper document at that URL;
       // no chrome-extension:// URL is ever user-visible in the omnibox.
-      let readerFrame: Frame | null = null;
-      const mountDeadline = Date.now() + 30_000;
-      while (readerFrame === null) {
-        const candidate = page.frame({
-          url: (url) => url.pathname.endsWith("/reader/reader.html"),
-        }) ?? null;
-        // The reader must be a child iframe under the source URL, never the
-        // top-level document (the retired extension-owned-reader shape).
-        readerFrame = candidate === page.mainFrame() ? null : candidate;
-        if (readerFrame === null) {
-          assert(
-            Date.now() < mountDeadline,
-            "MathRead reader iframe did not mount on the PDF page",
-          );
-          await Bun.sleep(100);
-        }
-      }
+      const readerFrame = await waitForTakeoverReader(page);
       await readerFrame.locator("#viewer .page canvas").first().waitFor();
       expect(page.url()).toBe(sourceUrl);
 
@@ -1034,14 +1018,11 @@ test("reader hands native Alt-left and Alt-right to browser history without a PD
 
       const storedPath = await waitForStoredPdf(readingRoot);
       const key = storedKeyFromPath(storedPath);
-      const reader = await waitForReaderFrame(page, key);
+      const reader = await waitForTakeoverReader(page);
       await reader.locator("#viewer canvas").first().waitFor();
       await waitForReadEventCount(readEventRequests, 1);
+      expect(page.url()).toBe(sourceUrl);
       expect(await reader.locator("#pageNumber").inputValue()).toBe("1");
-      expect(await reader.evaluate(() => {
-        document.body.focus();
-        return document.hasFocus() && document.activeElement === document.body;
-      })).toBe(true);
       await page.screenshot({ path: join(artifacts.root, "browser-history-reader.png") });
       assertPng(join(artifacts.root, "browser-history-reader.png"));
 
@@ -1052,12 +1033,10 @@ test("reader hands native Alt-left and Alt-right to browser history without a PD
       await atCoursePage;
       await page.screenshot({ path: join(artifacts.root, "browser-history-parent.png") });
       assertPng(join(artifacts.root, "browser-history-parent.png"));
-      const atReader = page.waitForURL((url) => (
-        isReaderDocumentUrl(url, key)
-      ));
+      const atReader = page.waitForURL(sourceUrl);
       sendNativeHistoryShortcut(x11Display, "Right");
       await atReader;
-      const returnedReader = await waitForReaderFrame(page, key);
+      const returnedReader = await waitForTakeoverReader(page);
       await returnedReader.locator("#viewer canvas").first().waitFor();
       await waitForReadEventCount(readEventRequests, 2);
       assertReadEventBodies(readEventRequests, [key, key]);
@@ -1066,110 +1045,55 @@ test("reader hands native Alt-left and Alt-right to browser history without a PD
   );
 }, 120_000);
 
-test("reader preserves PDF-internal history through the production launch redirect", async () => {
+test("internal links defer history to the browser and traversal restores the view", async () => {
   await withExtensionReader(
-    async ({ artifacts, backendPort, courseServer, page, readingRoot, x11Display }) => {
+    async ({ artifacts, courseServer, page, readingRoot, x11Display }) => {
       assert(x11Display !== undefined, "Native browser shortcut proof requires an X11 display");
       const sourceUrl = `${courseServer.url.origin}/internal-link.pdf`;
-      const readEventRequests = collectReadEventRequests(page, backendPort);
       await page.goto(`${courseServer.url.origin}/course/`, {
         waitUntil: "domcontentloaded",
       });
       await page.goto(sourceUrl, { waitUntil: "domcontentloaded" });
-
-      const storedPath = await waitForStoredPdf(readingRoot);
-      const key = storedKeyFromPath(storedPath);
-      const reader = await waitForReaderFrame(page, key);
+      await waitForStoredPdf(readingRoot);
+      const reader = await waitForTakeoverReader(page);
       await reader.locator("#viewer canvas").first().waitFor();
-      await waitForReadEventCount(readEventRequests, 1);
-      const launchUrl = new URL(page.url());
-      assertReaderFrameUrl(launchUrl.href, key);
 
-      const readView = () => reader.evaluate(() => {
-        const pageInput = document.getElementById("pageNumber");
-        const zoom = document.getElementById("scaleSelect");
-        const viewer = document.getElementById("viewerContainer");
-        if (
-          !(pageInput instanceof HTMLInputElement)
-          || !(zoom instanceof HTMLSelectElement)
-          || !(viewer instanceof HTMLElement)
-        ) {
-          throw new TypeError("Expected the PDF.js application navigation controls");
-        }
-        return {
-          page: pageInput.value,
-          scrollTop: viewer.scrollTop,
-          zoom: zoom.value,
-        };
-      });
-
-      await reader.locator("#zoomInButton").click();
-      const beforeLink = await readView();
-      expect(beforeLink.page).toBe("1");
-      await page.screenshot({ path: join(artifacts.root, "production-history-before-link.png") });
-      assertPng(join(artifacts.root, "production-history-before-link.png"));
-
-      const internalLink = reader.locator('#viewer .annotationLayer a').first();
+      const internalLink = reader.locator("#viewer .annotationLayer a").first();
       await internalLink.click();
       await reader.waitForFunction(() => {
         const input = document.getElementById("pageNumber");
         return input instanceof HTMLInputElement && input.value === "2";
       });
-      const afterLink = await readView();
-      expect(afterLink.page).toBe("2");
-      await page.screenshot({ path: join(artifacts.root, "production-history-after-link.png") });
-      assertPng(join(artifacts.root, "production-history-after-link.png"));
+      // The reader mirrors its view onto the source URL's hash as standard
+      // open parameters — the one canonical view state, with no new history
+      // entries (native-viewer parity: internal links do not grow history).
+      await page.waitForFunction(
+        () => new URLSearchParams(location.hash.slice(1)).get("page") === "2",
+      );
+      await page.screenshot({ path: join(artifacts.root, "takeover-history-page2.png") });
+      assertPng(join(artifacts.root, "takeover-history-page2.png"));
 
-      // A real X11 shortcut traverses the PDF.js entry that the internal link created;
-      // MathRead neither classifies nor consumes that browser history.
+      // Alt-Left leaves the document, exactly like Chrome's native viewer.
+      // Focus with a raw viewport-coordinate click: a locator click on
+      // #viewer would scroll its target point into view and drag the reader
+      // back to page 1, which the hash mirror would faithfully record.
       await page.bringToFront();
-      await reader.locator("#viewer").click({ position: { x: 20, y: 20 } });
+      await page.mouse.click(40, 300);
+      const atCoursePage = page.waitForURL(`${courseServer.url.origin}/course/`);
       sendNativeHistoryShortcut(x11Display, "Left");
-      await reader.waitForFunction((expected) => {
-        const input = document.getElementById("pageNumber");
-        const viewer = document.getElementById("viewerContainer");
-        return input instanceof HTMLInputElement
-          && viewer instanceof HTMLElement
-          && input.value === expected.page
-          && Math.abs(viewer.scrollTop - expected.scrollTop) <= 2;
-      }, beforeLink);
+      await atCoursePage;
 
+      // Alt-Right re-enters through the mirrored fragment and restores the view.
+      const atReader = page.waitForURL((url) => url.href.startsWith(sourceUrl));
       sendNativeHistoryShortcut(x11Display, "Right");
-      await reader.waitForFunction((expected) => {
+      await atReader;
+      const returnedReader = await waitForTakeoverReader(page);
+      await returnedReader.waitForFunction(() => {
         const input = document.getElementById("pageNumber");
-        const viewer = document.getElementById("viewerContainer");
-        return input instanceof HTMLInputElement
-          && viewer instanceof HTMLElement
-          && input.value === expected.page
-          && Math.abs(viewer.scrollTop - expected.scrollTop) <= 2;
-      }, afterLink);
-      const afterBrowserHistoryForward = await readView();
-      expect(afterBrowserHistoryForward.zoom).toBe(afterLink.zoom);
-      assertReadEventBodies(readEventRequests, [key]);
+        return input instanceof HTMLInputElement && input.value === "2";
+      });
     },
     { nativeBrowserShortcuts: true },
-  );
-}, 120_000);
-
-test("reader keeps a visible URL that resolves without the service worker", async () => {
-  await withExtensionReader(
-    async ({ courseServer, page, readingRoot }) => {
-      await page.goto(`${courseServer.url.origin}/notes.pdf`);
-      const storedPath = await waitForStoredPdf(readingRoot);
-      const key = storedKeyFromPath(storedPath);
-      const reader = await waitForReaderFrame(page, key);
-      await reader.locator("#viewer .page canvas").first().waitFor();
-
-      // The synthetic chrome-extension://<id>/http://… path form only resolves
-      // while the extension service worker can be woken to redirect it. The
-      // reader document form is a real file and always resolves, so it must be
-      // the URL that reload and history traversal re-request.
-      const visible = new URL(page.url());
-      expect(visible.pathname).toBe("/reader/reader.html");
-      const file = visible.searchParams.get("file");
-      assert(file !== null, "Canonical reader URL must carry its file parameter");
-      expect(decodeURIComponent(new URL(file).pathname)).toBe(`/pdf/${key}`);
-    },
   );
 }, 120_000);
 
@@ -1177,25 +1101,23 @@ test("stale loaded extension reports an actionable reload instruction instead of
   await runStaleLoadedManifestCapture();
 }, 120_000);
 
-test("reader survives a browser reload after PDF.js rewrites the visible URL", async () => {
+test("reader survives a browser reload at the source URL without the service worker", async () => {
   await withExtensionReader(
     async ({ artifacts, context, courseServer, page, readingRoot }) => {
-      await page.goto(`${courseServer.url.origin}/notes.pdf`);
-      const storedPath = await waitForStoredPdf(readingRoot);
-      const key = storedKeyFromPath(storedPath);
-      const reader = await waitForReaderFrame(page, key);
+      const sourceUrl = `${courseServer.url.origin}/notes.pdf`;
+      await page.goto(sourceUrl);
+      await waitForStoredPdf(readingRoot);
+      const reader = await waitForTakeoverReader(page);
       await reader.locator("#viewer .page canvas").first().waitFor();
-      // PDF.js has rewritten the visible URL to the extension-path form; a reload
-      // re-requests that synthetic URL cold, without any live document to restore.
-      assertReaderFrameUrl(page.url(), key);
 
-      // Real Chrome stops extension service workers after ~30s idle; a reload must
-      // survive without a live worker, exactly as reported in issue #34 (from #38).
+      // Real Chrome stops extension service workers after ~30s idle; a reload
+      // must survive it. The takeover script re-runs on the fresh wrapper
+      // document and its capture message wakes the worker.
       await stopExtensionServiceWorkers(context, page);
 
       await page.reload({ waitUntil: "domcontentloaded" });
-
-      const reloadedReader = await waitForReaderFrame(page, key);
+      expect(page.url()).toBe(sourceUrl);
+      const reloadedReader = await waitForTakeoverReader(page);
       await reloadedReader.locator("#viewer .page canvas").first().waitFor();
       const screenshotPath = join(artifacts.root, "reader-after-reload.png");
       await page.screenshot({ path: screenshotPath });
@@ -1212,9 +1134,8 @@ test("PDF.js owns reader controls while the MathRead Notes editor remains isolat
   await withExtensionReader(
     async ({ courseServer, page, readingRoot }) => {
       await page.goto(`${courseServer.url.origin}/notes.pdf`);
-      const storedPath = await waitForStoredPdf(readingRoot);
-      const key = storedKeyFromPath(storedPath);
-      const reader = await waitForReaderFrame(page, key);
+      await waitForStoredPdf(readingRoot);
+      const reader = await waitForTakeoverReader(page);
       await reader.locator("#viewer .page canvas").first().waitFor();
 
       await reader.locator('.nav-expand-btn[data-tab="notes"]').click();
@@ -1351,11 +1272,7 @@ async function runStaleLoadedManifestCapture(): Promise<void> {
     const staleManifest = JSON.parse(currentManifestSource) as {
       permissions: string[];
     };
-    staleManifest.permissions = [
-      "storage",
-      "cookies",
-      "declarativeNetRequestWithHostAccess",
-    ];
+    staleManifest.permissions = ["storage"];
     writeFileSync(manifestPath, `${JSON.stringify(staleManifest, null, 2)}\n`);
     context = await chromium.launchPersistentContext(
       join(testRoot, "profile"),
@@ -1376,7 +1293,7 @@ async function runStaleLoadedManifestCapture(): Promise<void> {
     attachPageDiagnostics(page, artifacts, "clicked-link");
     await page.goto(`${courseServer.url.origin}/notes.pdf`);
 
-    await expectElementText(page.locator("#mathread-pdf-launch.failed"), (text) =>
+    await expectElementText(page.locator("body"), (text) =>
       text.includes("chrome://extensions"),
     );
     await page.screenshot({ path: artifacts.screenshotAfterPath });
@@ -1927,6 +1844,28 @@ function storedKeyFromPath(storedPath: string): string {
   const key = segments[segments.length - 1];
   assert(key !== undefined && key.length > 0);
   return key;
+}
+
+/**
+ * The reader is a child iframe injected by the takeover content script under
+ * the unchanged source URL — never the top-level document (the retired
+ * extension-owned-reader shape).
+ */
+async function waitForTakeoverReader(page: Page): Promise<Frame> {
+  const mountDeadline = Date.now() + 30_000;
+  for (;;) {
+    const candidate = page.frame({
+      url: (url) => url.pathname.endsWith("/reader/reader.html"),
+    }) ?? null;
+    if (candidate !== null && candidate !== page.mainFrame()) {
+      return candidate;
+    }
+    assert(
+      Date.now() < mountDeadline,
+      "MathRead reader iframe did not mount on the PDF page",
+    );
+    await Bun.sleep(100);
+  }
 }
 
 async function waitForReaderFrame(

@@ -53,7 +53,8 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "reader/*"
+        "reader/*",
+        "manifest.json"
       ],
       "matches": [
         "http://*/*",
