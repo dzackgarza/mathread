@@ -7,7 +7,6 @@ import {
   marked,
   openLibraryRoot,
   overwriteNote,
-  pdfUrl as backendPdfUrl,
   postReadEvent,
   saveNote,
 } from "./vendor/backend.js";
@@ -39,15 +38,9 @@ function parseLaunch(params) {
     // surface (#40): the parent page at the source URL streams the PDF in.
     return window.parent === window ? { kind: "library" } : { kind: "takeover" };
   }
-  const url = new URL(file);
-  const path = url.pathname.split("/");
-  const key = path.at(-1);
-  assert(
-    path.at(-2) === "pdf" && key !== undefined && key.length > 0,
-    "MathRead reader file URL must name a backend library PDF",
+  throw new Error(
+    "MathRead no longer reads backend copies at reader URLs; navigate to the PDF's source URL instead.",
   );
-  assert(!key.includes("/"), "MathRead reader key must be a library filename");
-  return { kind: "document", key: decodeURIComponent(key) };
 }
 
 const launch = parseLaunch(new URLSearchParams(location.search));
@@ -92,23 +85,12 @@ const pdfApplicationReady = new Promise((resolve) => {
 });
 
 function documentKey() {
-  if (launch.kind === "document") {
-    return launch.key;
-  }
   assert(
     launch.kind === "takeover" && takeoverDocument !== null,
     "MathRead document key requires an open document",
   );
   return takeoverDocument.key;
 }
-const documentEntry = launch.kind === "document"
-  ? getLibrary().then((entries) => {
-    const entry = entries.find((candidate) => candidate.key === launch.key);
-    assert(entry !== undefined, `MathRead library entry is missing for ${launch.key}`);
-    assert(typeof entry.source_url === "string", `MathRead source URL is missing for ${launch.key}`);
-    return entry;
-  })
-  : null;
 
 if (launch.kind !== "library") {
   document.addEventListener("DOMContentLoaded", waitForPdfViewer, { once: true });
@@ -148,9 +130,6 @@ document.addEventListener("DOMContentLoaded", restoreCanonicalReaderUrl, { once:
 
 function restoreCanonicalReaderUrl() {
   const canonical = new URL(chrome.runtime.getURL("reader/reader.html"));
-  if (launch.kind === "document") {
-    canonical.searchParams.set("file", backendPdfUrl(launch.key));
-  }
   // window-qualified: the CodeMirror `history` import shadows the global.
   window.history.replaceState(
     window.history.state,
@@ -254,22 +233,19 @@ document.querySelector('[data-action="copy-plain-link"]').addEventListener("clic
 document.querySelector('[data-action="copy-view-link"]').addEventListener("click", async () => {
   const source = await sourceUrl();
   const view = currentPdfView();
-  const sourceHref = source.href;
-  source.searchParams.append("mathread-link", `v1.${btoa(`v1:${view.page}:${view.x}:${view.y}:${view.zoom.toFixed(2)}`)}`);
-  source.searchParams.append("mathread-source", `v1.${btoa(sourceHref)}`);
+  // Standard PDF open-parameters fragment: any viewer, including Chrome's
+  // native one and PDF.js, lands on the right page without MathRead.
+  source.hash = `page=${view.page}&zoom=${Math.round(view.zoom * 100)},${view.x},${view.y}`;
   await navigator.clipboard.writeText(source.href);
   moreMenu.hidden = true;
 });
 
 async function sourceUrl() {
-  assert(launch.kind !== "library", "A source link requires an open document");
-  if (launch.kind === "takeover") {
-    assert(takeoverDocument !== null, "A source link requires the takeover document");
-    return new URL(takeoverDocument.sourceUrl);
-  }
-  assert(documentEntry !== null, "MathRead document entry must be loading");
-  const entry = await documentEntry;
-  return new URL(entry.source_url);
+  assert(
+    launch.kind === "takeover" && takeoverDocument !== null,
+    "A source link requires an open document",
+  );
+  return new URL(takeoverDocument.sourceUrl);
 }
 
 function currentPdfView() {
@@ -306,9 +282,7 @@ async function renderLibrary() {
     open.dataset.testid = "library-entry-open";
     open.textContent = entry.title;
     open.addEventListener("click", () => {
-      const readerUrl = new URL(chrome.runtime.getURL("reader/reader.html"));
-      readerUrl.searchParams.set("file", backendPdfUrl(entry.key));
-      location.assign(readerUrl.href);
+      location.assign(entry.source_url);
     });
     const meta = document.createElement("span");
     meta.className = "library-entry-meta";

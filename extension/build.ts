@@ -19,10 +19,6 @@ copyFileSync(
   join("extension", "mathread", "options.html"),
   join(distExt, "mathread", "options.html"),
 );
-for (const asset of ["pdf-launch.html", "pdf-launch.css"]) {
-  copyFileSync(join("extension", asset), join(distExt, asset));
-}
-
 // reader.js and its pre-minified vendor ESM ship verbatim: re-bundling minified ESM
 // through bun corrupts identifiers. Only backend.ts (already built to reader/vendor/backend.js
 // by the bun build step) goes through the bundler.

@@ -1,6 +1,3 @@
-import "./vendor/pdfjs-preserve-referer.js";
-import "./vendor/pdfjs-extension-router.js";
-
 import {
   type CaptureRequest,
   type CaptureResult,

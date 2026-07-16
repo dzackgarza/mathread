@@ -6,9 +6,7 @@
   "permissions": [
     "storage",
     "cookies",
-    "declarativeNetRequestWithHostAccess",
-    "webRequest",
-    "webNavigation"
+    "declarativeNetRequestWithHostAccess"
   ],
   "host_permissions": [
     "http://127.0.0.1:8765/*",
@@ -55,8 +53,7 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "reader/*",
-        "pdf-launch.html"
+        "reader/*"
       ],
       "matches": [
         "http://*/*",
