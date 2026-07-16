@@ -959,6 +959,44 @@ export function registerReaderRenderingBoundaryTests(): void {
 }
 
 function registerReaderNavigationBoundaryTests(): void {
+test("reading a PDF keeps the source URL in the address bar", async () => {
+  await withExtensionReader(
+    async ({ artifacts, courseServer, page, readingRoot }) => {
+      const sourceUrl = `${courseServer.url.origin}/notes.pdf`;
+      await page.goto(sourceUrl);
+      await waitForStoredPdf(readingRoot);
+
+      // Issue #40 acceptance: the source URL is the document's identity. The
+      // reader mounts as an iframe inside the wrapper document at that URL;
+      // no chrome-extension:// URL is ever user-visible in the omnibox.
+      let readerFrame: Frame | null = null;
+      const mountDeadline = Date.now() + 30_000;
+      while (readerFrame === null) {
+        const candidate = page.frame({
+          url: (url) => url.pathname.endsWith("/reader/reader.html"),
+        }) ?? null;
+        // The reader must be a child iframe under the source URL, never the
+        // top-level document (the retired extension-owned-reader shape).
+        readerFrame = candidate === page.mainFrame() ? null : candidate;
+        if (readerFrame === null) {
+          assert(
+            Date.now() < mountDeadline,
+            "MathRead reader iframe did not mount on the PDF page",
+          );
+          await Bun.sleep(100);
+        }
+      }
+      await readerFrame.locator("#viewer .page canvas").first().waitFor();
+      expect(page.url()).toBe(sourceUrl);
+
+      const screenshotPath = join(artifacts.root, "source-url-reader.png");
+      await page.screenshot({ path: screenshotPath });
+      assertPng(screenshotPath);
+    },
+  );
+}, 120_000);
+
+
 test("reader presents the MathRead library without constructing a custom PDF viewer", async () => {
   await withExtensionReader(async ({ artifacts, extensionId, page }) => {
     await page.goto(`chrome-extension://${extensionId}/reader/library.html`, {
