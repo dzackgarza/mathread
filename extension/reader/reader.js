@@ -96,6 +96,26 @@ if (launch.kind === "document") {
   document.addEventListener("DOMContentLoaded", waitForPdfViewer, { once: true });
 }
 
+// PDF.js's Chromium viewer rewrites the visible URL to a synthetic extension-path
+// form that only resolves while the extension service worker can be woken to
+// route it. The reader document URL is a real file, so restoring it keeps reload
+// and history traversal working in every worker state. reader.js evaluates before
+// viewer.mjs, so this listener fires after the viewer's rewrite has happened.
+document.addEventListener("DOMContentLoaded", restoreCanonicalReaderUrl, { once: true });
+
+function restoreCanonicalReaderUrl() {
+  const canonical = new URL(chrome.runtime.getURL("reader/reader.html"));
+  if (launch.kind === "document") {
+    canonical.searchParams.set("file", backendPdfUrl(launch.key));
+  }
+  // window-qualified: the CodeMirror `history` import shadows the global.
+  window.history.replaceState(
+    window.history.state,
+    "",
+    `${canonical.href}${location.hash}`,
+  );
+}
+
 function waitForPdfViewer() {
   const application = window.PDFViewerApplication;
   assert(application !== null && typeof application === "object", "PDF.js application is unavailable");

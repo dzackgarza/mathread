@@ -1203,7 +1203,14 @@ function assertReaderFrameUrl(url: string, expectedKey: string): void {
 }
 
 function isReaderDocumentUrl(url: URL, expectedKey: string): boolean {
-  return decodeURIComponent(url.pathname).endsWith(`/pdf/${expectedKey}`);
+  if (url.pathname !== "/reader/reader.html") {
+    return false;
+  }
+  const file = url.searchParams.get("file");
+  if (file === null) {
+    return false;
+  }
+  return decodeURIComponent(new URL(file).pathname).endsWith(`/pdf/${expectedKey}`);
 }
 
 async function runBackendUnavailable(): Promise<void> {
