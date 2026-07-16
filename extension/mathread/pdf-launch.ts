@@ -75,7 +75,51 @@ function pdfHashFromView(viewState: string | null): string {
 }
 
 async function sendCaptureMessage(message: unknown): Promise<unknown> {
-  return Promise.race([chrome.runtime.sendMessage(message), captureTimeout()]);
+  try {
+    return await Promise.race([
+      chrome.runtime.sendMessage(message),
+      captureTimeout(),
+    ]);
+  } catch (error) {
+    throw await describeCaptureFailure(error);
+  }
+}
+
+/**
+ * A capture message with no receiver usually means the loaded extension
+ * predates the files on disk: Chrome keeps the manifest it loaded until the
+ * extension is reloaded, while pages and the background worker load current
+ * code. A worker rebuilt against newer permissions then dies at import time.
+ * Detect that skew and name the fix instead of surfacing a messaging error.
+ */
+async function describeCaptureFailure(error: unknown): Promise<unknown> {
+  const loaded: unknown = chrome.runtime.getManifest();
+  const diskResponse = await fetch(chrome.runtime.getURL("manifest.json"));
+  assert(diskResponse.ok, "MathRead manifest.json is unreadable on disk");
+  const disk: unknown = await diskResponse.json();
+  if (manifestGrants(loaded) === manifestGrants(disk)) {
+    return error;
+  }
+  return new Error(
+    "The MathRead extension files on disk request different permissions than "
+    + "the loaded extension. Reload the extension at chrome://extensions, then "
+    + `reopen this PDF. (${String(error)})`,
+  );
+}
+
+function manifestGrants(manifest: unknown): string {
+  assert(
+    typeof manifest === "object" && manifest !== null,
+    "MathRead manifest must be an object",
+  );
+  const { permissions, host_permissions } = manifest as {
+    permissions?: unknown;
+    host_permissions?: unknown;
+  };
+  return JSON.stringify({
+    permissions: permissions ?? [],
+    host_permissions: host_permissions ?? [],
+  });
 }
 
 function captureTimeout(): Promise<never> {
