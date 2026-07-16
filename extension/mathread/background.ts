@@ -10,10 +10,6 @@ import {
   captureBytesEndpointFromManifest,
   postCaptureBytes,
 } from "./capture-client";
-import {
-  loadMathReadSettings,
-  settingsStorageKey,
-} from "./settings";
 
 type ChromeApi = {
   runtime: {
@@ -84,22 +80,14 @@ const recentSuccessfulCaptures = new Map<
 
 declare const chrome: ChromeApi;
 
-const pdfRedirectRuleId = 1;
-
 type PdfRedirectState =
   | { kind: "ready" }
   | { kind: "failed"; error: Error };
 
-// Chrome 128+ evaluates response-header DNR rules before committing the response as a
-// document. Redirecting here prevents the native PDF viewer from owning even the first
-// visible document; pdf-launch then performs the existing backend capture asynchronously.
-let pdfRedirectState = synchronizePdfRedirectRule();
-
-chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName === "local" && changes[settingsStorageKey] !== undefined) {
-    pdfRedirectState = synchronizePdfRedirectRule();
-  }
-});
+// Reading happens at the source URL via the takeover content script (#40); no
+// navigation is ever redirected. Clearing the dynamic rules also retires the
+// redirect persisted by installs of the previous extension-owned reader.
+const pdfRedirectState = clearPdfRedirectRules();
 
 chrome.action.onClicked.addListener(() => {
   void chrome.tabs.create({ url: chrome.runtime.getURL("reader/library.html") });
@@ -119,44 +107,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
-async function synchronizePdfRedirectRule(): Promise<PdfRedirectState> {
+async function clearPdfRedirectRules(): Promise<PdfRedirectState> {
   try {
-    const settings = await loadMathReadSettings(chrome.storage.local);
     const dynamicRules = await chrome.declarativeNetRequest.getDynamicRules();
     await chrome.declarativeNetRequest.updateDynamicRules({
       removeRuleIds: dynamicRules.map(rule => rule.id),
-      addRules: settings.autoCapturePdfs
-        ? [
-            {
-              id: pdfRedirectRuleId,
-              priority: 1,
-              action: {
-                type: "redirect",
-                redirect: {
-                  // DNR cannot encode the matched URL, so pdf-launch parses this raw
-                  // sentinel before rewriting the visible route to an encoded source.
-                  regexSubstitution: `${chrome.runtime.getURL("pdf-launch.html")}?DNR:\\0`,
-                },
-              },
-              condition: {
-                regexFilter: "^https?://.*$",
-                excludedRequestMethods: ["post"],
-                resourceTypes: ["main_frame"],
-                responseHeaders: [
-                  {
-                    header: "content-type",
-                    values: ["application/pdf", "application/pdf;*"],
-                  },
-                ],
-              },
-            },
-          ]
-        : [],
+      addRules: [],
     });
     return { kind: "ready" };
   } catch (error) {
     const registrationError = new Error(
-      "MathRead PDF redirect registration failed",
+      "MathRead PDF redirect cleanup failed",
       { cause: error },
     );
     console.error(registrationError);

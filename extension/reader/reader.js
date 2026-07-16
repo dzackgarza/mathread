@@ -35,7 +35,9 @@ function assert(condition, message) {
 function parseLaunch(params) {
   const file = params.get("file");
   if (file === null) {
-    return { kind: "library" };
+    // Inside a frame with no file parameter, the reader is the takeover
+    // surface (#40): the parent page at the source URL streams the PDF in.
+    return window.parent === window ? { kind: "library" } : { kind: "takeover" };
   }
   const url = new URL(file);
   const path = url.pathname.split("/");
@@ -83,6 +85,22 @@ let replacingEditorText = false;
 let pendingLegacyMigrationStorageKey = null;
 let pdfViewerState = { kind: "awaiting" };
 let currentPdfViewState = { kind: "awaiting" };
+let takeoverDocument = null;
+let resolvePdfApplication;
+const pdfApplicationReady = new Promise((resolve) => {
+  resolvePdfApplication = resolve;
+});
+
+function documentKey() {
+  if (launch.kind === "document") {
+    return launch.key;
+  }
+  assert(
+    launch.kind === "takeover" && takeoverDocument !== null,
+    "MathRead document key requires an open document",
+  );
+  return takeoverDocument.key;
+}
 const documentEntry = launch.kind === "document"
   ? getLibrary().then((entries) => {
     const entry = entries.find((candidate) => candidate.key === launch.key);
@@ -92,8 +110,33 @@ const documentEntry = launch.kind === "document"
   })
   : null;
 
-if (launch.kind === "document") {
+if (launch.kind !== "library") {
   document.addEventListener("DOMContentLoaded", waitForPdfViewer, { once: true });
+}
+
+if (launch.kind === "takeover") {
+  window.addEventListener("message", (event) => {
+    if (event.source !== window.parent) {
+      return;
+    }
+    const data = event.data;
+    if (data === null || typeof data !== "object" || data.type !== "mathread:pdf") {
+      return;
+    }
+    assert(takeoverDocument === null, "MathRead takeover received a second document");
+    assert(data.body instanceof ArrayBuffer, "MathRead takeover message has no PDF bytes");
+    assert(typeof data.key === "string" && data.key.length > 0, "MathRead takeover message has no library key");
+    assert(typeof data.sourceUrl === "string" && data.sourceUrl.length > 0, "MathRead takeover message has no source URL");
+    takeoverDocument = { key: data.key, sourceUrl: data.sourceUrl };
+    void openTakeoverDocument(data.body);
+  });
+  window.parent.postMessage({ type: "mathread:ready" }, "*");
+}
+
+async function openTakeoverDocument(body) {
+  const application = await pdfApplicationReady;
+  await application.open({ data: new Uint8Array(body) });
+  void postReadEvent(documentKey());
 }
 
 // PDF.js's Chromium viewer rewrites the visible URL to a synthetic extension-path
@@ -132,7 +175,18 @@ function observePdfView(application) {
   pdfViewerState = { kind: "ready", pdfViewer };
   eventBus.on("updateviewarea", ({ location }) => {
     currentPdfViewState = parsePdfView(location);
+    if (launch.kind === "takeover" && currentPdfViewState.kind === "available") {
+      // Publish the view as a standard open-parameters fragment; the parent
+      // mirrors it onto the source URL's hash, which stays the one canonical
+      // view state a copied link or a reload picks up.
+      const view = currentPdfViewState;
+      window.parent.postMessage({
+        type: "mathread:view",
+        hash: `#page=${view.page}&zoom=${Math.round(view.zoom * 100)},${view.x},${view.y}`,
+      }, "*");
+    }
   });
+  resolvePdfApplication(application);
 }
 
 function parsePdfView(location) {
@@ -165,7 +219,7 @@ function selectOverlay(name) {
   notesPanel.hidden = name !== "notes";
   if (name === "library") {
     void renderLibrary();
-  } else if (launch.kind === "document") {
+  } else if (launch.kind !== "library") {
     void ensureNotes();
   }
 }
@@ -208,7 +262,11 @@ document.querySelector('[data-action="copy-view-link"]').addEventListener("click
 });
 
 async function sourceUrl() {
-  assert(launch.kind === "document", "A source link requires an open document");
+  assert(launch.kind !== "library", "A source link requires an open document");
+  if (launch.kind === "takeover") {
+    assert(takeoverDocument !== null, "A source link requires the takeover document");
+    return new URL(takeoverDocument.sourceUrl);
+  }
   assert(documentEntry !== null, "MathRead document entry must be loading");
   const entry = await documentEntry;
   return new URL(entry.source_url);
@@ -272,12 +330,16 @@ async function renderLibrary() {
 }
 
 async function ensureNotes() {
-  if (editor !== null || launch.kind !== "document") {
+  if (
+    editor !== null
+    || launch.kind === "library"
+    || (launch.kind === "takeover" && takeoverDocument === null)
+  ) {
     return;
   }
-  const note = await getNote(launch.key);
+  const note = await getNote(documentKey());
   noteVersion = noteVersionFrom(note);
-  notesPath.textContent = launch.key.replace(/\.pdf$/, ".md");
+  notesPath.textContent = documentKey().replace(/\.pdf$/, ".md");
   editor = new EditorView({
     parent: editorHost,
     state: EditorState.create({
@@ -312,10 +374,10 @@ function queueSave() {
 }
 
 async function saveNotes() {
-  assert(launch.kind === "document", "Saving notes requires an open document");
+  assert(launch.kind !== "library", "Saving notes requires an open document");
   assert(editor !== null, "MathRead note editor must exist before saving");
   assert(typeof noteVersion === "string", "MathRead note version must be loaded before saving");
-  const result = await saveNote(launch.key, editor.state.doc.toString(), noteVersion);
+  const result = await saveNote(documentKey(), editor.state.doc.toString(), noteVersion);
   switch (result.kind) {
     case "saved":
       noteVersion = noteVersionFrom(result.note);
@@ -361,8 +423,8 @@ function showNotesConflict(message) {
 }
 
 async function loadNotesFromDisk() {
-  assert(launch.kind === "document", "Loading notes requires an open document");
-  const note = await getNote(launch.key);
+  assert(launch.kind !== "library", "Loading notes requires an open document");
+  const note = await getNote(documentKey());
   noteVersion = noteVersionFrom(note);
   replaceEditorText(note.text);
   notesStatus.textContent = "Saved";
@@ -370,9 +432,9 @@ async function loadNotesFromDisk() {
 }
 
 async function overwriteNotesOnDisk() {
-  assert(launch.kind === "document", "Overwriting notes requires an open document");
+  assert(launch.kind !== "library", "Overwriting notes requires an open document");
   assert(editor !== null, "MathRead note editor must exist before overwriting");
-  const note = await overwriteNote(launch.key, editor.state.doc.toString());
+  const note = await overwriteNote(documentKey(), editor.state.doc.toString());
   noteVersion = noteVersionFrom(note);
   notesStatus.textContent = "Saved";
   notesError.hidden = true;
@@ -386,9 +448,9 @@ function renderNotesPreview() {
 }
 
 function migrateLegacyHighlights() {
-  assert(launch.kind === "document", "Legacy annotation migration requires an open document");
+  assert(launch.kind !== "library", "Legacy annotation migration requires an open document");
   assert(editor !== null, "Legacy annotation migration requires the note editor");
-  const storageKey = `mathread-legacy-highlights:${launch.key}`;
+  const storageKey = `mathread-legacy-highlights:${documentKey()}`;
   const raw = localStorage.getItem(storageKey);
   if (raw === null) {
     return;

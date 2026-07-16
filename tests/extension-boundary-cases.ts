@@ -344,7 +344,7 @@ test("built extension auto-captures an application/pdf URL without a .pdf suffix
 test("disabling automatic capture removes the PDF redirect rule", async () => {
   await withExtensionReader(async ({ context }) => {
     const serviceWorker = await waitForExtensionServiceWorker(context);
-    await waitForPdfRedirectRule(serviceWorker);
+    await waitForNoPdfRedirectRule(serviceWorker);
     await serviceWorker.evaluate(async () => {
       const chromeApi = (
         globalThis as typeof globalThis & {
@@ -373,7 +373,7 @@ test("disabling automatic capture removes the PDF redirect rule", async () => {
 test("extension synchronization removes legacy PDF redirect rules", async () => {
   await withExtensionReader(async ({ context }) => {
     const serviceWorker = await waitForExtensionServiceWorker(context);
-    await waitForPdfRedirectRule(serviceWorker);
+    await waitForNoPdfRedirectRule(serviceWorker);
     await serviceWorker.evaluate(async () => {
       const chromeApi = (
         globalThis as typeof globalThis & {
@@ -427,7 +427,7 @@ test("extension synchronization removes legacy PDF redirect rules", async () => 
         },
       });
     });
-    await waitForPdfRedirectRule(serviceWorker);
+    await waitForNoPdfRedirectRule(serviceWorker);
     expect(await pdfRedirectRuleIds(serviceWorker)).toEqual([1]);
   });
 }, 30_000);
@@ -1274,7 +1274,7 @@ async function runBackendUnavailable(): Promise<void> {
       },
     );
     const serviceWorker = await waitForExtensionServiceWorker(context);
-    await waitForPdfRedirectRule(serviceWorker);
+    await waitForNoPdfRedirectRule(serviceWorker);
     await context.addCookies([
       {
         name: cookieName,
@@ -1342,7 +1342,7 @@ async function runStaleLoadedManifestCapture(): Promise<void> {
       launchOptions,
     );
     const serviceWorker = await waitForExtensionServiceWorker(context);
-    await waitForPdfRedirectRule(serviceWorker);
+    await waitForNoPdfRedirectRule(serviceWorker);
     await context.close();
     context = undefined;
 
@@ -1434,7 +1434,7 @@ async function runExtensionCapture(
       },
     );
     const serviceWorker = await waitForExtensionServiceWorker(context);
-    await waitForPdfRedirectRule(serviceWorker);
+    await waitForNoPdfRedirectRule(serviceWorker);
     serviceWorker.on("console", (message) => {
       appendEvent(artifacts.eventsLogPath, {
         type: "service-worker-console",
@@ -1594,7 +1594,7 @@ async function withExtensionReader(
       },
     );
     const serviceWorker = await waitForExtensionServiceWorker(context);
-    await waitForPdfRedirectRule(serviceWorker);
+    await waitForNoPdfRedirectRule(serviceWorker);
     const extensionId = new URL(serviceWorker.url()).host;
     await context.grantPermissions(["clipboard-read"]);
     await context.addCookies([
@@ -1878,16 +1878,6 @@ async function waitForExtensionServiceWorker(context: BrowserContext) {
     await Bun.sleep(100);
   }
   throw new Error("Timed out waiting for MathRead extension service worker");
-}
-
-async function waitForPdfRedirectRule(serviceWorker: Worker): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (await hasPdfRedirectRule(serviceWorker)) {
-      return;
-    }
-    await Bun.sleep(100);
-  }
-  throw new Error("Timed out waiting for the MathRead PDF redirect rule");
 }
 
 async function waitForNoPdfRedirectRule(serviceWorker: Worker): Promise<void> {
