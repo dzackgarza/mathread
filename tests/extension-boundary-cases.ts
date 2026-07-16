@@ -1784,7 +1784,10 @@ function storedKeyFromPath(storedPath: string): string {
  * extension-owned-reader shape).
  */
 export async function waitForTakeoverReader(page: Page): Promise<Frame> {
-  const mountDeadline = Date.now() + 30_000;
+  // The mount waits on the whole takeover pipeline — capture round-trip
+  // included, which for a large paper under sequential-suite contention can
+  // exceed 30s. Match the generosity of the suite's other readiness waits.
+  const mountDeadline = Date.now() + 120_000;
   for (;;) {
     const candidate = page.frame({
       url: (url) => url.pathname.endsWith("/reader/reader.html"),
