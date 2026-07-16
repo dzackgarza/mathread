@@ -93,7 +93,6 @@ type CaptureArtifacts = {
   backendLogPath: string;
   eventsLogPath: string;
   screenshotBeforePath: string;
-  screenshotLaunchPath: string;
   screenshotAfterPath: string;
   tracePath: string;
 };
@@ -176,13 +175,13 @@ export function registerCaptureBoundaryTests(): void {
 function registerLibraryCaptureBoundaryTests(): void {
 test("reader Library panel lists, opens, and trashes captured items against the backend", async () => {
   await withExtensionReader(
-    async ({ backendPort, courseServer, extensionId, page, readingRoot }) => {
+    async ({ backendPort, courseServer, page, readingRoot }) => {
       const firstKey = await preCapturePdfThroughBackend(
         backendPort,
         courseServer,
         "direct-pdf-tab",
       );
-      const secondKey = await preCapturePdfThroughBackend(
+      await preCapturePdfThroughBackend(
         backendPort,
         courseServer,
         "large-numdam-pdf",
@@ -192,23 +191,21 @@ test("reader Library panel lists, opens, and trashes captured items against the 
         "existing note\n",
       );
 
-      await page.goto(readerPageUrl(extensionId, backendPort, firstKey), {
-        waitUntil: "domcontentloaded",
-      });
-      await waitForCanvasCount(page, 1);
-      await page.locator('.nav-expand-btn[data-tab="library"]').click();
-      await waitForLibraryEntryCount(page, 2);
+      await page.goto(`${courseServer.url.origin}/notes.pdf`);
+      let reader = await waitForTakeoverReader(page);
+      await reader.locator("#viewer canvas").first().waitFor();
+      await reader.locator('.nav-expand-btn[data-tab="library"]').click();
+      await waitForLibraryEntryCount(reader, 2);
 
-      // The MathRead library opens its stored entry through the reader handoff.
-      await page
+      // A library entry is a glorified history link: opening it navigates the
+      // tab to the entry's source URL and the takeover mounts the reader there.
+      const numdamSourceUrl = `${courseServer.url.origin}${pdfPathForScenario("large-numdam-pdf")}`;
+      await reader
         .locator('[data-testid="library-entry"]', { hasText: "AST_1992" })
         .locator('[data-testid="library-entry-open"]')
         .click();
-      await waitForReaderFrame(page, secondKey);
-      const visibleReaderUrl = new URL(page.url());
-      assertReaderFrameUrl(visibleReaderUrl.href, secondKey);
-
-      const reader = await waitForReaderFrame(page, secondKey);
+      await page.waitForURL((url) => url.href.startsWith(numdamSourceUrl));
+      reader = await waitForTakeoverReader(page);
       // PDF.js owns a bounded canvas window; wait for the current page rather than
       // requiring every page canvas to exist simultaneously.
       await reader.locator("#viewer canvas").first().waitFor();
@@ -237,7 +234,7 @@ test("reader Library panel lists, opens, and trashes captured items against the 
   );
 }, 60_000);
 
-test("reader Library panel opens provenance-less local PDFs from the backend copy", async () => {
+test("reader Library panel lists provenance-less local PDFs without an open link", async () => {
   await withExtensionReader(async ({ extensionId, page, readingRoot }) => {
     writeFileSync(join(readingRoot, "local.pdf"), pdfBytes);
 
@@ -245,14 +242,13 @@ test("reader Library panel opens provenance-less local PDFs from the backend cop
       waitUntil: "domcontentloaded",
     });
     await waitForLibraryEntryCount(page, 1);
-    await page
-      .locator('[data-testid="library-entry"]', { hasText: "local" })
-      .locator('[data-testid="library-entry-open"]')
-      .click();
-
-    await waitForReaderFrame(page, "local.pdf");
-    await waitForCanvasCount(page, 1);
-    assertReaderFrameUrl(page.url(), "local.pdf");
+    // A manual disk file was never visited, so it has no URL to navigate to.
+    // The library shows it as a backup (read it from the library folder), and
+    // deliberately offers no in-app open — edge cases are designed out (#40).
+    const entry = page.locator('[data-testid="library-entry"]', { hasText: "local" });
+    await entry.waitFor();
+    expect(await entry.locator('[data-testid="library-entry-open"]').count()).toBe(0);
+    expect(await entry.locator('[data-testid="library-entry-trash"]').count()).toBe(1);
   });
 }, 60_000);
 
@@ -265,17 +261,18 @@ test("built extension intercepts a clicked PDF directly into an extension-owned 
   const expectedCourseUrl = new URL("/course/", evidence.courseOrigin).href;
   const expectedPdfUrl = new URL("/notes.pdf", expectedCourseUrl).href;
 
-  // Direct interception (issue #6): the source PDF response must be redirected before
-  // Chrome commits its native PDF document. The visible extension URL still carries the
-  // canonical source URL so capture provenance and shareable identity are preserved.
+  // URL identity (#40): the PDF's own URL commits and never leaves the
+  // address bar; no chrome-extension:// URL is ever a main-frame navigation.
+  expect(
+    evidence.mainFrameNavigations.some((url) => url.startsWith(expectedPdfUrl)),
+  ).toBe(true);
   expect(
     evidence.mainFrameNavigations.every(
-      (url) => url !== expectedPdfUrl,
+      (url) => !url.startsWith("chrome-extension://"),
     ),
   ).toBe(true);
-  const visibleReaderUrl = new URL(evidence.visibleReaderUrl);
-  assertReaderFrameUrl(visibleReaderUrl.href, evidence.key);
-  assertReaderFrameUrl(evidence.readerFrameUrl, evidence.key);
+  expect(evidence.visibleReaderUrl.startsWith(expectedPdfUrl)).toBe(true);
+  expect(new URL(evidence.readerFrameUrl).pathname).toBe("/reader/reader.html");
 
   expect(evidence.metadata["/MathReadSourceURL"]).toBe(expectedCourseUrl);
   expect(evidence.metadata["/MathReadPDFURL"]).toBe(expectedPdfUrl);
@@ -313,7 +310,7 @@ test("built extension reuses a pre-existing capture and still mounts the reader"
   expect(evidence.metadata["/MathReadOriginalSHA256"]).toBe(pdfSha256());
   // Setup POST plus the extension's own (deduplicated, existing=true) capture round trip.
   expect(evidence.backendCaptureRequestCount).toBeGreaterThanOrEqual(2);
-  assertReaderFrameUrl(evidence.readerFrameUrl, evidence.key);
+  expect(new URL(evidence.readerFrameUrl).pathname).toBe("/reader/reader.html");
   assertEvidenceArtifacts(
     evidence.artifacts,
     evidence.storedPath,
@@ -332,7 +329,7 @@ test("built extension auto-captures an application/pdf URL without a .pdf suffix
   expect(evidence.metadata["/MathReadCapture"]).toBe("capture-bytes");
   expect(evidence.backendCaptureRequestCount).toBe(1);
   expect(evidence.metadata["/MathReadOriginalSHA256"]).toBe(pdfSha256());
-  assertReaderFrameUrl(evidence.readerFrameUrl, evidence.key);
+  expect(new URL(evidence.readerFrameUrl).pathname).toBe("/reader/reader.html");
   assertEvidenceArtifacts(
     evidence.artifacts,
     evidence.storedPath,
@@ -341,39 +338,12 @@ test("built extension auto-captures an application/pdf URL without a .pdf suffix
   evidence.cleanup();
 }, 30_000);
 
-test("disabling automatic capture removes the PDF redirect rule", async () => {
-  await withExtensionReader(async ({ context }) => {
+test("worker startup clears legacy PDF redirect rules", async () => {
+  await withExtensionReader(async ({ context, extensionId, page }) => {
     const serviceWorker = await waitForExtensionServiceWorker(context);
     await waitForNoPdfRedirectRule(serviceWorker);
-    await serviceWorker.evaluate(async () => {
-      const chromeApi = (
-        globalThis as typeof globalThis & {
-          chrome: {
-            storage: {
-              local: {
-                set(items: Record<string, unknown>): Promise<void>;
-              };
-            };
-          };
-        }
-      ).chrome;
-      await chromeApi.storage.local.set({
-        "mathread.settings": {
-          autoCapturePdfs: false,
-          autosaveMs: 800,
-          fitWidthOnOpen: false,
-          lineNumbers: true,
-        },
-      });
-    });
-    await waitForNoPdfRedirectRule(serviceWorker);
-  });
-}, 30_000);
-
-test("extension synchronization removes legacy PDF redirect rules", async () => {
-  await withExtensionReader(async ({ context }) => {
-    const serviceWorker = await waitForExtensionServiceWorker(context);
-    await waitForNoPdfRedirectRule(serviceWorker);
+    // A legacy install left a persisted redirect rule behind; the current
+    // worker owns no rules and removes every persisted one at startup.
     await serviceWorker.evaluate(async () => {
       const chromeApi = (
         globalThis as typeof globalThis & {
@@ -383,11 +353,6 @@ test("extension synchronization removes legacy PDF redirect rules", async () => 
                 removeRuleIds: number[];
                 addRules: unknown[];
               }): Promise<void>;
-            };
-            storage: {
-              local: {
-                set(items: Record<string, unknown>): Promise<void>;
-              };
             };
           };
         }
@@ -418,17 +383,27 @@ test("extension synchronization removes legacy PDF redirect rules", async () => 
           },
         ],
       });
-      await chromeApi.storage.local.set({
-        "mathread.settings": {
-          autoCapturePdfs: true,
-          autosaveMs: 800,
-          fitWidthOnOpen: false,
-          lineNumbers: true,
-        },
-      });
     });
-    await waitForNoPdfRedirectRule(serviceWorker);
-    expect(await pdfRedirectRuleIds(serviceWorker)).toEqual([1]);
+    // Restart the worker. The seeded legacy rule intercepts PDF navigations
+    // while the worker is down (that is the live failure being modeled), so
+    // wake it from an extension page instead; startup cleanup then runs.
+    await stopExtensionServiceWorkers(context, page);
+    await page.goto(`chrome-extension://${extensionId}/reader/library.html`, {
+      waitUntil: "domcontentloaded",
+    });
+    await page.evaluate(async () => {
+      const runtime = (
+        globalThis as typeof globalThis & {
+          chrome: { runtime: { sendMessage(message: unknown): Promise<unknown> } };
+        }
+      ).chrome.runtime;
+      // Any delivery starts a stopped worker; the unanswered message port
+      // closing afterwards is expected for a non-capture message.
+      await runtime.sendMessage({ type: "mathread:wake" }).catch(() => undefined);
+    });
+    const restartedWorker = await waitForExtensionServiceWorker(context);
+    await waitForNoPdfRedirectRule(restartedWorker);
+    expect(await pdfRedirectRuleIds(restartedWorker)).toEqual([]);
   });
 }, 30_000);
 
@@ -462,10 +437,10 @@ test("reader, markdown, and library workflows remain extension-owned", async () 
       }
       const readEvents = collectReadEventRequests(page, backendPort);
 
-      await page.goto(readerPageUrl(extensionId, backendPort, key), {
-        waitUntil: "domcontentloaded",
-      });
-      await page.locator("#viewer canvas").first().waitFor();
+      const sourceUrl = `${courseServer.url.origin}${pdfPathForScenario("large-numdam-pdf")}`;
+      await page.goto(sourceUrl, { waitUntil: "domcontentloaded" });
+      const reader = await waitForTakeoverReader(page);
+      await reader.locator("#viewer canvas").first().waitFor();
       await waitForReadEventCount(readEvents, 1);
       assertReadEventBodies(readEvents, [key]);
       const currentEntry = await waitForBackendLibraryEntry(
@@ -482,9 +457,8 @@ test("reader, markdown, and library workflows remain extension-owned", async () 
         expect(Number.isFinite(readTimestamp(entry.last_read))).toBe(true);
       }
 
-      const visibleReaderUrl = new URL(page.url());
-      expect(visibleReaderUrl.hostname).toBe(extensionId);
-      assertReaderFrameUrl(visibleReaderUrl.href, key);
+      expect(page.url().startsWith(sourceUrl)).toBe(true);
+      expect(page.url()).not.toContain(extensionId);
       expect(page.url()).not.toContain("markdown-editor.localhost");
       const readerScreenshotPath = join(
         artifacts.root,
@@ -493,12 +467,11 @@ test("reader, markdown, and library workflows remain extension-owned", async () 
       await page.screenshot({ path: readerScreenshotPath });
       assertPng(readerScreenshotPath);
 
-      const pageInput = page.locator("#pageNumber");
+      const pageInput = reader.locator("#pageNumber");
       await pageInput.fill("3");
       await pageInput.press("Enter");
       await expectInputValue(pageInput, (value) => value === "3");
       expect(readEvents.length).toBe(1);
-      const reader = page;
 
       await reader
         .locator('.nav-expand-btn[data-tab="notes"]')
@@ -561,7 +534,7 @@ test("reader, markdown, and library workflows remain extension-owned", async () 
 function registerCapturedRenderingBoundaryTests(): void {
 test("built extension opens a captured PDF in the official reader", async () => {
   const evidence = await runExtensionCapture("large-numdam-pdf");
-  assertReaderFrameUrl(evidence.readerFrameUrl, evidence.key);
+  expect(new URL(evidence.readerFrameUrl).pathname).toBe("/reader/reader.html");
   evidence.cleanup();
 }, 60_000);
 
@@ -573,106 +546,92 @@ test("built extension fails loudly when the capture backend is down", async () =
 export function registerNumdamRenderingBoundaryTest(): void {
 test("installed reader copies source-preserving current and plain links for the canonical Numdam PDF", async () => {
   await withExtensionReader(
-    async ({ artifacts, backendPort, context, extensionId, page }) => {
+    async ({ artifacts, backendPort, context, page }) => {
       const pageErrors: string[] = [];
       page.on("pageerror", (error) => pageErrors.push(String(error)));
       const numdamBytes = await numdamFixtureBytes();
-      const numdamSourceUrl = `${numdamRegressionPdfUrl}?title=source%20owned~query&mathread-view=source-owned&mathread-link=v1.source-owned`;
-      const key = await preCaptureExternalPdfThroughBackend(
+      const numdamSourceUrl = `${numdamRegressionPdfUrl}?title=source%20owned~query`;
+      await preCaptureExternalPdfThroughBackend(
         backendPort,
         numdamSourceUrl,
         numdamBytes,
       );
-      // The installed extension still performs the source fetch. Fulfill only its
-      // service-worker fetch from the hash-verified canonical Numdam fixture so
-      // the DNR/pdf-launch source handoff remains deterministic.
-      let sourceFixtureFetches = 0;
+      // Every request for the canonical Numdam URL — the navigation, the
+      // takeover's parent byte fetch, and the worker's capture fetch — is
+      // served from the hash-verified fixture; the worker's are counted.
+      let captureFetches = 0;
       await context.route(
         (url) => url.toString().startsWith(numdamRegressionPdfUrl),
         async (route, request) => {
-          if (request.serviceWorker() === null) {
-            await route.continue();
-            return;
+          if (request.serviceWorker() !== null) {
+            captureFetches += 1;
           }
-          sourceFixtureFetches += 1;
           await route.fulfill({
             contentType: "application/pdf",
             path: numdamFixturePath,
           });
         },
       );
-      await page.goto(readerPageUrl(extensionId, backendPort, key), {
-        waitUntil: "domcontentloaded",
-      });
-      await page.locator("#viewer canvas").first().waitFor();
-      const pageInput = page.locator("#pageNumber");
+      await page.goto(numdamSourceUrl, { waitUntil: "domcontentloaded" });
+      const reader = await waitForTakeoverReader(page);
+      await reader.locator("#viewer canvas").first().waitFor();
+      const pageInput = reader.locator("#pageNumber");
       await pageInput.fill("6");
       await pageInput.press("Enter");
       await expectInputValue(pageInput, (value) => value === "6");
-      await page.locator("#zoomInButton").click();
-      await page.locator("#toggle-more").click();
+      await reader.locator("#zoomInButton").click();
+      await reader.locator("#toggle-more").click();
       const desktopMenuPath = join(
         artifacts.root,
         "numdam-copy-actions-desktop.png",
       );
       await page.screenshot({ path: desktopMenuPath });
       assertPng(desktopMenuPath);
+
+      // The current-view link is the source URL with its query intact plus a
+      // standard PDF open-parameters fragment — readable by any viewer.
       await page.evaluate(() => navigator.clipboard.writeText(""));
-      await page.locator('.menu-item[data-action="copy-view-link"]').click();
+      await reader.locator('.menu-item[data-action="copy-view-link"]').click();
       const copiedViewUrl = await readNonEmptyClipboard(page);
       const copiedView = new URL(copiedViewUrl);
       expect(copiedView.origin).toBe("https://www.numdam.org");
       expect(copiedView.pathname).toBe("/item/AST_1992__211__1_0.pdf");
-      expect(copiedView.searchParams.get("mathread-view")).toBe("source-owned");
-      const viewLinks = copiedView.searchParams.getAll("mathread-link");
-      expect(viewLinks[0]).toBe("v1.source-owned");
-      const viewLink = viewLinks[viewLinks.length - 1];
-      if (viewLink === undefined) {
-        throw new Error("Current-view link omitted its MathRead view state");
-      }
-      if (!viewLink.startsWith("v1.")) {
-        throw new Error("Current-view link omitted its MathRead view state");
-      }
-      const viewState = atob(viewLink.slice(3));
-      const [version, pageNumber, viewportX, viewportY, zoom] = viewState.split(":");
-      expect(version).toBe("v1");
-      expect(pageNumber).toBe("6");
+      expect(copiedView.searchParams.get("title")).toBe("source owned~query");
+      const viewParams = new URLSearchParams(copiedView.hash.slice(1));
+      expect(viewParams.get("page")).toBe("6");
+      const zoom = viewParams.get("zoom");
+      assert(zoom !== null, "Current-view link omitted its zoom parameter");
+      const [zoomLevel, viewportX, viewportY] = zoom.split(",");
+      expect(Number(zoomLevel)).toBeGreaterThan(0);
       expect(Number.isFinite(Number(viewportX))).toBe(true);
       expect(Number.isFinite(Number(viewportY))).toBe(true);
-      expect(Number(zoom)).toBeGreaterThan(0);
-      await page.locator("#toggle-more").click();
+
+      // The plain link is the source URL itself, fragment-free.
+      await reader.locator("#toggle-more").click();
       await page.evaluate(() => navigator.clipboard.writeText(""));
-      await page.locator('.menu-item[data-action="copy-plain-link"]').click();
+      await reader.locator('.menu-item[data-action="copy-plain-link"]').click();
       await waitForClipboardText(page, numdamSourceUrl);
+      expect(captureFetches).toBe(1);
+
+      // A recipient opening the current-view link lands on the same view via
+      // the standard fragment, restored through a fresh takeover.
       await page.setViewportSize({ width: 390, height: 844 });
-      await page.locator("#toggle-more").click();
-      expect(
-        await page.locator("#more-menu").isVisible(),
-      ).toBe(true);
+      await reader.locator("#toggle-more").click();
+      expect(await reader.locator("#more-menu").isVisible()).toBe(true);
       const narrowMenuPath = join(
         artifacts.root,
         "numdam-copy-actions-narrow.png",
       );
       await page.screenshot({ path: narrowMenuPath });
       assertPng(narrowMenuPath);
-      await page.locator("#toggle-more").click();
+      await reader.locator("#toggle-more").click();
       await page.setViewportSize({ width: 1280, height: 720 });
-      const plainLaunchUrl = new URL(
-        `chrome-extension://${extensionId}/pdf-launch.html`,
-      );
-      plainLaunchUrl.searchParams.set("file", numdamSourceUrl);
-      await page.goto(plainLaunchUrl.href, { waitUntil: "domcontentloaded" });
-      await waitForReaderFrame(page, key);
       await page.goto(copiedViewUrl, { waitUntil: "domcontentloaded" });
-      const restoredReader = await waitForReaderFrame(page, key);
-      expect(sourceFixtureFetches).toBe(1);
+      const restoredReader = await waitForTakeoverReader(page);
       await expectInputValue(
         restoredReader.locator("#pageNumber"),
         (value) => value === "6",
       );
-      await restoredReader.locator("#toggle-more").click();
-      await restoredReader.locator('.menu-item[data-action="copy-view-link"]').click();
-      await waitForClipboardText(page, copiedViewUrl);
       const screenshotPath = join(
         artifacts.root,
         "numdam-page-6.png",
@@ -701,23 +660,25 @@ export function registerReaderNotesBoundaryTests(): void {
 function registerNoteEditingBoundaryTests(): void {
 test("reader Notes panel persists notes to the on-disk markdown file and renders a live preview", async () => {
   await withExtensionReader(
-    async ({ backendPort, courseServer, extensionId, page, readingRoot }) => {
+    async ({ backendPort, courseServer, page, readingRoot }) => {
       const key = await preCapturePdfThroughBackend(
         backendPort,
         courseServer,
         "direct-pdf-tab",
       );
-      await page.goto(readerPageUrl(extensionId, backendPort, key), {
-        waitUntil: "domcontentloaded",
-      });
-      await waitForCanvasCount(page, 1);
+      await page.goto(
+        `${courseServer.url.origin}${pdfPathForScenario("direct-pdf-tab")}`,
+        { waitUntil: "domcontentloaded" },
+      );
+      const reader = await waitForTakeoverReader(page);
+      await waitForCanvasCount(reader, 1);
 
-      await page.locator('.nav-expand-btn[data-tab="notes"]').click();
+      await reader.locator('.nav-expand-btn[data-tab="notes"]').click();
       await expectElementText(
-        page.locator("#notes-path"),
+        reader.locator("#notes-path"),
         (text) => text === key.replace(/\.pdf$/, ".md"),
       );
-      const editor = page.locator("#ai-editor .cm-content");
+      const editor = reader.locator("#ai-editor .cm-content");
       await editor.click();
       await page.keyboard.type("# Heading\n\nSome **bold** text.");
 
@@ -730,26 +691,27 @@ test("reader Notes panel persists notes to the on-disk markdown file and renders
       const notePath = join(readingRoot, key.replace(/\.pdf$/, ".md"));
       expect(readFileSync(notePath, "utf8")).toBe(noteText);
       await expectElementText(
-        page.locator("#notes-status"),
+        reader.locator("#notes-status"),
         (text) => text === "Saved",
       );
 
       // Live preview renders sanitized GFM from the same buffer.
-      await page.locator("#notes-mode-preview").click();
+      await reader.locator("#notes-mode-preview").click();
       await expectElementText(
-        page.locator("#notes-preview h1"),
+        reader.locator("#notes-preview h1"),
         (text) => text === "Heading",
       );
       await expectElementText(
-        page.locator("#notes-preview strong"),
+        reader.locator("#notes-preview strong"),
         (text) => text === "bold",
       );
 
       // Reload: the editor restores from the sidecar, not any browser-local store.
       await page.reload({ waitUntil: "domcontentloaded" });
-      await page.locator('.nav-expand-btn[data-tab="notes"]').click();
+      const reloadedReader = await waitForTakeoverReader(page);
+      await reloadedReader.locator('.nav-expand-btn[data-tab="notes"]').click();
       await expectElementText(
-        page.locator("#ai-editor .cm-content"),
+        reloadedReader.locator("#ai-editor .cm-content"),
         (text) => text.includes("Heading") && text.includes("bold"),
       );
     },
@@ -758,7 +720,7 @@ test("reader Notes panel persists notes to the on-disk markdown file and renders
 
 test("reader Key Points panel blocks stale autosave and resolves disk conflicts", async () => {
   await withExtensionReader(
-    async ({ backendPort, courseServer, extensionId, page, readingRoot }) => {
+    async ({ backendPort, courseServer, page, readingRoot }) => {
       const key = await preCapturePdfThroughBackend(
         backendPort,
         courseServer,
@@ -766,13 +728,15 @@ test("reader Key Points panel blocks stale autosave and resolves disk conflicts"
       );
       const sidecarPath = join(readingRoot, key.replace(/\.pdf$/, ".md"));
 
-      await page.goto(readerPageUrl(extensionId, backendPort, key), {
-        waitUntil: "domcontentloaded",
-      });
-      await waitForCanvasCount(page, 1);
-      await page.locator('.nav-expand-btn[data-tab="notes"]').click();
+      await page.goto(
+        `${courseServer.url.origin}${pdfPathForScenario("direct-pdf-tab")}`,
+        { waitUntil: "domcontentloaded" },
+      );
+      const reader = await waitForTakeoverReader(page);
+      await waitForCanvasCount(reader, 1);
+      await reader.locator('.nav-expand-btn[data-tab="notes"]').click();
 
-      const editor = page.locator("#ai-editor .cm-content");
+      const editor = reader.locator("#ai-editor .cm-content");
       await editor.click();
       await page.keyboard.type("original buffer");
       await waitForNoteSaved(
@@ -781,7 +745,7 @@ test("reader Key Points panel blocks stale autosave and resolves disk conflicts"
         (text) => text === "original buffer",
       );
       await expectElementText(
-        page.locator("#notes-status"),
+        reader.locator("#notes-status"),
         (text) => text === "Saved",
       );
 
@@ -789,19 +753,19 @@ test("reader Key Points panel blocks stale autosave and resolves disk conflicts"
       await editor.click();
       await page.keyboard.type("\nstale local edit");
       await expectElementText(
-        page.locator("#notes-status"),
+        reader.locator("#notes-status"),
         (text) => text === "Save failed: conflict",
       );
-      await expectElementText(page.locator("#notes-error"), (text) =>
+      await expectElementText(reader.locator("#notes-error"), (text) =>
         text.includes("Version mismatch"),
       );
       expect(readFileSync(sidecarPath, "utf8")).toBe(
         "disk edit from another tab\n",
       );
 
-      await page.getByRole("button", { name: "Load from Disk" }).click();
+      await reader.getByRole("button", { name: "Load from Disk" }).click();
       await expectElementText(
-        page.locator("#notes-status"),
+        reader.locator("#notes-status"),
         (text) => text === "Saved",
       );
       await expectElementText(
@@ -815,14 +779,14 @@ test("reader Key Points panel blocks stale autosave and resolves disk conflicts"
       await editor.click();
       await page.keyboard.type("\noverwrite local edit");
       await expectElementText(
-        page.locator("#notes-status"),
+        reader.locator("#notes-status"),
         (text) => text === "Save failed: conflict",
       );
       expect(readFileSync(sidecarPath, "utf8")).toBe(
         "second disk edit from another tab\n",
       );
 
-      await page.getByRole("button", { name: "Overwrite Disk" }).click();
+      await reader.getByRole("button", { name: "Overwrite Disk" }).click();
       await waitForNoteSaved(
         backendPort,
         key,
@@ -831,7 +795,7 @@ test("reader Key Points panel blocks stale autosave and resolves disk conflicts"
           !text.includes("second disk edit"),
       );
       await expectElementText(
-        page.locator("#notes-status"),
+        reader.locator("#notes-status"),
         (text) => text === "Saved",
       );
     },
@@ -844,18 +808,20 @@ function registerNoteMigrationBoundaryTests(): void {
 
 test("reader Key Points panel surfaces a loud error when the backend dies (no localStorage fallback)", async () => {
   await withExtensionReader(
-    async ({ backend, backendPort, courseServer, extensionId, page }) => {
-      const key = await preCapturePdfThroughBackend(
+    async ({ backend, backendPort, courseServer, page }) => {
+      await preCapturePdfThroughBackend(
         backendPort,
         courseServer,
         "direct-pdf-tab",
       );
-      await page.goto(readerPageUrl(extensionId, backendPort, key), {
-        waitUntil: "domcontentloaded",
-      });
-      await waitForCanvasCount(page, 1);
-      await page.locator('.nav-expand-btn[data-tab="notes"]').click();
-      const editor = page.locator("#ai-editor .cm-content");
+      await page.goto(
+        `${courseServer.url.origin}${pdfPathForScenario("direct-pdf-tab")}`,
+        { waitUntil: "domcontentloaded" },
+      );
+      const reader = await waitForTakeoverReader(page);
+      await waitForCanvasCount(reader, 1);
+      await reader.locator('.nav-expand-btn[data-tab="notes"]').click();
+      const editor = reader.locator("#ai-editor .cm-content");
       await editor.waitFor();
 
       backend.process.kill();
@@ -865,7 +831,7 @@ test("reader Key Points panel surfaces a loud error when the backend dies (no lo
       // failure instead of falling back to a browser-local store.
       await editor.click();
       await page.keyboard.type("orphaned edit");
-      await expectElementText(page.locator("#notes-status"), (text) =>
+      await expectElementText(reader.locator("#notes-status"), (text) =>
         text.startsWith("Save failed:"),
       );
     },
@@ -888,20 +854,22 @@ test("reader keeps legacy highlight source until migration is durably saved", as
         15_000,
       );
 
-      await page.goto(readerPageUrl(extensionId, backendPort, key), {
-        waitUntil: "domcontentloaded",
-      });
-      await waitForCanvasCount(page, 1);
-      await page.locator('.nav-expand-btn[data-tab="notes"]').click();
+      await page.goto(
+        `${courseServer.url.origin}${pdfPathForScenario("direct-pdf-tab")}`,
+        { waitUntil: "domcontentloaded" },
+      );
+      const reader = await waitForTakeoverReader(page);
+      await waitForCanvasCount(reader, 1);
+      await reader.locator('.nav-expand-btn[data-tab="notes"]').click();
 
-      await expectElementText(page.locator("#ai-editor .cm-content"), (text) =>
+      await expectElementText(reader.locator("#ai-editor .cm-content"), (text) =>
         text.includes("legacy lattice quote"),
       );
       await expectElementText(
-        page.locator("#notes-status"),
+        reader.locator("#notes-status"),
         (text) => text === "Unsaved changes",
       );
-      expect(await legacyHighlightsRaw(page, key)).not.toBeNull();
+      expect(await legacyHighlightsRaw(reader, key)).not.toBeNull();
     },
   );
 }, 120_000);
@@ -930,24 +898,26 @@ test("legacy highlight migration rejects incomplete records instead of fabricati
         15_000,
       );
 
-      await page.goto(readerPageUrl(extensionId, backendPort, key), {
-        waitUntil: "domcontentloaded",
-      });
-      await waitForCanvasCount(page, 1);
-      await page.locator('.nav-expand-btn[data-tab="notes"]').click();
+      await page.goto(
+        `${courseServer.url.origin}${pdfPathForScenario("direct-pdf-tab")}`,
+        { waitUntil: "domcontentloaded" },
+      );
+      const reader = await waitForTakeoverReader(page);
+      await waitForCanvasCount(reader, 1);
+      await reader.locator('.nav-expand-btn[data-tab="notes"]').click();
       await expectElementText(
-        page.locator("#notes-status"),
+        reader.locator("#notes-status"),
         (text) => text === "Saved" || text === "Unsaved changes",
       );
 
-      const editorText = await page
+      const editorText = await reader
         .locator("#ai-editor .cm-content")
         .innerText();
       expect(editorText).not.toContain("1970-01-01T00:00:00.000Z");
       expect(editorText).not.toContain(
         "legacy highlight missing required fields",
       );
-      expect(await legacyHighlightsRaw(page, key)).not.toBeNull();
+      expect(await legacyHighlightsRaw(reader, key)).not.toBeNull();
     },
   );
 }, 120_000);
@@ -1150,27 +1120,8 @@ test("PDF.js owns reader controls while the MathRead Notes editor remains isolat
 }, 120_000);
 }
 
-function readerPageUrl(extensionId: string, backendPort: number, key: string): string {
-  const file = `http://127.0.0.1:${backendPort}/pdf/${encodeURIComponent(key)}`;
-  return `chrome-extension://${extensionId}/reader/reader.html?file=${encodeURIComponent(file)}`;
-}
 
-function assertReaderFrameUrl(url: string, expectedKey: string): void {
-  const parsed = new URL(url);
-  expect(parsed.protocol).toBe("chrome-extension:");
-  expect(isReaderDocumentUrl(parsed, expectedKey)).toBe(true);
-}
 
-function isReaderDocumentUrl(url: URL, expectedKey: string): boolean {
-  if (url.pathname !== "/reader/reader.html") {
-    return false;
-  }
-  const file = url.searchParams.get("file");
-  if (file === null) {
-    return false;
-  }
-  return decodeURIComponent(new URL(file).pathname).endsWith(`/pdf/${expectedKey}`);
-}
 
 async function runBackendUnavailable(): Promise<void> {
   const backendPort = await unusedTcpPort();
@@ -1207,9 +1158,9 @@ async function runBackendUnavailable(): Promise<void> {
     attachPageDiagnostics(page, artifacts, "clicked-link");
     await page.goto(`${courseServer.url.origin}/notes.pdf`);
 
-    // No backend means the extension-owned launch document remains visible with a loud
-    // capture error; Chrome's PDF viewer is never used as a failure fallback.
-    await expectElementText(page.locator("#mathread-pdf-launch.failed"), (text) =>
+    // No backend means the takeover surface fails loudly on the wrapper
+    // document at the source URL, naming the native-viewer escape hatch.
+    await expectElementText(page.locator("body"), (text) =>
       text.includes("MathRead could not open this PDF"),
     );
     await page.screenshot({ path: artifacts.screenshotAfterPath });
@@ -1370,23 +1321,6 @@ async function runExtensionCapture(
     const page = await context.newPage();
     attachPageDiagnostics(page, artifacts, scenario);
     const mainFrameNavigations: string[] = [];
-    // `framenavigated` fires before the launch renderer is ready, while a chained
-    // `waitForURL` continuation can run after the asynchronous capture has already
-    // replaced it with the reader. Capture directly from the launch document's
-    // `domcontentloaded` event, which fires with the static launch surface rendered.
-    let launchScreenshot: Promise<Uint8Array<ArrayBufferLike>> | undefined;
-    page.on("domcontentloaded", () => {
-      const navigationUrl = new URL(page.url());
-      if (
-        navigationUrl.protocol === "chrome-extension:" &&
-        navigationUrl.pathname === "/pdf-launch.html" &&
-        launchScreenshot === undefined
-      ) {
-        launchScreenshot = page.screenshot({
-          path: artifacts.screenshotLaunchPath,
-        });
-      }
-    });
     page.on("framenavigated", (frame) => {
       if (frame === page.mainFrame()) {
         mainFrameNavigations.push(frame.url());
@@ -1394,9 +1328,9 @@ async function runExtensionCapture(
     });
 
     if (scenario === "clicked-link") {
-      // The realistic flow: a click on a PDF link records the click origin as capture
-      // provenance (link-origin.ts), then DNR commits the extension launch page before
-      // Chrome can commit its native PDF document.
+      // The realistic flow: a click on a PDF link records the click origin as
+      // capture provenance (link-origin.ts), then the takeover content script
+      // mounts the reader inside the wrapper document at the PDF's own URL.
       await page.goto(`${courseServer.url.origin}/course/`);
       await page.screenshot({ path: artifacts.screenshotBeforePath });
       await page.getByRole("link", { name: "Notes" }).click();
@@ -1406,13 +1340,11 @@ async function runExtensionCapture(
       );
     }
 
-    // Capture is automatic and always-on: opening the PDF stores it, then the reader
-    // mounts keyed by the stored filename.
+    // Capture is automatic and always-on: opening the PDF stores it while the
+    // reader mounts as a child iframe under the unchanged source URL.
     const storedPath = await waitForStoredPdf(readingRoot);
     const key = storedKeyFromPath(storedPath);
-    const readerFrame = await waitForReaderFrame(page, key);
-    assert(launchScreenshot !== undefined);
-    await launchScreenshot;
+    const readerFrame = await waitForTakeoverReader(page);
     await readerFrame.locator("#viewer canvas").first().waitFor();
     await page.screenshot({ path: artifacts.screenshotAfterPath });
 
@@ -1513,7 +1445,7 @@ async function withExtensionReader(
     const serviceWorker = await waitForExtensionServiceWorker(context);
     await waitForNoPdfRedirectRule(serviceWorker);
     const extensionId = new URL(serviceWorker.url()).host;
-    await context.grantPermissions(["clipboard-read"]);
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await context.addCookies([
       {
         name: cookieName,
@@ -1819,7 +1751,7 @@ async function hasPdfRedirectRule(serviceWorker: Worker): Promise<boolean> {
       }
     ).chrome;
     const rules = await chromeApi.declarativeNetRequest.getDynamicRules();
-    return rules.some((rule) => rule.id === 1);
+    return rules.length > 0;
   });
 }
 
@@ -1851,7 +1783,7 @@ function storedKeyFromPath(storedPath: string): string {
  * the unchanged source URL — never the top-level document (the retired
  * extension-owned-reader shape).
  */
-async function waitForTakeoverReader(page: Page): Promise<Frame> {
+export async function waitForTakeoverReader(page: Page): Promise<Frame> {
   const mountDeadline = Date.now() + 30_000;
   for (;;) {
     const candidate = page.frame({
@@ -1868,19 +1800,6 @@ async function waitForTakeoverReader(page: Page): Promise<Frame> {
   }
 }
 
-async function waitForReaderFrame(
-  page: Page,
-  expectedKey: string,
-): Promise<Frame> {
-  const isExpectedTopLevelReader = () => {
-    const url = new URL(page.url());
-    return isReaderDocumentUrl(url, expectedKey);
-  };
-  if (!isExpectedTopLevelReader()) {
-    await page.waitForURL(url => isReaderDocumentUrl(url, expectedKey));
-  }
-  return page.mainFrame();
-}
 
 type ReaderSurface = Page | Frame;
 
@@ -2048,13 +1967,15 @@ async function waitForLibraryTitles(
           if (!(entry instanceof HTMLElement)) {
             throw new Error("Library entry is not an HTMLElement");
           }
+          // Visited entries render a button that navigates to the source
+          // URL; provenance-less disk backups render a plain title span.
           const open = entry.querySelector(".library-entry-open");
-          if (!(open instanceof HTMLButtonElement)) {
-            throw new Error("Library entry omitted its open button");
+          if (!(open instanceof HTMLElement)) {
+            throw new Error("Library entry omitted its title element");
           }
           const { textContent } = open;
           if (textContent === null) {
-            throw new Error("Library entry open button omitted its title");
+            throw new Error("Library entry title element is empty");
           }
           return textContent;
         }),
@@ -2119,18 +2040,18 @@ async function expectElementText(
 }
 
 async function waitForClipboardText(
-  page: Page,
+  surface: ReaderSurface,
   expected: string,
 ): Promise<void> {
-  await page.waitForFunction(
+  await surface.waitForFunction(
     (expectedText) => navigator.clipboard.readText().then((text) => text === expectedText),
     expected,
   );
 }
 
-async function readNonEmptyClipboard(page: Page): Promise<string> {
+async function readNonEmptyClipboard(surface: ReaderSurface): Promise<string> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    const value = await page.evaluate(() => navigator.clipboard.readText());
+    const value = await surface.evaluate(() => navigator.clipboard.readText());
     if (value.length > 0) {
       return value;
     }
@@ -2263,10 +2184,12 @@ async function seedLegacyReaderState(
 }
 
 async function legacyHighlightsRaw(
-  page: Page,
+  surface: ReaderSurface,
   key: string,
 ): Promise<string | null> {
-  return page.evaluate(
+  // Legacy highlights live in the extension origin's localStorage, which the
+  // takeover reader iframe shares; the top page is the PDF's own origin.
+  return surface.evaluate(
     (key) => localStorage.getItem(`mathread-legacy-highlights:${key}`),
     key,
   );
@@ -2446,7 +2369,6 @@ function createCaptureArtifacts(
     backendLogPath: join(root, "backend.log"),
     eventsLogPath: join(root, "events.jsonl"),
     screenshotBeforePath: join(screenshotDir, "before.png"),
-    screenshotLaunchPath: join(screenshotDir, "launch.png"),
     screenshotAfterPath: join(screenshotDir, "after.png"),
     tracePath: join(root, "trace.zip"),
   };
@@ -2471,7 +2393,6 @@ function assertEvidenceArtifacts(
   if (scenario === "clicked-link") {
     assertPng(artifacts.screenshotBeforePath);
   }
-  assertPng(artifacts.screenshotLaunchPath);
   assertPng(artifacts.screenshotAfterPath);
 
   const events = readPersistedEvents(artifacts.eventsLogPath);

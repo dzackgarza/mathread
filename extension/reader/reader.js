@@ -33,14 +33,18 @@ function assert(condition, message) {
 
 function parseLaunch(params) {
   const file = params.get("file");
-  if (file === null) {
-    // Inside a frame with no file parameter, the reader is the takeover
-    // surface (#40): the parent page at the source URL streams the PDF in.
-    return window.parent === window ? { kind: "library" } : { kind: "takeover" };
+  if (window.parent === window) {
+    if (file !== null) {
+      throw new Error(
+        "MathRead no longer reads backend copies at reader URLs; navigate to the PDF's source URL instead.",
+      );
+    }
+    return { kind: "library" };
   }
-  throw new Error(
-    "MathRead no longer reads backend copies at reader URLs; navigate to the PDF's source URL instead.",
-  );
+  // Takeover surface (#40): the parent wrapper page hands the vendored
+  // viewer its document URL through the native ?file= entrypoint.
+  assert(file !== null, "MathRead takeover reader requires its document URL");
+  return { kind: "takeover", sourceUrl: file };
 }
 
 const launch = parseLaunch(new URLSearchParams(location.search));
@@ -78,18 +82,14 @@ let replacingEditorText = false;
 let pendingLegacyMigrationStorageKey = null;
 let pdfViewerState = { kind: "awaiting" };
 let currentPdfViewState = { kind: "awaiting" };
-let takeoverDocument = null;
-let resolvePdfApplication;
-const pdfApplicationReady = new Promise((resolve) => {
-  resolvePdfApplication = resolve;
-});
+let takeoverKey = null;
 
 function documentKey() {
   assert(
-    launch.kind === "takeover" && takeoverDocument !== null,
+    launch.kind === "takeover" && takeoverKey !== null,
     "MathRead document key requires an open document",
   );
-  return takeoverDocument.key;
+  return takeoverKey;
 }
 
 if (launch.kind !== "library") {
@@ -102,23 +102,18 @@ if (launch.kind === "takeover") {
       return;
     }
     const data = event.data;
-    if (data === null || typeof data !== "object" || data.type !== "mathread:pdf") {
+    if (data === null || typeof data !== "object" || data.type !== "mathread:document") {
       return;
     }
-    assert(takeoverDocument === null, "MathRead takeover received a second document");
-    assert(data.body instanceof ArrayBuffer, "MathRead takeover message has no PDF bytes");
+    assert(takeoverKey === null, "MathRead takeover received a second document");
     assert(typeof data.key === "string" && data.key.length > 0, "MathRead takeover message has no library key");
-    assert(typeof data.sourceUrl === "string" && data.sourceUrl.length > 0, "MathRead takeover message has no source URL");
-    takeoverDocument = { key: data.key, sourceUrl: data.sourceUrl };
-    void openTakeoverDocument(data.body);
+    takeoverKey = data.key;
+    void postReadEvent(takeoverKey);
+    if (panel.dataset.panel === "notes") {
+      void ensureNotes();
+    }
   });
   window.parent.postMessage({ type: "mathread:ready" }, "*");
-}
-
-async function openTakeoverDocument(body) {
-  const application = await pdfApplicationReady;
-  await application.open({ data: new Uint8Array(body) });
-  void postReadEvent(documentKey());
 }
 
 // PDF.js's Chromium viewer rewrites the visible URL to a synthetic extension-path
@@ -165,7 +160,6 @@ function observePdfView(application) {
       }, "*");
     }
   });
-  resolvePdfApplication(application);
 }
 
 function parsePdfView(location) {
@@ -224,9 +218,23 @@ document.getElementById("toggle-more").addEventListener("click", () => {
   moreMenu.hidden = !moreMenu.hidden;
 });
 
+// Reference-conformant copy (Scholar reader mechanism): a copy-event listener
+// with clipboardData.setData under the click's user activation. The takeover
+// iframe has no Permissions-Policy clipboard delegation, so the asynchronous
+// Clipboard API is unavailable here by design.
+function copyText(text) {
+  const onCopy = (event) => {
+    event.clipboardData.setData("text/plain", text);
+    event.preventDefault();
+  };
+  document.addEventListener("copy", onCopy, { once: true });
+  const copied = document.execCommand("copy");
+  assert(copied, "MathRead copy command was rejected");
+}
+
 document.querySelector('[data-action="copy-plain-link"]').addEventListener("click", async () => {
   const source = await sourceUrl();
-  await navigator.clipboard.writeText(source.href);
+  copyText(source.href);
   moreMenu.hidden = true;
 });
 
@@ -236,16 +244,13 @@ document.querySelector('[data-action="copy-view-link"]').addEventListener("click
   // Standard PDF open-parameters fragment: any viewer, including Chrome's
   // native one and PDF.js, lands on the right page without MathRead.
   source.hash = `page=${view.page}&zoom=${Math.round(view.zoom * 100)},${view.x},${view.y}`;
-  await navigator.clipboard.writeText(source.href);
+  copyText(source.href);
   moreMenu.hidden = true;
 });
 
 async function sourceUrl() {
-  assert(
-    launch.kind === "takeover" && takeoverDocument !== null,
-    "A source link requires an open document",
-  );
-  return new URL(takeoverDocument.sourceUrl);
+  assert(launch.kind === "takeover", "A source link requires an open document");
+  return new URL(launch.sourceUrl);
 }
 
 function currentPdfView() {
@@ -277,13 +282,24 @@ async function renderLibrary() {
     const item = document.createElement("article");
     item.className = "library-entry";
     item.dataset.testid = "library-entry";
-    const open = document.createElement("button");
-    open.className = "library-entry-open";
-    open.dataset.testid = "library-entry-open";
+    let open;
+    if (typeof entry.source_url === "string" && entry.source_url.length > 0) {
+      open = document.createElement("button");
+      open.className = "library-entry-open";
+      open.dataset.testid = "library-entry-open";
+      open.addEventListener("click", () => {
+        // A history link navigates the tab. Inside the takeover iframe the
+        // tab is the cross-origin top window, whose href is assignable with
+        // the click's user activation; on library.html top === window.
+        window.top.location.href = entry.source_url;
+      });
+    } else {
+      // A manual disk backup was never visited: no URL, no in-app open.
+      // It stays readable from the library folder.
+      open = document.createElement("span");
+      open.className = "library-entry-open";
+    }
     open.textContent = entry.title;
-    open.addEventListener("click", () => {
-      location.assign(entry.source_url);
-    });
     const meta = document.createElement("span");
     meta.className = "library-entry-meta";
     meta.textContent = entry.has_note ? "📝" : "No notes";
@@ -307,7 +323,7 @@ async function ensureNotes() {
   if (
     editor !== null
     || launch.kind === "library"
-    || (launch.kind === "takeover" && takeoverDocument === null)
+    || (launch.kind === "takeover" && takeoverKey === null)
   ) {
     return;
   }

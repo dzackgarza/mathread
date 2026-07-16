@@ -1,9 +1,10 @@
 /**
  * PDF takeover on the source URL (issue #40, Scholar-reference mechanism,
  * white-room). The tab URL is never touched: this script runs in Chrome's
- * PDF-viewer wrapper document, replaces it with a full-viewport iframe
- * hosting the MathRead reader, fetches the PDF bytes same-origin, and hands
- * them to the reader. Reload, history, and open-parameter fragments remain
+ * PDF-viewer wrapper document and replaces it with a full-viewport iframe
+ * hosting the MathRead reader, handed the document through the vendored
+ * PDF.js viewer's native ?file= entrypoint (the upstream extension's own
+ * mechanism). Reload, history, and open-parameter fragments remain
  * Chrome-native properties of the source URL.
  */
 import {
@@ -26,7 +27,6 @@ declare const chrome: {
 };
 
 type ReaderDocument = {
-  body: ArrayBuffer;
   key: string;
   sourceUrl: string;
 };
@@ -67,14 +67,17 @@ function shouldTakeOver(): boolean {
 
 async function takeOver(): Promise<void> {
   const sourceUrl = stripHash(location.href);
-  const bytes = fetchPdfBytes(sourceUrl);
   const capture = capturePdf(sourceUrl);
-  const reader = mountReaderFrame();
+  // The reader iframe fetches the document itself: its ?file= parameter is
+  // the vendored PDF.js Chromium viewer's native entrypoint (the upstream
+  // extension's own mechanism), and the extension origin holds the host
+  // permissions and credentials to fetch the source URL directly.
+  const reader = mountReaderFrame(sourceUrl);
 
-  const [body, key] = await Promise.all([bytes, capture]);
+  const key = await capture;
   const target = await reader;
-  const documentMessage: ReaderDocument = { body, key, sourceUrl };
-  target.postMessage({ type: "mathread:pdf", ...documentMessage }, "*", [body]);
+  const documentMessage: ReaderDocument = { key, sourceUrl };
+  target.postMessage({ type: "mathread:document", ...documentMessage }, "*");
 
   window.addEventListener("message", (event) => {
     if (event.source !== target) {
@@ -86,19 +89,6 @@ async function takeOver(): Promise<void> {
       // fragment; the source URL's hash is the single canonical view state.
       history.replaceState(history.state, "", `${sourceUrl}${data.hash}`);
     }
-  });
-}
-
-function fetchPdfBytes(sourceUrl: string): Promise<ArrayBuffer> {
-  // Same-origin fetch: the wrapper document lives at the PDF's own URL, so
-  // cookies and auth apply without any CORS or background machinery.
-  return fetch(sourceUrl, { credentials: "include" }).then((response) => {
-    if (!response.ok) {
-      throw new Error(
-        `PDF fetch failed: ${response.status} ${response.statusText}`,
-      );
-    }
-    return response.arrayBuffer();
   });
 }
 
@@ -135,11 +125,11 @@ function captureRequest(
     : { ...request, title_hint: storedOrigin.title_hint };
 }
 
-function mountReaderFrame(): Promise<Window> {
+function mountReaderFrame(sourceUrl: string): Promise<Window> {
   const frame = document.createElement("iframe");
   // The source URL's fragment is forwarded verbatim: PDF.js reads standard
   // open parameters (#page=N&zoom=...) from its own document hash natively.
-  frame.src = `${chrome.runtime.getURL("reader/reader.html")}${location.hash}`;
+  frame.src = `${chrome.runtime.getURL("reader/reader.html")}?file=${encodeURIComponent(sourceUrl)}${location.hash}`;
   frame.style.cssText =
     "position:fixed;inset:0;width:100vw;height:100vh;border:none;z-index:2147483647;background:#fff;";
   document.documentElement.style.overflow = "hidden";

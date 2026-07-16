@@ -21,9 +21,9 @@ import {
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium, type BrowserContext, type Page } from "playwright";
+import { chromium, type BrowserContext, type Frame, type Page } from "playwright";
 import { chromiumExecutablePath } from "./browser-helpers";
-import { cleanupTestRoot } from "./extension-boundary-cases";
+import { cleanupTestRoot, waitForTakeoverReader } from "./extension-boundary-cases";
 const ARXIV_IDS = ["1612.09116", "2312.13488"];
 const FIXTURE_DIR = join(import.meta.dir, "fixtures", "arxiv");
 
@@ -52,6 +52,7 @@ async function fixturePdf(arxivId: string): Promise<Uint8Array> {
 }
 
 interface Harness {
+  reader: Frame;
   page: Page;
   backendPort: number;
   readingRoot: string;
@@ -151,13 +152,11 @@ async function withArxivReader(
         ],
       },
     );
-    const serviceWorker = await waitForExtensionServiceWorker(context);
-    const extensionId = new URL(serviceWorker.url()).host;
+    await waitForExtensionServiceWorker(context);
     const page = await context.newPage();
-    await page.goto(
-      `chrome-extension://${extensionId}/reader/reader.html?file=${encodeURIComponent(`http://127.0.0.1:${backendPort}/pdf/${encodeURIComponent(key)}`)}`,
-    );
-    await run({ page, backendPort, readingRoot, key, notePath });
+    await page.goto(pdfUrl);
+    const reader = await waitForTakeoverReader(page);
+    await run({ page, reader, backendPort, readingRoot, key, notePath });
     await page.close();
     completed = true;
   } finally {
@@ -178,14 +177,15 @@ for (const arxivId of ARXIV_IDS) {
     async () => {
       await withArxivReader(
         arxivId,
-        async ({ page, backendPort, key, notePath }) => {
+        async ({ page, reader: initialReader, backendPort, key, notePath }) => {
+          let reader = initialReader;
           const noteMarker = `arXiv reading ${crypto.randomUUID()}`;
           const noteBody = `checked against Nikulin ${crypto.randomUUID()}`;
           const handAuthoredNote = `hand-authored note ${crypto.randomUUID()}`;
 
           // The MathRead overlay persists real notes beside the captured document.
-          await page.locator('.nav-expand-btn[data-tab="notes"]').click();
-          const editor = page.locator("#ai-editor .cm-content");
+          await reader.locator('.nav-expand-btn[data-tab="notes"]').click();
+          let editor = reader.locator("#ai-editor .cm-content");
           await editor.click();
           await page.keyboard.type(`# ${noteMarker}\n\n**${noteBody}**`);
           await waitFor(
@@ -198,14 +198,18 @@ for (const arxivId of ARXIV_IDS) {
           expect(note).toContain(`# ${noteMarker}`);
           expect(note).toContain(`**${noteBody}**`);
 
+          console.error(`[arxiv] typed note saved for ${key}`);
           // Reload obtains the persisted sidecar rather than browser-local state.
           await page.reload();
-          await page.locator('.nav-expand-btn[data-tab="notes"]').click();
+          reader = await waitForTakeoverReader(page);
+          editor = reader.locator("#ai-editor .cm-content");
+          await reader.locator('.nav-expand-btn[data-tab="notes"]').click();
           await waitFor(async () =>
             (await editor.innerText()).includes(noteBody),
           120_000,
           );
 
+          console.error(`[arxiv] reload 1 restored editor for ${key}`);
           // A note edited at the backend boundary is reloaded into the same overlay.
           const putResponse = await fetch(
             `http://127.0.0.1:${backendPort}/notes/${encodeURIComponent(key)}/overwrite`,
@@ -220,16 +224,19 @@ for (const arxivId of ARXIV_IDS) {
           );
           expect(putResponse.ok).toBe(true);
           await page.reload();
-          await page.locator('.nav-expand-btn[data-tab="notes"]').click();
+          reader = await waitForTakeoverReader(page);
+          editor = reader.locator("#ai-editor .cm-content");
+          await reader.locator('.nav-expand-btn[data-tab="notes"]').click();
           await waitFor(
             async () => (await editor.innerText()).includes(handAuthoredNote),
             120_000,
           );
 
+          console.error(`[arxiv] reload 2 restored hand-authored note for ${key}`);
           // The overlay preview renders the same persisted Markdown.
-          await page.locator("#notes-mode-preview").click();
+          await reader.locator("#notes-mode-preview").click();
           await waitFor(async () =>
-            (await page.locator("#notes-preview").innerText()).includes(
+            (await reader.locator("#notes-preview").innerText()).includes(
               handAuthoredNote,
             ),
           15_000);

@@ -3,39 +3,21 @@
   "name": "MathRead PDF Viewer",
   "version": "1.0.0",
   "description": "Capture PDFs to the local MathRead service and read them in the MathRead reader.",
-  "permissions": [
-    "storage",
-    "cookies",
-    "declarativeNetRequestWithHostAccess"
-  ],
-  "host_permissions": [
-    "http://127.0.0.1:8765/*",
-    "http://*/*",
-    "https://*/*"
-  ],
+  "permissions": ["storage", "cookies", "declarativeNetRequestWithHostAccess"],
+  "host_permissions": ["http://127.0.0.1:8765/*", "http://*/*", "https://*/*"],
   "background": {
     "service_worker": "mathread/background.js",
     "type": "module"
   },
   "content_scripts": [
     {
-      "matches": [
-        "http://*/*",
-        "https://*/*"
-      ],
-      "js": [
-        "mathread/link-origin.js"
-      ],
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["mathread/link-origin.js"],
       "run_at": "document_start"
     },
     {
-      "matches": [
-        "http://*/*",
-        "https://*/*"
-      ],
-      "js": [
-        "mathread/takeover.js"
-      ],
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["mathread/takeover.js"],
       "run_at": "document_start",
       "all_frames": true
     }
@@ -52,14 +34,8 @@
   "options_page": "mathread/options.html",
   "web_accessible_resources": [
     {
-      "resources": [
-        "reader/*",
-        "manifest.json"
-      ],
-      "matches": [
-        "http://*/*",
-        "https://*/*"
-      ]
+      "resources": ["reader/*", "manifest.json"],
+      "matches": ["http://*/*", "https://*/*"]
     }
   ],
   "icons": {
