@@ -1113,6 +1113,59 @@ test("reader preserves PDF-internal history through the production launch redire
   );
 }, 120_000);
 
+test("reader keeps a visible URL that resolves without the service worker", async () => {
+  await withExtensionReader(
+    async ({ courseServer, page, readingRoot }) => {
+      await page.goto(`${courseServer.url.origin}/notes.pdf`);
+      const storedPath = await waitForStoredPdf(readingRoot);
+      const key = storedKeyFromPath(storedPath);
+      const reader = await waitForReaderFrame(page, key);
+      await reader.locator("#viewer .page canvas").first().waitFor();
+
+      // The synthetic chrome-extension://<id>/http://… path form only resolves
+      // while the extension service worker can be woken to redirect it. The
+      // reader document form is a real file and always resolves, so it must be
+      // the URL that reload and history traversal re-request.
+      const visible = new URL(page.url());
+      expect(visible.pathname).toBe("/reader/reader.html");
+      const file = visible.searchParams.get("file");
+      assert(file !== null, "Canonical reader URL must carry its file parameter");
+      expect(decodeURIComponent(new URL(file).pathname)).toBe(`/pdf/${key}`);
+    },
+  );
+}, 120_000);
+
+test("stale loaded extension reports an actionable reload instruction instead of hanging capture", async () => {
+  await runStaleLoadedManifestCapture();
+}, 120_000);
+
+test("reader survives a browser reload after PDF.js rewrites the visible URL", async () => {
+  await withExtensionReader(
+    async ({ artifacts, context, courseServer, page, readingRoot }) => {
+      await page.goto(`${courseServer.url.origin}/notes.pdf`);
+      const storedPath = await waitForStoredPdf(readingRoot);
+      const key = storedKeyFromPath(storedPath);
+      const reader = await waitForReaderFrame(page, key);
+      await reader.locator("#viewer .page canvas").first().waitFor();
+      // PDF.js has rewritten the visible URL to the extension-path form; a reload
+      // re-requests that synthetic URL cold, without any live document to restore.
+      assertReaderFrameUrl(page.url(), key);
+
+      // Real Chrome stops extension service workers after ~30s idle; a reload must
+      // survive without a live worker, exactly as reported in issue #34 (from #38).
+      await stopExtensionServiceWorkers(context, page);
+
+      await page.reload({ waitUntil: "domcontentloaded" });
+
+      const reloadedReader = await waitForReaderFrame(page, key);
+      await reloadedReader.locator("#viewer .page canvas").first().waitFor();
+      const screenshotPath = join(artifacts.root, "reader-after-reload.png");
+      await page.screenshot({ path: screenshotPath });
+      assertPng(screenshotPath);
+    },
+  );
+}, 120_000);
+
 }
 
 function registerInterceptedReaderShortcutsBoundaryTest(): void {
@@ -1192,6 +1245,96 @@ async function runBackendUnavailable(): Promise<void> {
     // capture error; Chrome's PDF viewer is never used as a failure fallback.
     await expectElementText(page.locator("#mathread-pdf-launch.failed"), (text) =>
       text.includes("MathRead could not open this PDF"),
+    );
+    await page.screenshot({ path: artifacts.screenshotAfterPath });
+    assertPng(artifacts.screenshotAfterPath);
+    await page.close();
+    completed = true;
+  } finally {
+    if (context !== undefined) {
+      await context.close();
+    }
+    courseServer.stop(true);
+    if (completed) {
+      rmSync(testRoot, { recursive: true, force: true });
+    }
+  }
+}
+
+/**
+ * Reconstructs the live defect behind issue #34's absorbed reload report: the
+ * extension was loaded (and its persistent DNR redirect registered) before a
+ * rebuild changed the manifest's permissions on disk. Chrome keeps running the
+ * stale loaded manifest until the extension is reloaded, while background.js is
+ * read fresh from disk and requires the new permissions at import time — so the
+ * service worker dies on every start, capture has no receiver, and synthetic
+ * viewer URLs stop resolving. The launch page must turn that state into an
+ * actionable instruction instead of a hang or a cryptic messaging error.
+ */
+async function runStaleLoadedManifestCapture(): Promise<void> {
+  const backendPort = await unusedTcpPort();
+  const testRoot = mkdtemp("mathread-extension-stale-manifest-");
+  const artifacts = createCaptureArtifacts(testRoot, "clicked-link");
+  const extensionPath = configuredExtensionCopy(testRoot, backendPort);
+  const manifestPath = join(extensionPath, "manifest.json");
+  const currentManifestSource = readFileSync(manifestPath, "utf8");
+  const courseServer = startCourseServer(artifacts.eventsLogPath);
+  const launchOptions = {
+    executablePath: chromiumExecutablePath(),
+    headless: true,
+    artifactsDir: artifacts.root,
+    args: [
+      `--disable-extensions-except=${extensionPath}`,
+      `--load-extension=${extensionPath}`,
+    ],
+  };
+  let context: BrowserContext | undefined;
+  let completed = false;
+
+  try {
+    // Phase 1: a healthy load registers the persistent DNR redirect rule,
+    // exactly like the install that preceded the on-disk rebuild.
+    context = await chromium.launchPersistentContext(
+      join(testRoot, "profile"),
+      launchOptions,
+    );
+    const serviceWorker = await waitForExtensionServiceWorker(context);
+    await waitForPdfRedirectRule(serviceWorker);
+    await context.close();
+    context = undefined;
+
+    // Phase 2: Chrome loads the pre-rebuild manifest, whose permissions no
+    // longer satisfy the current background worker's import-time API use.
+    const staleManifest = JSON.parse(currentManifestSource) as {
+      permissions: string[];
+    };
+    staleManifest.permissions = [
+      "storage",
+      "cookies",
+      "declarativeNetRequestWithHostAccess",
+    ];
+    writeFileSync(manifestPath, `${JSON.stringify(staleManifest, null, 2)}\n`);
+    context = await chromium.launchPersistentContext(
+      join(testRoot, "profile"),
+      launchOptions,
+    );
+    // The disk manifest is current again the moment Chrome has loaded the stale
+    // one, mirroring a rebuild that landed after the last extension reload.
+    writeFileSync(manifestPath, currentManifestSource);
+
+    await context.addCookies([
+      {
+        name: cookieName,
+        value: cookieValue,
+        url: courseServer.url.origin,
+      },
+    ]);
+    const page = await context.newPage();
+    attachPageDiagnostics(page, artifacts, "clicked-link");
+    await page.goto(`${courseServer.url.origin}/notes.pdf`);
+
+    await expectElementText(page.locator("#mathread-pdf-launch.failed"), (text) =>
+      text.includes("chrome://extensions"),
     );
     await page.screenshot({ path: artifacts.screenshotAfterPath });
     assertPng(artifacts.screenshotAfterPath);
@@ -1452,6 +1595,46 @@ async function withExtensionReader(
       rmSync(testRoot, { recursive: true, force: true });
     }
   }
+}
+
+/**
+ * Stops every running service worker in the browser, including the extension's
+ * MV3 background worker. Chrome does the same thing on its own after ~30 seconds
+ * of idle; tests use this to prove navigation survives a stopped worker.
+ */
+async function stopExtensionServiceWorkers(context: BrowserContext, page: Page): Promise<void> {
+  const browser = context.browser();
+  assert(browser !== null, "Persistent context must expose its browser for CDP");
+  const browserSession = await browser.newBrowserCDPSession();
+  try {
+    assert(
+      await hasRunningServiceWorkerTarget(browserSession),
+      "Extension service worker must be running before it can be stopped",
+    );
+    const session = await context.newCDPSession(page);
+    try {
+      await session.send("ServiceWorker.enable");
+      await session.send("ServiceWorker.stopAllWorkers");
+    } finally {
+      await session.detach();
+    }
+    const stopDeadline = Date.now() + 5_000;
+    while (await hasRunningServiceWorkerTarget(browserSession)) {
+      assert(Date.now() < stopDeadline, "Extension service worker did not stop");
+      await Bun.sleep(50);
+    }
+  } finally {
+    await browserSession.detach();
+  }
+}
+
+async function hasRunningServiceWorkerTarget(
+  session: Awaited<ReturnType<BrowserContext["newCDPSession"]>>,
+): Promise<boolean> {
+  const { targetInfos } = (await session.send("Target.getTargets")) as {
+    targetInfos: Array<{ type: string }>;
+  };
+  return targetInfos.some((target) => target.type === "service_worker");
 }
 
 async function startXServer(): Promise<RunningXServer> {
