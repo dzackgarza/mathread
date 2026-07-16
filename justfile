@@ -29,7 +29,8 @@ test-commit:
     @just -f ~/ai-review-ci/justfiles/python.just -d . test-commit
     @just -f ~/ai-review-ci/justfiles/bun.just -d . test-commit
 
-# Run the full Python and Bun suites before pushing
+# Run the push tier: Python suite plus the Bun unit + browser-smoke subset
+# (package.json test:push). The full browser suite runs in CI via test:ci.
 test-push:
     @just -f ~/ai-review-ci/justfiles/python.just -d . test-push
     @just -f ~/ai-review-ci/justfiles/bun.just -d . test-push

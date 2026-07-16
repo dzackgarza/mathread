@@ -1262,9 +1262,7 @@ async function runBackendUnavailable(): Promise<void> {
       await context.close();
     }
     courseServer.stop(true);
-    if (completed) {
-      rmSync(testRoot, { recursive: true, force: true });
-    }
+    cleanupTestRoot(testRoot, completed);
   }
 }
 
@@ -1352,9 +1350,7 @@ async function runStaleLoadedManifestCapture(): Promise<void> {
       await context.close();
     }
     courseServer.stop(true);
-    if (completed) {
-      rmSync(testRoot, { recursive: true, force: true });
-    }
+    cleanupTestRoot(testRoot, completed);
   }
 }
 
@@ -1598,9 +1594,7 @@ async function withExtensionReader(
     backend.process.kill();
     await backend.process.exited;
     closeSync(backend.logFd);
-    if (completed) {
-      rmSync(testRoot, { recursive: true, force: true });
-    }
+    cleanupTestRoot(testRoot, completed);
   }
 }
 
@@ -2726,6 +2720,55 @@ function unusedTcpPort(): Promise<number> {
   });
 }
 
+const testRootMaxAgeMs = 3 * 24 * 60 * 60 * 1000;
+let prunedStaleTestRoots = false;
+
 function mkdtemp(prefix: string): string {
+  if (!prunedStaleTestRoots) {
+    prunedStaleTestRoots = true;
+    pruneStaleTestRoots();
+  }
   return mkdtempSync(join(tmpdir(), prefix));
+}
+
+/**
+ * Failed runs retain evidence (see cleanupTestRoot), so roots accumulate across
+ * sessions: 1,800 of them filled the disk and starved later browser launches
+ * into arbitrary timeouts (#34, absorbed #37). Prune roots past the evidence
+ * window once per test process.
+ */
+function pruneStaleTestRoots(): void {
+  for (const entry of readdirSync(tmpdir())) {
+    if (!entry.startsWith("mathread-")) {
+      continue;
+    }
+    const path = join(tmpdir(), entry);
+    let modifiedMs: number;
+    try {
+      modifiedMs = statSync(path).mtimeMs;
+    } catch {
+      // Another test process may prune the same root between listing and stat.
+      continue;
+    }
+    if (Date.now() - modifiedMs > testRootMaxAgeMs) {
+      rmSync(path, { recursive: true, force: true });
+    }
+  }
+}
+
+/**
+ * A failed run keeps only its artifacts/ directory as evidence. The Chromium
+ * profile and built-extension copy are reproducible bulk — retaining them
+ * whole is how /tmp reached 1,807 leaked roots and a full disk.
+ */
+export function cleanupTestRoot(testRoot: string, completed: boolean): void {
+  if (completed) {
+    rmSync(testRoot, { recursive: true, force: true });
+    return;
+  }
+  for (const entry of readdirSync(testRoot)) {
+    if (entry !== "artifacts") {
+      rmSync(join(testRoot, entry), { recursive: true, force: true });
+    }
+  }
 }

@@ -16,7 +16,6 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
@@ -24,6 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import { chromiumExecutablePath } from "./browser-helpers";
+import { cleanupTestRoot } from "./extension-boundary-cases";
 const ARXIV_IDS = ["1612.09116", "2312.13488"];
 const FIXTURE_DIR = join(import.meta.dir, "fixtures", "arxiv");
 
@@ -168,9 +168,7 @@ async function withArxivReader(
     backend.kill();
     await backend.exited;
     closeSync(logFd);
-    if (completed) {
-      rmSync(testRoot, { recursive: true, force: true });
-    }
+    cleanupTestRoot(testRoot, completed);
   }
 }
 
