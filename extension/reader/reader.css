@@ -138,6 +138,8 @@
 }
 
 .mathread-selection-popup {
+  /* The overlay root is pointer-events: none; the popup must catch clicks. */
+  pointer-events: auto;
   position: fixed;
   display: flex;
   flex-direction: column;

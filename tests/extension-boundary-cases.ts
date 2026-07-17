@@ -970,6 +970,7 @@ test("reader presents the MathRead library without constructing a custom PDF vie
 
 function registerReaderRenderingSemanticsBoundaryTests(): void {
   registerReaderHistoryBoundaryTest();
+  registerHighlightBoundaryTest();
   registerInterceptedReaderShortcutsBoundaryTest();
 }
 
@@ -1096,6 +1097,57 @@ test("reader survives a browser reload at the source URL without the service wor
   );
 }, 120_000);
 
+}
+
+function registerHighlightBoundaryTest(): void {
+test("selection popup commits a highlight to the sidecar and paints the layer", async () => {
+  await withExtensionReader(
+    async ({ artifacts, backendPort, courseServer, page, readingRoot }) => {
+      // internal-link.pdf carries real text; the synthetic notes.pdf has none.
+      await page.goto(`${courseServer.url.origin}/internal-link.pdf`);
+      const storedPath = await waitForStoredPdf(readingRoot);
+      const key = storedKeyFromPath(storedPath);
+      const reader = await waitForTakeoverReader(page);
+      await reader.locator("#viewer .page .textLayer span").first().waitFor();
+
+      // Headless CDP drags do not route into the cross-process takeover
+      // iframe, so the selection is created with DOM APIs; the popup keys off
+      // selectionchange either way.
+      await reader.evaluate(() => {
+        const span = document.querySelector("#viewer .page .textLayer span");
+        if (span === null) {
+          throw new Error("Reader has no text layer to select");
+        }
+        const range = document.createRange();
+        range.selectNodeContents(span);
+        const selection = window.getSelection();
+        if (selection === null) {
+          throw new Error("Reader window has no selection");
+        }
+        selection.removeAllRanges();
+        selection.addRange(range);
+      });
+      const popup = reader.locator('[data-testid="selection-popup"]');
+      await popup.waitFor();
+      await reader.locator('[data-color="#91edd0"]').click();
+
+      // The highlight is a pandoc annotation div in the on-disk sidecar.
+      await waitForNoteSaved(
+        backendPort,
+        key,
+        (text) => text.includes("::: {.annotation") && text.includes("#91edd0"),
+      );
+      // ...and paints as a layer mark over the page.
+      await reader.locator("#viewer .page .highlightLayer .highlight-mark").first().waitFor();
+
+      await reader.locator('.nav-expand-btn[data-tab="notes"]').click();
+      await reader.locator('[data-testid="key-points-list"]').waitFor();
+      const screenshotPath = join(artifacts.root, "highlight-committed.png");
+      await page.screenshot({ path: screenshotPath });
+      assertPng(screenshotPath);
+    },
+  );
+}, 120_000);
 }
 
 function registerInterceptedReaderShortcutsBoundaryTest(): void {

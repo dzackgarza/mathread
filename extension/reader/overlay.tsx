@@ -5,7 +5,7 @@
  * injected beside the vendored PDF.js viewer. Reference for layout and
  * behavior: the pre-e8ceaf5 reader (repo history) and the Scholar reader.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BookOpen, Library, PanelRightClose, StickyNote } from "lucide-react";
 import { Editor } from "../mathread/portal/components/Editor";
@@ -372,6 +372,17 @@ export function NotesPanel({
   noteApi: NoteApi;
 }) {
   const { note, onChange, applyExternal, resolveFromDisk, overwriteDisk } = noteApi;
+  // The editor element is memoized per seed revision: keystrokes re-render
+  // the panel (status, preview), and a re-rendered controlled CodeMirror can
+  // reset its document to the stale value prop mid-typing.
+  const seed = note.kind === "open" ? note.seed : null;
+  const editorElement = useMemo(
+    () =>
+      seed === null ? null : (
+        <Editor key={seed.revision} value={seed.text} onChange={onChange} />
+      ),
+    [seed, onChange],
+  );
   if (doc === null || note.kind === "loading") {
     return (
       <p data-testid="notes-waiting" className="p-4 text-sm text-zinc-500">
@@ -423,11 +434,7 @@ export function NotesPanel({
       {/* The half/half split: editor and live preview side by side, always. */}
       <div className="grid min-h-0 flex-1 grid-cols-2 divide-x divide-zinc-800">
         <div id="ai-editor" className="min-h-0 overflow-hidden" data-testid="notes-editor-pane">
-          <Editor
-            key={note.seed.revision}
-            value={note.seed.text}
-            onChange={onChange}
-          />
+          {editorElement}
         </div>
         <div id="notes-preview" className="min-h-0 overflow-auto" data-testid="notes-preview-pane">
           <Preview markdown={note.text} />

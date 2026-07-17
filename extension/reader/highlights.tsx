@@ -37,52 +37,58 @@ export function HighlightController({
   const [pending, setPending] = useState<PendingSelection | null>(null);
 
   useEffect(() => {
-    function onMouseUp(event: MouseEvent) {
-      const target = event.target;
-      if (!(target instanceof Element)) {
-        return;
+    // The takeover iframe never receives the drag's mouseup (cross-process
+    // iframe event routing), so the popup keys off the selection itself: a
+    // debounced selectionchange that settles once the drag ends.
+    let settleTimer: ReturnType<typeof setTimeout> | null = null;
+    function onSelectionChange() {
+      if (settleTimer !== null) {
+        clearTimeout(settleTimer);
       }
-      if (target.closest(".mathread-selection-popup") !== null) {
-        return;
-      }
-      const pageDiv = target.closest<HTMLElement>("#viewer .page");
-      if (pageDiv === null) {
-        setPending(null);
-        return;
-      }
-      const selection = window.getSelection();
-      if (selection === null || selection.isCollapsed || selection.rangeCount === 0) {
-        setPending(null);
-        return;
-      }
-      const text = selection.toString().trim();
-      if (text.length === 0) {
-        setPending(null);
-        return;
-      }
-      const clientRects = Array.from(selection.getRangeAt(0).getClientRects());
-      if (clientRects.length === 0) {
-        return;
-      }
-      const pageRect = pageDiv.getBoundingClientRect();
-      const pageNumber = Number(pageDiv.dataset.pageNumber);
-      if (!Number.isInteger(pageNumber) || pageNumber < 1) {
-        throw new Error("MathRead viewer page is missing its page number");
-      }
-      const rects = clientRects.map((r) => ({
-        xPct: (r.left - pageRect.left) / pageRect.width,
-        yPct: (r.top - pageRect.top) / pageRect.height,
-        wPct: r.width / pageRect.width,
-        hPct: r.height / pageRect.height,
-      }));
-      const last = clientRects[clientRects.length - 1];
-      if (last === undefined) {
-        return;
-      }
-      setPending({ pageNumber, text, rects, left: last.right + 8, top: last.top });
+      settleTimer = setTimeout(() => {
+        const selection = window.getSelection();
+        if (selection === null || selection.isCollapsed || selection.rangeCount === 0) {
+          setPending(null);
+          return;
+        }
+        const text = selection.toString().trim();
+        if (text.length === 0) {
+          setPending(null);
+          return;
+        }
+        const anchor = selection.anchorNode;
+        const anchorElement = anchor instanceof Element ? anchor : anchor?.parentElement ?? null;
+        const pageDiv = anchorElement?.closest<HTMLElement>("#viewer .page") ?? null;
+        if (pageDiv === null) {
+          setPending(null);
+          return;
+        }
+        const clientRects = Array.from(selection.getRangeAt(0).getClientRects());
+        const last = clientRects[clientRects.length - 1];
+        if (last === undefined) {
+          return;
+        }
+        const pageRect = pageDiv.getBoundingClientRect();
+        const pageNumber = Number(pageDiv.dataset.pageNumber);
+        if (!Number.isInteger(pageNumber) || pageNumber < 1) {
+          throw new Error("MathRead viewer page is missing its page number");
+        }
+        const rects = clientRects.map((r) => ({
+          xPct: (r.left - pageRect.left) / pageRect.width,
+          yPct: (r.top - pageRect.top) / pageRect.height,
+          wPct: r.width / pageRect.width,
+          hPct: r.height / pageRect.height,
+        }));
+        setPending({ pageNumber, text, rects, left: last.right + 8, top: last.top });
+      }, 350);
     }
-    document.addEventListener("mouseup", onMouseUp);
-    return () => document.removeEventListener("mouseup", onMouseUp);
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => {
+      if (settleTimer !== null) {
+        clearTimeout(settleTimer);
+      }
+      document.removeEventListener("selectionchange", onSelectionChange);
+    };
   }, []);
 
   const commitPending = useCallback(
@@ -118,6 +124,8 @@ export function HighlightController({
       className="mathread-selection-popup"
       data-testid="selection-popup"
       style={{ left: pending.left, top: pending.top }}
+      // Keep the selection (and this popup) alive through the click.
+      onMouseDown={(event) => event.preventDefault()}
     >
       <button
         type="button"
