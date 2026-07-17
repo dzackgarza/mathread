@@ -8,8 +8,7 @@
  */
 import "./support/register-dom";
 
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { act, cleanup, render, renderHook, waitFor } from "@testing-library/react";
 import {
   type NoteContent,
@@ -22,11 +21,6 @@ import {
 import { serializeAnnotation } from "../extension/reader/annotations";
 
 afterEach(cleanup);
-afterAll(async () => {
-  // Let React's scheduler drain before the DOM globals disappear.
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  await GlobalRegistrator.unregister();
-});
 
 const doc = { key: "paper.pdf", sourceUrl: "https://arxiv.org/pdf/1234.5678" };
 

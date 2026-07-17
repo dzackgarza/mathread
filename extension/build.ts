@@ -23,7 +23,7 @@ copyFileSync(
 // through bun corrupts identifiers. Only backend.ts (already built to reader/vendor/backend.js
 // by the bun build step) goes through the bundler.
 mkdirSync(join(distExt, "reader", "vendor", "pdfjs"), { recursive: true });
-for (const asset of ["library.html", "reader.html", "reader.css", "reader.js"]) {
+for (const asset of ["library.html", "reader.html", "reader.css", "reader.js", "print.js"]) {
   copyFileSync(join("extension", "reader", asset), join(distExt, "reader", asset));
 }
 copyFileSync(

@@ -77,6 +77,13 @@ const numdamFixtureSha256 =
   "0b81cacbf796f3ea72d35ab0faaeec2215a8f390e050c9142d621cfd6922976e";
 const numdamFixtureChunkCount = 8;
 const numdamFixtureFetchAttempts = 4;
+declare global {
+  interface Window {
+    /** Print-seam recorder installed by the print routing test. */
+    __printCalls?: number;
+  }
+}
+
 type ExtensionManifest = {
   host_permissions: string[];
 };
@@ -1152,7 +1159,7 @@ test("selection popup commits a highlight to the sidecar and paints the layer", 
 }
 
 function registerPrintBoundaryTest(): void {
-test("printing routes the raw PDF into a native blob frame, never the reader page", async () => {
+test("Ctrl+P routes through the reader print seam, not PDF.js rasterization", async () => {
   await withExtensionReader(
     async ({ courseServer, page, readingRoot }) => {
       await page.goto(`${courseServer.url.origin}/notes.pdf`);
@@ -1160,41 +1167,27 @@ test("printing routes the raw PDF into a native blob frame, never the reader pag
       const reader = await waitForTakeoverReader(page);
       await reader.locator("#viewer canvas").first().waitFor();
 
-      // The wrapper forwards Ctrl+P; the reader owns window.print and hands
-      // the document bytes to a hidden blob iframe (the reference mechanism),
-      // bypassing PDF.js's canvas print service and the reader page (with its
-      // overlays) entirely. Headless CDP does not deliver the trusted
-      // browser accelerator to the page, so the wrapper listener is driven
-      // synthetically; real keystrokes are part of the live acceptance pass.
-      //
-      // The dialog call itself is neutralized before it can fire: a headless
-      // print() on the blob frame wedges the process's next browser launch
-      // (four consecutive deterministic gate failures traced to it). The
-      // observer stubs the frame's print at attach time — a microtask, which
-      // always beats the frame's load event.
+      // Every print entry — the wrapper's forwarded Ctrl+P and the viewer's
+      // toolbar button — converges on the reader's window.print seam, which
+      // the product claims after viewer init. The seam is stubbed with a
+      // recorder: headless cannot execute a real dialog (a fired dialog
+      // wedges the process's next browser launch), so the frame mechanics
+      // behind the seam are proven by the print-module unit suite, and the
+      // real dialog by the live acceptance pass. Headless CDP also does not
+      // deliver trusted browser accelerators, hence the synthetic dispatch.
       await reader.evaluate(() => {
-        const observer = new MutationObserver(() => {
-          const frame = document.querySelector<HTMLIFrameElement>(
-            '[data-testid="print-frame"]',
-          );
-          if (frame?.contentWindow !== null && frame?.contentWindow !== undefined) {
-            frame.contentWindow.print = () => undefined;
-            observer.disconnect();
-          }
-        });
-        observer.observe(document.body, { childList: true });
+        window.__printCalls = 0;
+        window.print = () => {
+          window.__printCalls = (window.__printCalls ?? 0) + 1;
+        };
       });
       await page.evaluate(() => {
         window.dispatchEvent(
           new KeyboardEvent("keydown", { key: "p", ctrlKey: true, cancelable: true }),
         );
       });
-      await reader.locator('[data-testid="print-frame"]').waitFor({ state: "attached" });
-      const frameSrc = await reader
-        .locator('[data-testid="print-frame"]')
-        .getAttribute("src");
-      expect(frameSrc?.startsWith("blob:")).toBe(true);
-      // PDF.js's own print container stays empty: its rasterizing path never ran.
+      await reader.waitForFunction(() => window.__printCalls === 1);
+      // PDF.js's rasterizing print container never engages.
       expect(
         await reader.evaluate(() => {
           const container = document.getElementById("printContainer");
