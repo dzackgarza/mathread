@@ -3,7 +3,7 @@
 // local backend, and mounts the MathRead reader while preserving the source URL. The
 // reader's Key Points panel persists notes to the on-disk markdown sidecar and the
 // Library panel lists/opens/trashes captured items against the same backend.
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
@@ -32,6 +32,7 @@ import {
   type Worker,
 } from "playwright";
 import { chromiumExecutablePath } from "./browser-helpers";
+import { settleWithin } from "./test-logger";
 
 const pdfBytes = new TextEncoder().encode(
   [
@@ -79,8 +80,9 @@ const numdamFixtureChunkCount = 8;
 const numdamFixtureFetchAttempts = 4;
 declare global {
   interface Window {
-    /** Print-seam recorder installed by the print routing test. */
-    __printCalls?: number;
+    /** Print-seam recorder installed by the print routing test; the test
+     * initializes it to 0 before installing the seam, so it is total. */
+    __printCalls: number;
   }
 }
 
@@ -174,6 +176,7 @@ const defaultCaptureRunOptions: CaptureRunOptions = {
 const launchCaptureDelayMs = 250;
 
 export function registerCaptureBoundaryTests(): void {
+  afterAll(teardownSharedHarness);
   registerLibraryCaptureBoundaryTests();
   registerPdfInterceptionBoundaryTests();
   registerCapturedSourceBoundaryTests();
@@ -411,7 +414,7 @@ test("worker startup clears legacy PDF redirect rules", async () => {
     const restartedWorker = await waitForExtensionServiceWorker(context);
     await waitForNoPdfRedirectRule(restartedWorker);
     expect(await pdfRedirectRuleIds(restartedWorker)).toEqual([]);
-  });
+  }, { isolated: true });
 }, 30_000);
 
 }
@@ -551,6 +554,7 @@ test("built extension fails loudly when the capture backend is down", async () =
 }
 
 export function registerNumdamRenderingBoundaryTest(): void {
+  afterAll(teardownSharedHarness);
 test("installed reader copies source-preserving current and plain links for the canonical Numdam PDF", async () => {
   await withExtensionReader(
     async ({ artifacts, backendPort, context, page }) => {
@@ -655,11 +659,13 @@ test("installed reader copies source-preserving current and plain links for the 
       });
       expect(pageErrors).toEqual([]);
     },
+    { isolated: true },
   );
 }, 120_000);
 }
 
 export function registerReaderNotesBoundaryTests(): void {
+  afterAll(teardownSharedHarness);
   registerNoteEditingBoundaryTests();
   registerNoteMigrationBoundaryTests();
 }
@@ -842,6 +848,7 @@ test("reader Key Points panel surfaces a loud error when the backend dies (no lo
         text.startsWith("Save failed:"),
       );
     },
+    { isolated: true },
   );
 }, 60_000);
 
@@ -931,6 +938,7 @@ test("legacy highlight migration rejects incomplete records instead of fabricati
 }
 
 export function registerReaderRenderingBoundaryTests(): void {
+  afterAll(teardownSharedHarness);
   registerReaderNavigationBoundaryTests();
   registerReaderHistoryBoundaryTest();
 }
@@ -941,6 +949,7 @@ export function registerReaderRenderingBoundaryTests(): void {
  * processes, and these tests sat at that tail.
  */
 export function registerOverlayInteractionBoundaryTests(): void {
+  afterAll(teardownSharedHarness);
   registerHighlightBoundaryTest();
   registerPrintBoundaryTest();
   registerInterceptedReaderShortcutsBoundaryTest();
@@ -1108,6 +1117,7 @@ test("reader survives a browser reload at the source URL without the service wor
       await page.screenshot({ path: screenshotPath });
       assertPng(screenshotPath);
     },
+    { isolated: true },
   );
 }, 120_000);
 
@@ -1184,7 +1194,7 @@ test("Ctrl+P routes through the reader print seam, not PDF.js rasterization", as
       await reader.evaluate(() => {
         window.__printCalls = 0;
         window.print = () => {
-          window.__printCalls = (window.__printCalls ?? 0) + 1;
+          window.__printCalls += 1;
         };
       });
       await page.evaluate(() => {
@@ -1503,6 +1513,11 @@ type ExtensionReaderEvidence = {
 
 type ExtensionReaderOptions = {
   nativeBrowserShortcuts?: boolean;
+  // Opt out of the per-process shared context (issue #42). Tests that mutate
+  // launch-time state — kill the backend, seed persistent DNR rules, install
+  // context-wide network routes, or drive native X11 shortcuts — get a fresh
+  // browser + backend so they neither observe nor leak that state.
+  isolated?: boolean;
 };
 
 type RunningXServer = {
@@ -1510,9 +1525,263 @@ type RunningXServer = {
   process: Bun.Subprocess<"ignore", "ignore", "pipe">;
 };
 
+type SharedHarness = {
+  backend: RunningBackend;
+  backendPort: number;
+  context: BrowserContext;
+  courseServer: RunningCourseServer;
+  extensionId: string;
+  readingRoot: string;
+  artifacts: CaptureArtifacts;
+  testRoot: string;
+};
+
+// One browser + backend per test process (#42). Launching a fresh Chromium and
+// uvicorn per test was the suite's dominant cost and the source of the
+// late-process CDP transport wedge. Per shared test the reading root is wiped,
+// extension localStorage cleared, and any live service worker stopped, then a
+// fresh page opened. The backend re-scans its root per request (no cache), so a
+// wiped root is clean state.
+let sharedHarness: SharedHarness | null = null;
+// Preserve the shared harness's artifacts when any shared test failed, matching
+// cleanupTestRoot's per-test failure path (a passing run is cleaned away).
+let sharedHarnessAllPassed = true;
+
+type HarnessResources = {
+  context?: BrowserContext | undefined;
+  courseServer?: RunningCourseServer | undefined;
+  backend: RunningBackend;
+};
+
+// Dispose every started resource, running all steps even if an earlier one
+// rejects (e.g. context.close() failing during the CDP transport failure this
+// harness withstands). Failures are collected and returned, never discarded,
+// so callers can surface them alongside a primary error.
+async function disposeHarnessResources(parts: HarnessResources): Promise<unknown[]> {
+  const errors: unknown[] = [];
+  if (parts.context !== undefined) {
+    try {
+      // Bounded: a wedged close on a degraded CDP transport must not hang the
+      // whole teardown; a timeout here is collected like any other close error.
+      await settleWithin("context.close", 20_000, () => parts.context!.close());
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (parts.courseServer !== undefined) {
+    try {
+      parts.courseServer.stop(true);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  try {
+    parts.backend.process.kill();
+    await parts.backend.process.exited;
+    closeSync(parts.backend.logFd);
+  } catch (error) {
+    errors.push(error);
+  }
+  return errors;
+}
+
+async function getSharedHarness(): Promise<SharedHarness> {
+  if (sharedHarness !== null) {
+    return sharedHarness;
+  }
+  const backendPort = await unusedTcpPort();
+  const testRoot = mkdtemp("mathread-extension-shared-");
+  const readingRoot = join(testRoot, "reading-root");
+  mkdirSync(readingRoot);
+  const artifacts = createCaptureArtifacts(testRoot, "direct-pdf-tab");
+  const extensionPath = configuredExtensionCopy(testRoot, backendPort);
+  // The backend is the first spawned resource; everything after it is created
+  // inside the guarded path so any setup failure tears down what was started
+  // (the harness is never assigned, so afterAll's teardown would otherwise
+  // no-op and orphan the child processes and descriptors).
+  const backend = startMathReadBackend(backendPort, readingRoot, artifacts.backendLogPath);
+  let courseServer: RunningCourseServer | undefined;
+  let context: BrowserContext | undefined;
+  try {
+    courseServer = startCourseServer(artifacts.eventsLogPath);
+    await waitForHttpService(`http://127.0.0.1:${backendPort}/openapi.json`);
+    context = await chromium.launchPersistentContext(join(testRoot, "profile"), {
+      executablePath: chromiumExecutablePath(),
+      headless: true,
+      artifactsDir: artifacts.root,
+      args: [
+        `--disable-extensions-except=${extensionPath}`,
+        `--load-extension=${extensionPath}`,
+      ],
+    });
+    const serviceWorker = await waitForExtensionServiceWorker(context);
+    await waitForNoPdfRedirectRule(serviceWorker);
+    const extensionId = new URL(serviceWorker.url()).host;
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await context.addCookies([
+      { name: cookieName, value: cookieValue, url: courseServer.url.origin },
+    ]);
+    sharedHarness = {
+      backend, backendPort, context, courseServer, extensionId, readingRoot, artifacts, testRoot,
+    };
+    return sharedHarness;
+  } catch (error) {
+    // The setup error is primary; surface any cleanup failures with it rather
+    // than letting them mask or discard it.
+    const cleanupErrors = await disposeHarnessResources({ context, courseServer, backend });
+    // The harness is never assigned on a setup failure, so afterAll's teardown
+    // no-ops; reclaim the root here (retaining artifacts/ for diagnosis) or each
+    // failed setup leaves its profile, extension copy, and reading root on disk.
+    cleanupTestRoot(testRoot, false);
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...cleanupErrors],
+        "MathRead shared harness setup failed and cleanup also errored",
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Registered as an awaited afterAll in each test file: tears the shared harness
+ * down at process end. Awaiting the whole teardown is load-bearing — an
+ * un-awaited close lets the uvicorn child and Chromium survive across
+ * subsequent test commands, the exact resource accumulation this change
+ * eliminates.
+ */
+export async function teardownSharedHarness(): Promise<void> {
+  const harness = sharedHarness;
+  if (harness === null) {
+    return;
+  }
+  sharedHarness = null;
+  const cleanupErrors = await disposeHarnessResources(harness);
+  // A teardown failure is itself a defect worth diagnosing: retain artifacts/
+  // unless every test passed AND teardown was clean, so the AggregateError
+  // below is not thrown over already-deleted diagnostics.
+  cleanupTestRoot(harness.testRoot, sharedHarnessAllPassed && cleanupErrors.length === 0);
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(cleanupErrors, "MathRead shared harness teardown failed");
+  }
+}
+
+function resetReadingRoot(readingRoot: string): void {
+  for (const entry of readdirSync(readingRoot)) {
+    rmSync(join(readingRoot, entry), { recursive: true, force: true });
+  }
+}
+
+async function stopLiveServiceWorkers(
+  context: BrowserContext,
+  page: Page,
+): Promise<void> {
+  const browser = context.browser();
+  assert(browser !== null, "Persistent context must expose its browser for CDP");
+  const browserSession = await browser.newBrowserCDPSession();
+  try {
+    if (!(await hasRunningServiceWorkerTarget(browserSession))) {
+      return; // Idle MV3 worker: its in-memory cache is already discarded.
+    }
+    const session = await context.newCDPSession(page);
+    try {
+      await session.send("ServiceWorker.enable");
+      await session.send("ServiceWorker.stopAllWorkers");
+    } finally {
+      await session.detach();
+    }
+    const stopDeadline = Date.now() + 5_000;
+    while (await hasRunningServiceWorkerTarget(browserSession)) {
+      assert(Date.now() < stopDeadline, "Extension service worker did not stop");
+      await Bun.sleep(50);
+    }
+  } finally {
+    await browserSession.detach();
+  }
+}
+
+async function clearExtensionLocalStorage(
+  context: BrowserContext,
+  page: Page,
+  extensionId: string,
+): Promise<void> {
+  const session = await context.newCDPSession(page);
+  try {
+    await session.send("Storage.clearDataForOrigin", {
+      origin: `chrome-extension://${extensionId}`,
+      storageTypes: "local_storage",
+    });
+  } finally {
+    await session.detach();
+  }
+}
+
 async function withExtensionReader(
   callback: (evidence: ExtensionReaderEvidence) => Promise<void>,
   options: ExtensionReaderOptions = {},
+): Promise<void> {
+  const needsFreshContext = [
+    options.nativeBrowserShortcuts,
+    options.isolated,
+  ].some((flag) => flag === true);
+  if (needsFreshContext) {
+    await withIsolatedExtensionReader(callback, options);
+    return;
+  }
+  const harness = await getSharedHarness();
+  resetReadingRoot(harness.readingRoot);
+  const page = await harness.context.newPage();
+  // Everything after newPage() is guarded: a rejection from per-test reset
+  // (clear storage, stop the worker) must record the failure (keeping
+  // artifacts) and still close the page, not leak it into later tests.
+  let primaryError: unknown = undefined;
+  try {
+    await clearExtensionLocalStorage(harness.context, page, harness.extensionId);
+    await stopLiveServiceWorkers(harness.context, page);
+    attachPageDiagnostics(page, harness.artifacts, "direct-pdf-tab");
+    await callback({
+      artifacts: harness.artifacts,
+      backend: harness.backend,
+      backendPort: harness.backendPort,
+      context: harness.context,
+      courseServer: harness.courseServer,
+      extensionId: harness.extensionId,
+      page,
+      readingRoot: harness.readingRoot,
+      x11Display: undefined,
+    });
+  } catch (error) {
+    primaryError = error;
+  }
+  // Close in a non-masking way: the test's own failure (primaryError) is the
+  // load-bearing diagnostic; a page.close() rejection is surfaced alongside it
+  // via AggregateError, never in place of it. Any failure keeps the artifacts.
+  let closeError: unknown = undefined;
+  try {
+    await page.close();
+  } catch (error) {
+    closeError = error;
+  }
+  if (primaryError !== undefined || closeError !== undefined) {
+    sharedHarnessAllPassed = false;
+  }
+  if (primaryError !== undefined && closeError !== undefined) {
+    throw new AggregateError(
+      [primaryError, closeError],
+      "MathRead shared test failed and page cleanup also errored",
+    );
+  }
+  if (primaryError !== undefined) {
+    throw primaryError;
+  }
+  if (closeError !== undefined) {
+    throw closeError;
+  }
+}
+
+async function withIsolatedExtensionReader(
+  callback: (evidence: ExtensionReaderEvidence) => Promise<void>,
+  options: ExtensionReaderOptions,
 ): Promise<void> {
   const backendPort = await unusedTcpPort();
   const testRoot = mkdtemp("mathread-extension-reader-");
@@ -1896,9 +2165,10 @@ export async function waitForTakeoverReader(page: Page): Promise<Frame> {
   // exceed 30s. Match the generosity of the suite's other readiness waits.
   const mountDeadline = Date.now() + 120_000;
   for (;;) {
+    // page.frame() already returns Frame | null.
     const candidate = page.frame({
       url: (url) => url.pathname.endsWith("/reader/reader.html"),
-    }) ?? null;
+    });
     if (candidate !== null && candidate !== page.mainFrame()) {
       return candidate;
     }
@@ -2257,40 +2527,29 @@ async function seedLegacyReaderState(
   await page.goto(`chrome-extension://${extensionId}/reader/reader.css`, {
     waitUntil: "domcontentloaded",
   });
+  // The extension-origin page owns both surfaces the reader reads: window
+  // localStorage (the legacy-highlight store) and chrome.storage.local (the
+  // settings). Seeding both here needs no service worker, so nothing depends
+  // on waking the idle worker the shared harness stopped.
   await page.evaluate(
-    ({ key, highlights }) => {
+    ({ key, highlights, autosaveMs }) => {
       localStorage.setItem(
         `mathread-legacy-highlights:${key}`,
         JSON.stringify(highlights),
       );
-    },
-    { key, highlights },
-  );
-  const serviceWorker = page
-    .context()
-    .serviceWorkers()
-    .find((worker) => worker.url().startsWith("chrome-extension://"));
-  assert(serviceWorker !== undefined);
-  await serviceWorker.evaluate(async (autosaveMs) => {
-    const chromeApi = (
-      globalThis as typeof globalThis & {
-        chrome: {
-          storage: {
-            local: {
-              set(items: Record<string, unknown>): Promise<void>;
-            };
+      const chromeApi = (
+        globalThis as typeof globalThis & {
+          chrome: {
+            storage: { local: { set(items: Record<string, unknown>): Promise<void> } };
           };
-        };
-      }
-    ).chrome;
-    await chromeApi.storage.local.set({
-      "mathread.settings": {
-        autosaveMs,
-        fitWidthOnOpen: false,
-        lineNumbers: true,
-      },
-    });
-  }, autosaveMs);
+        }
+      ).chrome;
+      return chromeApi.storage.local.set({
+        "mathread.settings": { autosaveMs, fitWidthOnOpen: false, lineNumbers: true },
+      });
+    },
+    { key, highlights, autosaveMs },
+  );
 }
 
 async function legacyHighlightsRaw(

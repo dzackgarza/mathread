@@ -22,8 +22,10 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type BrowserContext, type Frame, type Page } from "playwright";
+import type pino from "pino";
 import { chromiumExecutablePath } from "./browser-helpers";
 import { cleanupTestRoot, waitForTakeoverReader } from "./extension-boundary-cases";
+import { attachPageTrace, createTraceLogger, dumpBackendState, settleWithin, step } from "./test-logger";
 const ARXIV_IDS = ["1612.09116", "2312.13488"];
 const FIXTURE_DIR = join(import.meta.dir, "fixtures", "arxiv");
 
@@ -58,6 +60,7 @@ interface Harness {
   readingRoot: string;
   key: string;
   notePath: string;
+  logger: pino.Logger;
 }
 
 async function withArxivReader(
@@ -98,9 +101,18 @@ async function withArxivReader(
   });
   let context: BrowserContext | undefined;
   let completed = false;
+  let primaryError: unknown = undefined;
+  // Trace under the test root's artifacts/, which cleanupTestRoot retains on
+  // failure and removes on success.
+  const artifactsDir = join(testRoot, "artifacts");
+  mkdirSync(artifactsDir, { recursive: true });
+  const { logger, file } = createTraceLogger(artifactsDir, `arxiv-${arxivId}`);
+  console.error(`[arxiv] trace: ${file}`);
 
   try {
-    await waitForHttpService(`http://127.0.0.1:${backendPort}/openapi.json`);
+    await step(logger, "backend-ready", () =>
+      waitForHttpService(`http://127.0.0.1:${backendPort}/openapi.json`),
+    );
 
     // Feature: capture a real arXiv PDF through the backend.
     const pdfUrl = `http://127.0.0.1:${pdfServer.port}/${arxivId}.pdf`;
@@ -141,33 +153,70 @@ async function withArxivReader(
       library.some((entry) => (entry as { key?: unknown }).key === key),
     ).toBe(true);
 
-    context = await chromium.launchPersistentContext(
-      join(testRoot, "profile"),
-      {
+    context = await step(logger, "launch-context", () =>
+      chromium.launchPersistentContext(join(testRoot, "profile"), {
         executablePath: chromiumExecutablePath(),
         headless: true,
         args: [
           `--disable-extensions-except=${extensionPath}`,
           `--load-extension=${extensionPath}`,
         ],
-      },
+      }),
     );
-    await waitForExtensionServiceWorker(context);
-    const page = await context.newPage();
-    await page.goto(pdfUrl);
-    const reader = await waitForTakeoverReader(page);
-    await run({ page, reader, backendPort, readingRoot, key, notePath });
-    await page.close();
+    await step(logger, "await-service-worker", () =>
+      waitForExtensionServiceWorker(context!),
+    );
+    const page = await step(logger, "new-page", () => context!.newPage());
+    attachPageTrace(page, logger);
+    await step(logger, "goto-pdf", () => page.goto(pdfUrl));
+    const reader = await step(logger, "await-takeover-reader", () =>
+      waitForTakeoverReader(page),
+    );
+    await run({ page, reader, backendPort, readingRoot, key, notePath, logger });
+    await step(logger, "page-close", () => page.close());
     completed = true;
+  } catch (error) {
+    primaryError = error;
   } finally {
+    // Teardown must never mask the primary failure (e.g. a reload timeout) nor
+    // hang on it: bound the CDP close, collect teardown errors, and only raise
+    // them when the body itself succeeded.
+    const teardownErrors: unknown[] = [];
     if (context !== undefined) {
-      await context.close();
+      try {
+        await step(logger, "context-close", () =>
+          settleWithin("context.close", 20_000, () => context!.close()),
+        );
+      } catch (error) {
+        teardownErrors.push(error);
+      }
     }
-    pdfServer.stop(true);
-    backend.kill();
-    await backend.exited;
+    try {
+      await step(logger, "pdfserver-stop", async () => pdfServer.stop(true));
+    } catch (error) {
+      teardownErrors.push(error);
+    }
+    try {
+      await step(logger, "backend-kill", async () => {
+        backend.kill();
+        await backend.exited;
+      });
+    } catch (error) {
+      teardownErrors.push(error);
+    }
     closeSync(logFd);
+    // Capture the backend side (uvicorn log + sidecar state) before the root is
+    // reclaimed, so a persist failure shows whether the PUT reached the backend
+    // and whether the .md was written.
+    dumpBackendState(logger, backendLogPath, readingRoot);
     cleanupTestRoot(testRoot, completed);
+    logger.info({ event: "trace-close", completed, teardownErrors: teardownErrors.length });
+    if (primaryError !== undefined) {
+      throw primaryError;
+    }
+    if (teardownErrors.length > 0) {
+      throw new AggregateError(teardownErrors, `arXiv ${arxivId} harness teardown failed`);
+    }
   }
 }
 
@@ -177,22 +226,28 @@ for (const arxivId of ARXIV_IDS) {
     async () => {
       await withArxivReader(
         arxivId,
-        async ({ page, reader: initialReader, backendPort, key, notePath }) => {
+        async ({ page, reader: initialReader, backendPort, key, notePath, logger }) => {
           let reader = initialReader;
           const noteMarker = `arXiv reading ${crypto.randomUUID()}`;
           const noteBody = `checked against Nikulin ${crypto.randomUUID()}`;
           const handAuthoredNote = `hand-authored note ${crypto.randomUUID()}`;
 
           // The MathRead overlay persists real notes beside the captured document.
-          await reader.locator('.nav-expand-btn[data-tab="notes"]').click();
+          await step(logger, "open-notes-tab", () =>
+            reader.locator('.nav-expand-btn[data-tab="notes"]').click(),
+          );
           let editor = reader.locator("#ai-editor .cm-content");
-          await editor.click();
-          await page.keyboard.type(`# ${noteMarker}\n\n**${noteBody}**`);
-          await waitFor(
-            () =>
-              existsSync(notePath) &&
-              readFileSync(notePath, "utf8").includes(noteBody),
-            15_000,
+          await step(logger, "editor-click", () => editor.click());
+          await step(logger, "type-note", () =>
+            page.keyboard.type(`# ${noteMarker}\n\n**${noteBody}**`),
+          );
+          await step(logger, "await-note-persisted", () =>
+            waitFor(
+              () =>
+                existsSync(notePath) &&
+                readFileSync(notePath, "utf8").includes(noteBody),
+              15_000,
+            ),
           );
           const note = readFileSync(notePath, "utf8");
           expect(note).toContain(`# ${noteMarker}`);
@@ -200,49 +255,65 @@ for (const arxivId of ARXIV_IDS) {
 
           console.error(`[arxiv] typed note saved for ${key}`);
           // Reload obtains the persisted sidecar rather than browser-local state.
-          await page.reload();
-          reader = await waitForTakeoverReader(page);
+          await step(logger, "reload-1", () => page.reload());
+          reader = await step(logger, "reload-1-await-reader", () =>
+            waitForTakeoverReader(page),
+          );
           editor = reader.locator("#ai-editor .cm-content");
-          await reader.locator('.nav-expand-btn[data-tab="notes"]').click();
-          await waitFor(async () =>
-            (await editor.innerText()).includes(noteBody),
-          120_000,
+          await step(logger, "reload-1-open-notes", () =>
+            reader.locator('.nav-expand-btn[data-tab="notes"]').click(),
+          );
+          await step(logger, "reload-1-await-editor", () =>
+            waitFor(async () =>
+              (await editor.innerText()).includes(noteBody),
+            30_000,
+            ),
           );
 
           console.error(`[arxiv] reload 1 restored editor for ${key}`);
           // A note edited at the backend boundary is reloaded into the same overlay.
-          const putResponse = await fetch(
-            `http://127.0.0.1:${backendPort}/notes/${encodeURIComponent(key)}/overwrite`,
-            {
-              method: "PUT",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                key,
-                text: `${readFileSync(notePath, "utf8")}\n${handAuthoredNote}\n`,
-              }),
-            },
+          const putResponse = await step(logger, "put-overwrite", () =>
+            fetch(
+              `http://127.0.0.1:${backendPort}/notes/${encodeURIComponent(key)}/overwrite`,
+              {
+                method: "PUT",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                  key,
+                  text: `${readFileSync(notePath, "utf8")}\n${handAuthoredNote}\n`,
+                }),
+              },
+            ),
           );
           expect(putResponse.ok).toBe(true);
-          await page.reload();
-          reader = await waitForTakeoverReader(page);
+          await step(logger, "reload-2", () => page.reload());
+          reader = await step(logger, "reload-2-await-reader", () =>
+            waitForTakeoverReader(page),
+          );
           editor = reader.locator("#ai-editor .cm-content");
-          await reader.locator('.nav-expand-btn[data-tab="notes"]').click();
-          await waitFor(
-            async () => (await editor.innerText()).includes(handAuthoredNote),
-            120_000,
+          await step(logger, "reload-2-open-notes", () =>
+            reader.locator('.nav-expand-btn[data-tab="notes"]').click(),
+          );
+          await step(logger, "reload-2-await-editor", () =>
+            waitFor(
+              async () => (await editor.innerText()).includes(handAuthoredNote),
+              30_000,
+            ),
           );
 
           console.error(`[arxiv] reload 2 restored hand-authored note for ${key}`);
           // The always-visible preview pane renders the same persisted Markdown.
-          await waitFor(async () =>
-            (await reader.locator("#notes-preview").innerText()).includes(
-              handAuthoredNote,
-            ),
-          15_000);
+          await step(logger, "await-preview-render", () =>
+            waitFor(async () =>
+              (await reader.locator("#notes-preview").innerText()).includes(
+                handAuthoredNote,
+              ),
+            15_000),
+          );
         },
       );
     },
-    { timeout: 600_000 },
+    { timeout: 120_000 },
   );
 }
 
