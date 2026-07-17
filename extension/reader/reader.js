@@ -52,6 +52,11 @@ if (launch.kind !== "library") {
   document.addEventListener("DOMContentLoaded", waitForPdfViewer, { once: true });
 }
 
+// The wrapper page lives at the source URL; target it exactly rather than
+// "*" so reader→parent messages are not delivered to an unexpected origin.
+// The receive-side event.source check stays the primary control.
+const parentOrigin = launch.kind === "takeover" ? new URL(launch.sourceUrl).origin : null;
+
 if (launch.kind === "takeover") {
   window.addEventListener("message", (event) => {
     if (event.source !== window.parent) {
@@ -81,7 +86,7 @@ if (launch.kind === "takeover") {
       publishOverlayDocument();
     }
   });
-  window.parent.postMessage({ type: "mathread:ready" }, "*");
+  window.parent.postMessage({ type: "mathread:ready" }, parentOrigin);
 }
 
 // PDF.js's Chromium viewer rewrites the visible URL to a synthetic extension-path
@@ -131,10 +136,11 @@ function observePdfView(application) {
       // mirrors it onto the source URL's hash, which stays the one canonical
       // view state a copied link or a reload picks up.
       const view = currentPdfViewState;
+      assert(parentOrigin !== null, "MathRead takeover parent origin must be resolved");
       window.parent.postMessage({
         type: "mathread:view",
         hash: `#page=${view.page}&zoom=${Math.round(view.zoom * 100)},${view.x},${view.y}`,
-      }, "*");
+      }, parentOrigin);
     }
   });
 }

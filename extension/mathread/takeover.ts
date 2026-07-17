@@ -73,11 +73,17 @@ async function takeOver(): Promise<void> {
   // extension's own mechanism), and the extension origin holds the host
   // permissions and credentials to fetch the source URL directly.
   const reader = mountReaderFrame(sourceUrl);
+  // The reader iframe is loaded from the extension origin; target it exactly
+  // rather than "*" so the library key never reaches an unexpected origin if
+  // the frame is ever navigated. The receive-side event.source check remains
+  // the primary control. (Targeting a known origin is not the origin-hardening
+  // machinery #40 excludes — no allowlist, no validation framework.)
+  const readerOrigin = new URL(chrome.runtime.getURL("/")).origin;
 
   const key = await capture;
   const target = await reader;
   const documentMessage: ReaderDocument = { key, sourceUrl };
-  target.postMessage({ type: "mathread:document", ...documentMessage }, "*");
+  target.postMessage({ type: "mathread:document", ...documentMessage }, readerOrigin);
 
   window.addEventListener("message", (event) => {
     if (event.source !== target) {
@@ -97,7 +103,7 @@ async function takeOver(): Promise<void> {
   window.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "p") {
       event.preventDefault();
-      target.postMessage({ type: "mathread:print" }, "*");
+      target.postMessage({ type: "mathread:print" }, readerOrigin);
     }
   });
 }
