@@ -19,44 +19,21 @@ copyFileSync(
   join("extension", "mathread", "options.html"),
   join(distExt, "mathread", "options.html"),
 );
-for (const asset of ["pdf-launch.html", "pdf-launch.css"]) {
-  copyFileSync(join("extension", asset), join(distExt, asset));
-}
-
 // reader.js and its pre-minified vendor ESM ship verbatim: re-bundling minified ESM
 // through bun corrupts identifiers. Only backend.ts (already built to reader/vendor/backend.js
 // by the bun build step) goes through the bundler.
 mkdirSync(join(distExt, "reader", "vendor", "pdfjs"), { recursive: true });
-for (const asset of ["reader.html", "reader.css", "reader.js"]) {
+for (const asset of ["library.html", "reader.html", "reader.css", "reader.js", "print.js"]) {
   copyFileSync(join("extension", "reader", asset), join(distExt, "reader", asset));
 }
 copyFileSync(
   join("extension", "reader", "vendor", "codemirror.mjs"),
   join(distExt, "reader", "vendor", "codemirror.mjs"),
 );
-for (const asset of ["pdf.min.mjs", "pdf.worker.min.mjs", "LICENSE"]) {
-  copyFileSync(
-    join("extension", "reader", "vendor", "pdfjs", asset),
-    join(distExt, "reader", "vendor", "pdfjs", asset),
-  );
-}
-for (const asset of ["pdf_viewer.mjs", "pdf_viewer.css"]) {
-  copyFileSync(
-    join("node_modules", "pdfjs-dist", "web", asset),
-    join(distExt, "reader", "vendor", "pdfjs", asset),
-  );
-}
 cpSync(
-  join("node_modules", "pdfjs-dist", "web", "images"),
-  join(distExt, "reader", "vendor", "pdfjs", "images"),
+  join("extension", "reader", "vendor", "pdfjs", "chromium"),
+  join(distExt, "reader", "vendor", "pdfjs", "chromium"),
   { recursive: true },
 );
-for (const directory of ["cmaps", "standard_fonts", "wasm"]) {
-  cpSync(
-    join("node_modules", "pdfjs-dist", directory),
-    join(distExt, "reader", "vendor", "pdfjs", directory),
-    { recursive: true },
-  );
-}
 
 console.log("Extension assembled at dist/extension.");

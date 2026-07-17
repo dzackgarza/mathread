@@ -7,43 +7,61 @@
 ### extension/reader/reader.js:None (ct:3b81f94bf012bce0)
 
 - Verdict: accepted with modified remediation
+
 - Commit: 4325784
+
 - Verification stamp present: True
+
 - Thread: PRRT_kwDOTLXA2c6QHlHQ
 
 ### src/mathread/library.py:280 (ct:e7cdf578730268e2)
 
 - Verdict: accepted with modified remediation
+
 - Commit: 711dbeb
+
 - Verification stamp present: True
+
 - Thread: PRRT_kwDOTLXA2c6QIrSM
 
 ### src/mathread/library.py:268 (ct:287edf1d3edfe37c)
 
 - Verdict: accepted as written
+
 - Commit: 711dbeb
+
 - Verification stamp present: True
+
 - Thread: PRRT_kwDOTLXA2c6QIrSN
 
 ### extension/reader/reader.js:None (ct:9b46596a494c75b9)
 
 - Verdict: accepted as written
+
 - Commit: 711dbeb
+
 - Verification stamp present: True
+
 - Thread: PRRT_kwDOTLXA2c6QIrSO
 
 ### src/mathread/library.py:244 (ct:06b73c1eb1d0f74e)
 
 - Verdict: accepted as written
+
 - Commit: 47c6f3d
+
 - Verification stamp present: True
+
 - Thread: PRRT_kwDOTLXA2c6QI6zY
 
 ### extension/reader/reader.js:None (ct:f045368cfb53f4e4)
 
 - Verdict: accepted as written
+
 - Commit: 47c6f3d
+
 - Verification stamp present: True
+
 - Thread: PRRT_kwDOTLXA2c6QI6zZ
 
 ## Rejected / Outdated / Duplicate
@@ -61,4 +79,3 @@
 - Thread: PRRT_kwDOTLXA2c6QJGiu
 
 ## Still open
-

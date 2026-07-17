@@ -17,6 +17,7 @@ import {
   postNoteImage as postNoteImageImpl,
   postReadEvent as postReadEventImpl,
   putNote as putNoteImpl,
+  saveNote as saveNoteImpl,
 } from "../mathread/portal/api";
 
 export const marked = markedRenderer;
@@ -33,3 +34,4 @@ export const pdfUrl = pdfUrlImpl;
 export const postNoteImage = postNoteImageImpl;
 export const postReadEvent = postReadEventImpl;
 export const putNote = putNoteImpl;
+export const saveNote = saveNoteImpl;

@@ -16,6 +16,8 @@ type MathReadPdfViewerApplication = {
       eventName: "pagechanging",
       listener: (event: { pageNumber: number }) => void,
     ): void;
+    on(eventName: "pagerendered", listener: () => void): void;
+    off(eventName: "pagerendered", listener: () => void): void;
   };
   pdfViewer: {
     currentPageNumber: number;
