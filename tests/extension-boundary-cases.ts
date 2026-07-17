@@ -32,6 +32,7 @@ import {
   type Worker,
 } from "playwright";
 import { chromiumExecutablePath } from "./browser-helpers";
+import { settleWithin } from "./test-logger";
 
 const pdfBytes = new TextEncoder().encode(
   [
@@ -79,8 +80,9 @@ const numdamFixtureChunkCount = 8;
 const numdamFixtureFetchAttempts = 4;
 declare global {
   interface Window {
-    /** Print-seam recorder installed by the print routing test. */
-    __printCalls?: number;
+    /** Print-seam recorder installed by the print routing test; the test
+     * initializes it to 0 before installing the seam, so it is total. */
+    __printCalls: number;
   }
 }
 
@@ -1192,7 +1194,7 @@ test("Ctrl+P routes through the reader print seam, not PDF.js rasterization", as
       await reader.evaluate(() => {
         window.__printCalls = 0;
         window.print = () => {
-          window.__printCalls = (window.__printCalls ?? 0) + 1;
+          window.__printCalls += 1;
         };
       });
       await page.evaluate(() => {
@@ -1559,7 +1561,9 @@ async function disposeHarnessResources(parts: HarnessResources): Promise<unknown
   const errors: unknown[] = [];
   if (parts.context !== undefined) {
     try {
-      await parts.context.close();
+      // Bounded: a wedged close on a degraded CDP transport must not hang the
+      // whole teardown; a timeout here is collected like any other close error.
+      await settleWithin("context.close", 20_000, () => parts.context!.close());
     } catch (error) {
       errors.push(error);
     }
@@ -2161,9 +2165,10 @@ export async function waitForTakeoverReader(page: Page): Promise<Frame> {
   // exceed 30s. Match the generosity of the suite's other readiness waits.
   const mountDeadline = Date.now() + 120_000;
   for (;;) {
+    // page.frame() already returns Frame | null.
     const candidate = page.frame({
       url: (url) => url.pathname.endsWith("/reader/reader.html"),
-    }) ?? null;
+    });
     if (candidate !== null && candidate !== page.mainFrame()) {
       return candidate;
     }
