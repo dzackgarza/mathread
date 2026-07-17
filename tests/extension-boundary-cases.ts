@@ -1625,6 +1625,10 @@ async function getSharedHarness(): Promise<SharedHarness> {
     // The setup error is primary; surface any cleanup failures with it rather
     // than letting them mask or discard it.
     const cleanupErrors = await disposeHarnessResources({ context, courseServer, backend });
+    // The harness is never assigned on a setup failure, so afterAll's teardown
+    // no-ops; reclaim the root here (retaining artifacts/ for diagnosis) or each
+    // failed setup leaves its profile, extension copy, and reading root on disk.
+    cleanupTestRoot(testRoot, false);
     if (cleanupErrors.length > 0) {
       throw new AggregateError(
         [error, ...cleanupErrors],
@@ -1649,7 +1653,10 @@ export async function teardownSharedHarness(): Promise<void> {
   }
   sharedHarness = null;
   const cleanupErrors = await disposeHarnessResources(harness);
-  cleanupTestRoot(harness.testRoot, sharedHarnessAllPassed);
+  // A teardown failure is itself a defect worth diagnosing: retain artifacts/
+  // unless every test passed AND teardown was clean, so the AggregateError
+  // below is not thrown over already-deleted diagnostics.
+  cleanupTestRoot(harness.testRoot, sharedHarnessAllPassed && cleanupErrors.length === 0);
   if (cleanupErrors.length > 0) {
     throw new AggregateError(cleanupErrors, "MathRead shared harness teardown failed");
   }
