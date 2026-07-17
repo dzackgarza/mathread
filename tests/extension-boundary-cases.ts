@@ -1545,6 +1545,42 @@ let sharedHarness: SharedHarness | null = null;
 // cleanupTestRoot's per-test failure path (a passing run is cleaned away).
 let sharedHarnessAllPassed = true;
 
+type HarnessResources = {
+  context?: BrowserContext | undefined;
+  courseServer?: RunningCourseServer | undefined;
+  backend: RunningBackend;
+};
+
+// Dispose every started resource, running all steps even if an earlier one
+// rejects (e.g. context.close() failing during the CDP transport failure this
+// harness withstands). Failures are collected and returned, never discarded,
+// so callers can surface them alongside a primary error.
+async function disposeHarnessResources(parts: HarnessResources): Promise<unknown[]> {
+  const errors: unknown[] = [];
+  if (parts.context !== undefined) {
+    try {
+      await parts.context.close();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (parts.courseServer !== undefined) {
+    try {
+      parts.courseServer.stop(true);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  try {
+    parts.backend.process.kill();
+    await parts.backend.process.exited;
+    closeSync(parts.backend.logFd);
+  } catch (error) {
+    errors.push(error);
+  }
+  return errors;
+}
+
 async function getSharedHarness(): Promise<SharedHarness> {
   if (sharedHarness !== null) {
     return sharedHarness;
@@ -1555,13 +1591,15 @@ async function getSharedHarness(): Promise<SharedHarness> {
   mkdirSync(readingRoot);
   const artifacts = createCaptureArtifacts(testRoot, "direct-pdf-tab");
   const extensionPath = configuredExtensionCopy(testRoot, backendPort);
+  // The backend is the first spawned resource; everything after it is created
+  // inside the guarded path so any setup failure tears down what was started
+  // (the harness is never assigned, so afterAll's teardown would otherwise
+  // no-op and orphan the child processes and descriptors).
   const backend = startMathReadBackend(backendPort, readingRoot, artifacts.backendLogPath);
-  const courseServer = startCourseServer(artifacts.eventsLogPath);
-  // Everything past the first spawn must be torn down if a later setup step
-  // throws, or the backend/course-server/context orphan with no cleanup path
-  // (the harness is never assigned, so teardown would no-op).
+  let courseServer: RunningCourseServer | undefined;
   let context: BrowserContext | undefined;
   try {
+    courseServer = startCourseServer(artifacts.eventsLogPath);
     await waitForHttpService(`http://127.0.0.1:${backendPort}/openapi.json`);
     context = await chromium.launchPersistentContext(join(testRoot, "profile"), {
       executablePath: chromiumExecutablePath(),
@@ -1584,13 +1622,15 @@ async function getSharedHarness(): Promise<SharedHarness> {
     };
     return sharedHarness;
   } catch (error) {
-    if (context !== undefined) {
-      await context.close();
+    // The setup error is primary; surface any cleanup failures with it rather
+    // than letting them mask or discard it.
+    const cleanupErrors = await disposeHarnessResources({ context, courseServer, backend });
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...cleanupErrors],
+        "MathRead shared harness setup failed and cleanup also errored",
+      );
     }
-    courseServer.stop(true);
-    backend.process.kill();
-    await backend.process.exited;
-    closeSync(backend.logFd);
     throw error;
   }
 }
@@ -1608,14 +1648,10 @@ export async function teardownSharedHarness(): Promise<void> {
     return;
   }
   sharedHarness = null;
-  try {
-    await harness.context.close();
-  } finally {
-    harness.courseServer.stop(true);
-    harness.backend.process.kill();
-    await harness.backend.process.exited;
-    closeSync(harness.backend.logFd);
-    cleanupTestRoot(harness.testRoot, sharedHarnessAllPassed);
+  const cleanupErrors = await disposeHarnessResources(harness);
+  cleanupTestRoot(harness.testRoot, sharedHarnessAllPassed);
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(cleanupErrors, "MathRead shared harness teardown failed");
   }
 }
 
@@ -1705,7 +1741,14 @@ async function withExtensionReader(
     sharedHarnessAllPassed = false;
     throw error;
   } finally {
-    await page.close();
+    // A page.close() rejection also fails the test, so it must preserve
+    // artifacts too — the catch above does not see failures from this finally.
+    try {
+      await page.close();
+    } catch (closeError) {
+      sharedHarnessAllPassed = false;
+      throw closeError;
+    }
   }
 }
 
