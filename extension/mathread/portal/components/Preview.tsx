@@ -1,12 +1,26 @@
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeMathjax from 'rehype-mathjax';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { motion } from 'motion/react';
+import { macros } from '../mathjax-macros';
 
 interface PreviewProps {
   markdown: string;
 }
+
+// remark-math extracts $…$/$$…$$ before markdown emphasis can mangle
+// underscores; rehype-mathjax (SVG) typesets with the same macro set the
+// papers use (generated from ~/.pandoc/styles/macros). SVG output is inline —
+// no font files or remote scripts — which the reader page's strict CSP
+// (script-src 'self'; font-src 'self' data:) requires. fontCache 'local' keeps
+// each expression's glyph ids self-contained across live-preview re-renders.
+const mathjaxOptions = {
+  tex: { macros },
+  svg: { fontCache: 'local' as const },
+};
 
 const CodeBlock: NonNullable<Components['code']> = ({ className, children, ref: _ref, ...props }) => {
   const match = /language-(\w+)/.exec(className !== undefined ? className : '');
@@ -45,7 +59,8 @@ export function Preview({ markdown }: PreviewProps) {
       <div className="flex-1 overflow-y-auto p-8 lg:p-12">
         <div className="max-w-3xl mx-auto prose prose-zinc prose-a:text-blue-600 hover:prose-a:text-blue-500 prose-headings:font-semibold prose-code:text-pink-600 prose-code:bg-pink-50 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-code:before:content-none prose-code:after:content-none">
           <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
+            remarkPlugins={[remarkGfm, remarkMath]}
+            rehypePlugins={[[rehypeMathjax, mathjaxOptions]]}
             components={{ code: CodeBlock }}
           >
             {markdown !== '' ? markdown : '*Start typing to see the preview...*'}
