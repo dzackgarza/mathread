@@ -33,7 +33,6 @@ PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 PAPER_KEY_FALLBACK_ERRORS = (AssertionError, ValidationError, pikepdf.PdfError)
 _DB_INIT_LOCKS_GUARD = Lock()
 _DB_INIT_LOCKS: dict[Path, Lock] = {}
-_INITIALIZED_DBS: set[Path] = set()
 
 
 class HistoryRecord(TypedDict):
@@ -316,16 +315,6 @@ def _db_init_lock(db_path: Path) -> Lock:
         return lock
 
 
-def _db_is_initialized(db_path: Path) -> bool:
-    with _DB_INIT_LOCKS_GUARD:
-        return db_path in _INITIALIZED_DBS
-
-
-def _mark_db_initialized(db_path: Path) -> None:
-    with _DB_INIT_LOCKS_GUARD:
-        _INITIALIZED_DBS.add(db_path)
-
-
 def _initialize_db(root: Path, conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA journal_mode=WAL;")
     _ensure_read_history_schema(conn)
@@ -349,7 +338,7 @@ def _ensure_read_history_schema(conn: sqlite3.Connection) -> None:
     if not columns:
         conn.execute(
             """
-            CREATE TABLE read_history (
+            CREATE TABLE IF NOT EXISTS read_history (
                 key TEXT PRIMARY KEY,
                 first_read TEXT NOT NULL,
                 last_read TEXT NOT NULL
@@ -363,14 +352,14 @@ def _ensure_read_history_schema(conn: sqlite3.Connection) -> None:
 
 def _get_db(root: Path) -> sqlite3.Connection:
     db_path = root / "library.db"
-    db_identity = db_path.resolve()
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
-    if not _db_is_initialized(db_identity):
-        with _db_init_lock(db_identity):
-            if not _db_is_initialized(db_identity):
-                _initialize_db(root, conn)
-                _mark_db_initialized(db_identity)
+    # Ensure the schema on every connection rather than memoizing "initialized"
+    # per path: the memo could not detect the db file being removed or replaced
+    # (a wiped reading root left the connection pointing at a schemaless db).
+    # _initialize_db is idempotent; the per-path lock guards concurrent creates.
+    with _db_init_lock(db_path.resolve()):
+        _initialize_db(root, conn)
     return conn
 
 
