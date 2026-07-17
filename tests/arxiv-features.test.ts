@@ -206,7 +206,7 @@ for (const arxivId of ARXIV_IDS) {
           await reader.locator('.nav-expand-btn[data-tab="notes"]').click();
           await waitFor(async () =>
             (await editor.innerText()).includes(noteBody),
-          120_000,
+          30_000,
           );
 
           console.error(`[arxiv] reload 1 restored editor for ${key}`);
@@ -229,7 +229,7 @@ for (const arxivId of ARXIV_IDS) {
           await reader.locator('.nav-expand-btn[data-tab="notes"]').click();
           await waitFor(
             async () => (await editor.innerText()).includes(handAuthoredNote),
-            120_000,
+            30_000,
           );
 
           console.error(`[arxiv] reload 2 restored hand-authored note for ${key}`);
@@ -242,7 +242,7 @@ for (const arxivId of ARXIV_IDS) {
         },
       );
     },
-    { timeout: 600_000 },
+    { timeout: 120_000 },
   );
 }
 
