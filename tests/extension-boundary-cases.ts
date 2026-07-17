@@ -1720,10 +1720,14 @@ async function withExtensionReader(
   const harness = await getSharedHarness();
   resetReadingRoot(harness.readingRoot);
   const page = await harness.context.newPage();
-  await clearExtensionLocalStorage(harness.context, page, harness.extensionId);
-  await stopLiveServiceWorkers(harness.context, page);
-  attachPageDiagnostics(page, harness.artifacts, "direct-pdf-tab");
+  // Everything after newPage() is guarded: a rejection from per-test reset
+  // (clear storage, stop the worker) must record the failure (keeping
+  // artifacts) and still close the page, not leak it into later tests.
+  let primaryError: unknown = undefined;
   try {
+    await clearExtensionLocalStorage(harness.context, page, harness.extensionId);
+    await stopLiveServiceWorkers(harness.context, page);
+    attachPageDiagnostics(page, harness.artifacts, "direct-pdf-tab");
     await callback({
       artifacts: harness.artifacts,
       backend: harness.backend,
@@ -1736,19 +1740,31 @@ async function withExtensionReader(
       x11Display: undefined,
     });
   } catch (error) {
-    // A failed shared test must keep its artifacts for investigation (see
-    // teardownSharedHarness); the shared root is torn down only at process end.
+    primaryError = error;
+  }
+  // Close in a non-masking way: the test's own failure (primaryError) is the
+  // load-bearing diagnostic; a page.close() rejection is surfaced alongside it
+  // via AggregateError, never in place of it. Any failure keeps the artifacts.
+  let closeError: unknown = undefined;
+  try {
+    await page.close();
+  } catch (error) {
+    closeError = error;
+  }
+  if (primaryError !== undefined || closeError !== undefined) {
     sharedHarnessAllPassed = false;
-    throw error;
-  } finally {
-    // A page.close() rejection also fails the test, so it must preserve
-    // artifacts too — the catch above does not see failures from this finally.
-    try {
-      await page.close();
-    } catch (closeError) {
-      sharedHarnessAllPassed = false;
-      throw closeError;
-    }
+  }
+  if (primaryError !== undefined && closeError !== undefined) {
+    throw new AggregateError(
+      [primaryError, closeError],
+      "MathRead shared test failed and page cleanup also errored",
+    );
+  }
+  if (primaryError !== undefined) {
+    throw primaryError;
+  }
+  if (closeError !== undefined) {
+    throw closeError;
   }
 }
 
@@ -2499,62 +2515,29 @@ async function seedLegacyReaderState(
   await page.goto(`chrome-extension://${extensionId}/reader/reader.css`, {
     waitUntil: "domcontentloaded",
   });
+  // The extension-origin page owns both surfaces the reader reads: window
+  // localStorage (the legacy-highlight store) and chrome.storage.local (the
+  // settings). Seeding both here needs no service worker, so nothing depends
+  // on waking the idle worker the shared harness stopped.
   await page.evaluate(
-    ({ key, highlights }) => {
+    ({ key, highlights, autosaveMs }) => {
       localStorage.setItem(
         `mathread-legacy-highlights:${key}`,
         JSON.stringify(highlights),
       );
-    },
-    { key, highlights },
-  );
-  // The shared harness stops the idle worker between tests to clear its
-  // capture cache; wake it (MV3 wakes on a runtime message) before seeding
-  // settings through it, then wait for it to be live.
-  const wakeError = await page.evaluate(async () => {
-    const runtime = (
-      globalThis as typeof globalThis & {
-        chrome: { runtime: { sendMessage(message: unknown): Promise<unknown> } };
-      }
-    ).chrome.runtime;
-    try {
-      await runtime.sendMessage({ type: "mathread:wake" });
-      return null;
-    } catch (error) {
-      return String(error);
-    }
-  });
-  // Delivering the message is what wakes the worker; the wake message has no
-  // handler, so the only tolerated rejection is the resulting closed-port
-  // error. Any other rejection is a real failure and must surface.
-  if (
-    wakeError !== null
-    && !wakeError.includes("Receiving end does not exist")
-    && !wakeError.includes("message port closed")
-  ) {
-    throw new Error(`MathRead worker wake failed unexpectedly: ${wakeError}`);
-  }
-  const serviceWorker = await waitForExtensionServiceWorker(page.context());
-  await serviceWorker.evaluate(async (autosaveMs) => {
-    const chromeApi = (
-      globalThis as typeof globalThis & {
-        chrome: {
-          storage: {
-            local: {
-              set(items: Record<string, unknown>): Promise<void>;
-            };
+      const chromeApi = (
+        globalThis as typeof globalThis & {
+          chrome: {
+            storage: { local: { set(items: Record<string, unknown>): Promise<void> } };
           };
-        };
-      }
-    ).chrome;
-    await chromeApi.storage.local.set({
-      "mathread.settings": {
-        autosaveMs,
-        fitWidthOnOpen: false,
-        lineNumbers: true,
-      },
-    });
-  }, autosaveMs);
+        }
+      ).chrome;
+      return chromeApi.storage.local.set({
+        "mathread.settings": { autosaveMs, fitWidthOnOpen: false, lineNumbers: true },
+      });
+    },
+    { key, highlights, autosaveMs },
+  );
 }
 
 async function legacyHighlightsRaw(
