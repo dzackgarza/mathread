@@ -1541,6 +1541,9 @@ type SharedHarness = {
 // fresh page opened. The backend re-scans its root per request (no cache), so a
 // wiped root is clean state.
 let sharedHarness: SharedHarness | null = null;
+// Preserve the shared harness's artifacts when any shared test failed, matching
+// cleanupTestRoot's per-test failure path (a passing run is cleaned away).
+let sharedHarnessAllPassed = true;
 
 async function getSharedHarness(): Promise<SharedHarness> {
   if (sharedHarness !== null) {
@@ -1554,42 +1557,66 @@ async function getSharedHarness(): Promise<SharedHarness> {
   const extensionPath = configuredExtensionCopy(testRoot, backendPort);
   const backend = startMathReadBackend(backendPort, readingRoot, artifacts.backendLogPath);
   const courseServer = startCourseServer(artifacts.eventsLogPath);
-  await waitForHttpService(`http://127.0.0.1:${backendPort}/openapi.json`);
-  const context = await chromium.launchPersistentContext(join(testRoot, "profile"), {
-    executablePath: chromiumExecutablePath(),
-    headless: true,
-    artifactsDir: artifacts.root,
-    args: [
-      `--disable-extensions-except=${extensionPath}`,
-      `--load-extension=${extensionPath}`,
-    ],
-  });
-  const serviceWorker = await waitForExtensionServiceWorker(context);
-  await waitForNoPdfRedirectRule(serviceWorker);
-  const extensionId = new URL(serviceWorker.url()).host;
-  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-  await context.addCookies([
-    { name: cookieName, value: cookieValue, url: courseServer.url.origin },
-  ]);
-  sharedHarness = {
-    backend, backendPort, context, courseServer, extensionId, readingRoot, artifacts, testRoot,
-  };
-  return sharedHarness;
+  // Everything past the first spawn must be torn down if a later setup step
+  // throws, or the backend/course-server/context orphan with no cleanup path
+  // (the harness is never assigned, so teardown would no-op).
+  let context: BrowserContext | undefined;
+  try {
+    await waitForHttpService(`http://127.0.0.1:${backendPort}/openapi.json`);
+    context = await chromium.launchPersistentContext(join(testRoot, "profile"), {
+      executablePath: chromiumExecutablePath(),
+      headless: true,
+      artifactsDir: artifacts.root,
+      args: [
+        `--disable-extensions-except=${extensionPath}`,
+        `--load-extension=${extensionPath}`,
+      ],
+    });
+    const serviceWorker = await waitForExtensionServiceWorker(context);
+    await waitForNoPdfRedirectRule(serviceWorker);
+    const extensionId = new URL(serviceWorker.url()).host;
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await context.addCookies([
+      { name: cookieName, value: cookieValue, url: courseServer.url.origin },
+    ]);
+    sharedHarness = {
+      backend, backendPort, context, courseServer, extensionId, readingRoot, artifacts, testRoot,
+    };
+    return sharedHarness;
+  } catch (error) {
+    if (context !== undefined) {
+      await context.close();
+    }
+    courseServer.stop(true);
+    backend.process.kill();
+    await backend.process.exited;
+    closeSync(backend.logFd);
+    throw error;
+  }
 }
 
-/** Registered once per test file; tears the shared harness down at process end. */
-export function teardownSharedHarness(): void {
+/**
+ * Registered as an awaited afterAll in each test file: tears the shared harness
+ * down at process end. Awaiting the whole teardown is load-bearing — an
+ * un-awaited close lets the uvicorn child and Chromium survive across
+ * subsequent test commands, the exact resource accumulation this change
+ * eliminates.
+ */
+export async function teardownSharedHarness(): Promise<void> {
   const harness = sharedHarness;
   if (harness === null) {
     return;
   }
   sharedHarness = null;
-  void harness.context.close().finally(() => {
+  try {
+    await harness.context.close();
+  } finally {
     harness.courseServer.stop(true);
     harness.backend.process.kill();
+    await harness.backend.process.exited;
     closeSync(harness.backend.logFd);
-    cleanupTestRoot(harness.testRoot, true);
-  });
+    cleanupTestRoot(harness.testRoot, sharedHarnessAllPassed);
+  }
 }
 
 function resetReadingRoot(readingRoot: string): void {
@@ -1646,7 +1673,11 @@ async function withExtensionReader(
   callback: (evidence: ExtensionReaderEvidence) => Promise<void>,
   options: ExtensionReaderOptions = {},
 ): Promise<void> {
-  if (options.nativeBrowserShortcuts === true || options.isolated === true) {
+  const needsFreshContext = [
+    options.nativeBrowserShortcuts,
+    options.isolated,
+  ].some((flag) => flag === true);
+  if (needsFreshContext) {
     await withIsolatedExtensionReader(callback, options);
     return;
   }
@@ -1668,6 +1699,11 @@ async function withExtensionReader(
       readingRoot: harness.readingRoot,
       x11Display: undefined,
     });
+  } catch (error) {
+    // A failed shared test must keep its artifacts for investigation (see
+    // teardownSharedHarness); the shared root is torn down only at process end.
+    sharedHarnessAllPassed = false;
+    throw error;
   } finally {
     await page.close();
   }
@@ -1675,7 +1711,7 @@ async function withExtensionReader(
 
 async function withIsolatedExtensionReader(
   callback: (evidence: ExtensionReaderEvidence) => Promise<void>,
-  options: ExtensionReaderOptions = {},
+  options: ExtensionReaderOptions,
 ): Promise<void> {
   const backendPort = await unusedTcpPort();
   const testRoot = mkdtemp("mathread-extension-reader-");
@@ -2432,14 +2468,29 @@ async function seedLegacyReaderState(
   // The shared harness stops the idle worker between tests to clear its
   // capture cache; wake it (MV3 wakes on a runtime message) before seeding
   // settings through it, then wait for it to be live.
-  await page.evaluate(() => {
+  const wakeError = await page.evaluate(async () => {
     const runtime = (
       globalThis as typeof globalThis & {
         chrome: { runtime: { sendMessage(message: unknown): Promise<unknown> } };
       }
     ).chrome.runtime;
-    return runtime.sendMessage({ type: "mathread:wake" }).catch(() => undefined);
+    try {
+      await runtime.sendMessage({ type: "mathread:wake" });
+      return null;
+    } catch (error) {
+      return String(error);
+    }
   });
+  // Delivering the message is what wakes the worker; the wake message has no
+  // handler, so the only tolerated rejection is the resulting closed-port
+  // error. Any other rejection is a real failure and must surface.
+  if (
+    wakeError !== null
+    && !wakeError.includes("Receiving end does not exist")
+    && !wakeError.includes("message port closed")
+  ) {
+    throw new Error(`MathRead worker wake failed unexpectedly: ${wakeError}`);
+  }
   const serviceWorker = await waitForExtensionServiceWorker(page.context());
   await serviceWorker.evaluate(async (autosaveMs) => {
     const chromeApi = (
