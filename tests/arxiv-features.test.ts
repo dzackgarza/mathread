@@ -233,8 +233,7 @@ for (const arxivId of ARXIV_IDS) {
           );
 
           console.error(`[arxiv] reload 2 restored hand-authored note for ${key}`);
-          // The overlay preview renders the same persisted Markdown.
-          await reader.locator("#notes-mode-preview").click();
+          // The always-visible preview pane renders the same persisted Markdown.
           await waitFor(async () =>
             (await reader.locator("#notes-preview").innerText()).includes(
               handAuthoredNote,

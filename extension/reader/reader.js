@@ -1,29 +1,4 @@
-import {
-  DOMPurify,
-  deleteLibraryEntry,
-  getBackendStatus,
-  getLibrary,
-  getNote,
-  marked,
-  openLibraryRoot,
-  overwriteNote,
-  postReadEvent,
-  saveNote,
-} from "./vendor/backend.js";
-import {
-  defaultHighlightStyle,
-  defaultKeymap,
-  EditorState,
-  EditorView,
-  highlightActiveLine,
-  history,
-  historyKeymap,
-  keymap,
-  lineNumbers,
-  markdown,
-  syntaxHighlighting,
-} from "./vendor/codemirror.mjs";
-import { upsertAnnotation } from "./annotations.js";
+import { postReadEvent } from "./vendor/backend.js";
 
 function assert(condition, message) {
   if (!condition) {
@@ -53,44 +28,24 @@ if (launch.kind === "library") {
   document.body.classList.add("mathread-library-mode");
 }
 
-const overlay = document.getElementById("mathread-overlay");
-const panel = document.getElementById("mathread-panel");
-const libraryPanel = document.getElementById("library-list");
-const notesPanel = document.getElementById("notes-panel");
-const notesStatus = document.getElementById("notes-status");
-const notesPath = document.getElementById("notes-path");
-const notesPreview = document.getElementById("notes-preview");
-const notesError = document.getElementById("notes-error");
-const editorHost = document.getElementById("ai-editor");
-const moreMenu = document.getElementById("more-menu");
-
-assert(overlay instanceof HTMLElement, "MathRead overlay is missing");
-assert(panel instanceof HTMLElement, "MathRead overlay panel is missing");
-assert(libraryPanel instanceof HTMLElement, "MathRead library panel is missing");
-assert(notesPanel instanceof HTMLElement, "MathRead notes panel is missing");
-assert(notesStatus instanceof HTMLElement, "MathRead notes status is missing");
-assert(notesPath instanceof HTMLElement, "MathRead notes path is missing");
-assert(notesPreview instanceof HTMLElement, "MathRead notes preview is missing");
-assert(notesError instanceof HTMLElement, "MathRead notes error is missing");
-assert(editorHost instanceof HTMLElement, "MathRead notes editor is missing");
-assert(moreMenu instanceof HTMLElement, "MathRead actions menu is missing");
-
-let editor = null;
-let noteVersion;
-let saveTimer = null;
-let replacingEditorText = false;
-let pendingLegacyMigrationStorageKey = null;
 let pdfViewerState = { kind: "awaiting" };
 let currentPdfViewState = { kind: "awaiting" };
 let takeoverKey = null;
+let overlayDocument = null;
+let overlayReady = false;
 
-function documentKey() {
-  assert(
-    launch.kind === "takeover" && takeoverKey !== null,
-    "MathRead document key requires an open document",
-  );
-  return takeoverKey;
+window.addEventListener("mathread:overlay-ready", () => {
+  overlayReady = true;
+  if (overlayDocument !== null) {
+    publishOverlayDocument();
+  }
+});
+
+function publishOverlayDocument() {
+  assert(overlayDocument !== null, "MathRead overlay document must exist before publishing");
+  window.dispatchEvent(new CustomEvent("mathread:document", { detail: overlayDocument }));
 }
+
 
 if (launch.kind !== "library") {
   document.addEventListener("DOMContentLoaded", waitForPdfViewer, { once: true });
@@ -109,8 +64,13 @@ if (launch.kind === "takeover") {
     assert(typeof data.key === "string" && data.key.length > 0, "MathRead takeover message has no library key");
     takeoverKey = data.key;
     void postReadEvent(takeoverKey);
-    if (panel.dataset.panel === "notes") {
-      void ensureNotes();
+    // The React overlay owns the notes and library surfaces. The overlay
+    // bundle is large and may still be parsing when the key arrives, so the
+    // handshake is two-way: publish now if it is ready, else on its ready
+    // event (whose listener below was registered at this module's eval).
+    overlayDocument = { key: takeoverKey, sourceUrl: launch.sourceUrl };
+    if (overlayReady) {
+      publishOverlayDocument();
     }
   });
   window.parent.postMessage({ type: "mathread:ready" }, "*");
@@ -186,37 +146,18 @@ function parsePdfView(location) {
   };
 }
 
-function selectOverlay(name) {
-  panel.dataset.panel = name;
-  libraryPanel.hidden = name !== "library";
-  notesPanel.hidden = name !== "notes";
-  if (name === "library") {
-    void renderLibrary();
-  } else if (launch.kind !== "library") {
-    void ensureNotes();
-  }
+// The copy-link menu is a reading-surface feature; library pages have no
+// document and no menu markup.
+if (launch.kind === "takeover") {
+  const moreMenu = document.getElementById("more-menu");
+  assert(moreMenu instanceof HTMLElement, "MathRead actions menu is missing");
+  wireCopyMenu(moreMenu);
 }
 
-function noteVersionFrom(note) {
-  assert(typeof note.version === "string", "MathRead note response must declare a version");
-  return note.version;
-}
-
-for (const button of document.querySelectorAll(".nav-expand-btn")) {
-  button.addEventListener("click", () => selectOverlay(button.dataset.tab));
-}
-
-if (launch.kind === "library") {
-  selectOverlay("library");
-}
-
-document.getElementById("mathread-close-panel").addEventListener("click", () => {
-  panel.dataset.panel = "closed";
-});
-
-document.getElementById("toggle-more").addEventListener("click", () => {
-  moreMenu.hidden = !moreMenu.hidden;
-});
+function wireCopyMenu(moreMenu) {
+  document.getElementById("toggle-more").addEventListener("click", () => {
+    moreMenu.hidden = !moreMenu.hidden;
+  });
 
 // Reference-conformant copy (Scholar reader mechanism): a copy-event listener
 // with clipboardData.setData under the click's user activation. The takeover
@@ -232,21 +173,22 @@ function copyText(text) {
   assert(copied, "MathRead copy command was rejected");
 }
 
-document.querySelector('[data-action="copy-plain-link"]').addEventListener("click", async () => {
-  const source = await sourceUrl();
-  copyText(source.href);
-  moreMenu.hidden = true;
-});
+  document.querySelector('[data-action="copy-plain-link"]').addEventListener("click", async () => {
+    const source = await sourceUrl();
+    copyText(source.href);
+    moreMenu.hidden = true;
+  });
 
-document.querySelector('[data-action="copy-view-link"]').addEventListener("click", async () => {
-  const source = await sourceUrl();
-  const view = currentPdfView();
-  // Standard PDF open-parameters fragment: any viewer, including Chrome's
-  // native one and PDF.js, lands on the right page without MathRead.
-  source.hash = `page=${view.page}&zoom=${Math.round(view.zoom * 100)},${view.x},${view.y}`;
-  copyText(source.href);
-  moreMenu.hidden = true;
-});
+  document.querySelector('[data-action="copy-view-link"]').addEventListener("click", async () => {
+    const source = await sourceUrl();
+    const view = currentPdfView();
+    // Standard PDF open-parameters fragment: any viewer, including Chrome's
+    // native one and PDF.js, lands on the right page without MathRead.
+    source.hash = `page=${view.page}&zoom=${Math.round(view.zoom * 100)},${view.x},${view.y}`;
+    copyText(source.href);
+    moreMenu.hidden = true;
+  });
+}
 
 async function sourceUrl() {
   assert(launch.kind === "takeover", "A source link requires an open document");
@@ -267,291 +209,4 @@ function currentPdfView() {
     case "awaiting":
       throw new Error("PDF.js has not published a current view");
   }
-}
-
-async function renderLibrary() {
-  const [status, entries] = await Promise.all([getBackendStatus(), getLibrary()]);
-  libraryPanel.replaceChildren();
-  const openRoot = document.createElement("button");
-  openRoot.dataset.testid = "library-open-root";
-  openRoot.textContent = "Open library folder";
-  openRoot.disabled = !status.capabilities.open_root;
-  openRoot.addEventListener("click", () => void openLibraryRoot());
-  libraryPanel.append(openRoot);
-  for (const entry of entries) {
-    const item = document.createElement("article");
-    item.className = "library-entry";
-    item.dataset.testid = "library-entry";
-    let open;
-    if (typeof entry.source_url === "string" && entry.source_url.length > 0) {
-      open = document.createElement("button");
-      open.className = "library-entry-open";
-      open.dataset.testid = "library-entry-open";
-      open.addEventListener("click", () => {
-        // A history link navigates the tab. Inside the takeover iframe the
-        // tab is the cross-origin top window, whose href is assignable with
-        // the click's user activation; on library.html top === window.
-        window.top.location.href = entry.source_url;
-      });
-    } else {
-      // A manual disk backup was never visited: no URL, no in-app open.
-      // It stays readable from the library folder.
-      open = document.createElement("span");
-      open.className = "library-entry-open";
-    }
-    open.textContent = entry.title;
-    const meta = document.createElement("span");
-    meta.className = "library-entry-meta";
-    meta.textContent = entry.has_note ? "📝" : "No notes";
-    const trash = document.createElement("button");
-    trash.className = "library-entry-trash";
-    trash.dataset.testid = "library-entry-trash";
-    trash.textContent = "Trash";
-    trash.addEventListener("click", async () => {
-      if (!confirm(`Trash ${entry.title}?`)) {
-        return;
-      }
-      await deleteLibraryEntry(entry.key);
-      await renderLibrary();
-    });
-    item.append(open, meta, trash);
-    libraryPanel.append(item);
-  }
-}
-
-async function ensureNotes() {
-  if (
-    editor !== null
-    || launch.kind === "library"
-    || (launch.kind === "takeover" && takeoverKey === null)
-  ) {
-    return;
-  }
-  const note = await getNote(documentKey());
-  noteVersion = noteVersionFrom(note);
-  notesPath.textContent = documentKey().replace(/\.pdf$/, ".md");
-  editor = new EditorView({
-    parent: editorHost,
-    state: EditorState.create({
-      doc: note.text,
-      extensions: [
-        lineNumbers(),
-        history(),
-        highlightActiveLine(),
-        keymap.of([...defaultKeymap, ...historyKeymap]),
-        markdown(),
-        syntaxHighlighting(defaultHighlightStyle),
-        EditorView.lineWrapping,
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged && !replacingEditorText) {
-            queueSave();
-          }
-        }),
-      ],
-    }),
-  });
-  renderNotesPreview();
-  notesStatus.textContent = "Saved";
-  migrateLegacyHighlights();
-}
-
-function queueSave() {
-  assert(editor !== null, "MathRead note editor must exist before saving");
-  notesStatus.textContent = "Saving…";
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => void saveNotes(), 800);
-  renderNotesPreview();
-}
-
-async function saveNotes() {
-  assert(launch.kind !== "library", "Saving notes requires an open document");
-  assert(editor !== null, "MathRead note editor must exist before saving");
-  assert(typeof noteVersion === "string", "MathRead note version must be loaded before saving");
-  const result = await saveNote(documentKey(), editor.state.doc.toString(), noteVersion);
-  switch (result.kind) {
-    case "saved":
-      noteVersion = noteVersionFrom(result.note);
-      if (pendingLegacyMigrationStorageKey !== null) {
-        localStorage.removeItem(pendingLegacyMigrationStorageKey);
-        pendingLegacyMigrationStorageKey = null;
-      }
-      notesStatus.textContent = "Saved";
-      notesError.hidden = true;
-      return;
-    case "conflict":
-      notesStatus.textContent = "Save failed: conflict";
-      showNotesConflict(result.message);
-      return;
-    case "unavailable":
-      notesStatus.textContent = "Save failed: backend unavailable";
-      notesError.hidden = false;
-      notesError.textContent = result.message;
-      return;
-  }
-}
-
-function replaceEditorText(text) {
-  assert(editor !== null, "MathRead note editor must exist before replacing its text");
-  replacingEditorText = true;
-  editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: text } });
-  replacingEditorText = false;
-  renderNotesPreview();
-}
-
-function showNotesConflict(message) {
-  notesError.hidden = false;
-  notesError.replaceChildren(message);
-  const load = document.createElement("button");
-  load.type = "button";
-  load.textContent = "Load from Disk";
-  load.addEventListener("click", () => void loadNotesFromDisk());
-  const overwrite = document.createElement("button");
-  overwrite.type = "button";
-  overwrite.textContent = "Overwrite Disk";
-  overwrite.addEventListener("click", () => void overwriteNotesOnDisk());
-  notesError.append(" ", load, " ", overwrite);
-}
-
-async function loadNotesFromDisk() {
-  assert(launch.kind !== "library", "Loading notes requires an open document");
-  const note = await getNote(documentKey());
-  noteVersion = noteVersionFrom(note);
-  replaceEditorText(note.text);
-  notesStatus.textContent = "Saved";
-  notesError.hidden = true;
-}
-
-async function overwriteNotesOnDisk() {
-  assert(launch.kind !== "library", "Overwriting notes requires an open document");
-  assert(editor !== null, "MathRead note editor must exist before overwriting");
-  const note = await overwriteNote(documentKey(), editor.state.doc.toString());
-  noteVersion = noteVersionFrom(note);
-  notesStatus.textContent = "Saved";
-  notesError.hidden = true;
-}
-
-function renderNotesPreview() {
-  if (editor === null) {
-    return;
-  }
-  notesPreview.innerHTML = DOMPurify.sanitize(marked.parse(editor.state.doc.toString()));
-}
-
-function migrateLegacyHighlights() {
-  assert(launch.kind !== "library", "Legacy annotation migration requires an open document");
-  assert(editor !== null, "Legacy annotation migration requires the note editor");
-  const storageKey = `mathread-legacy-highlights:${documentKey()}`;
-  const raw = localStorage.getItem(storageKey);
-  if (raw === null) {
-    return;
-  }
-  const result = parseLegacyHighlights(raw);
-  if (result.kind === "invalid") {
-    notesError.hidden = false;
-    notesError.textContent = "Legacy highlights were not migrated because their saved shape is invalid.";
-    return;
-  }
-  const current = editor.state.doc.toString();
-  const migrated = result.annotations.reduce(
-    (text, annotation) => upsertAnnotation(text, annotation),
-    current,
-  );
-  if (migrated === current) {
-    return;
-  }
-  replaceEditorText(migrated);
-  pendingLegacyMigrationStorageKey = storageKey;
-  notesStatus.textContent = "Unsaved changes";
-}
-
-function parseLegacyHighlights(raw) {
-  let value;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    return { kind: "invalid" };
-  }
-  if (!Array.isArray(value)) {
-    return { kind: "invalid" };
-  }
-  const annotations = [];
-  for (const candidate of value) {
-    const annotation = parseLegacyHighlight(candidate);
-    if (annotation.kind === "invalid") {
-      return annotation;
-    }
-    annotations.push(annotation.annotation);
-  }
-  return { kind: "valid", annotations };
-}
-
-function parseLegacyHighlight(value) {
-  if (typeof value !== "object" || value === null) {
-    return { kind: "invalid" };
-  }
-  const candidate = value;
-  if (
-    typeof candidate.id !== "string"
-    || !Number.isInteger(candidate.pageNumber)
-    || candidate.pageNumber < 1
-    || typeof candidate.color !== "string"
-    || typeof candidate.createdAt !== "string"
-    || !Array.isArray(candidate.rects)
-    || typeof candidate.text !== "string"
-    || typeof candidate.comment !== "string"
-  ) {
-    return { kind: "invalid" };
-  }
-  const created = new Date(candidate.createdAt);
-  if (!Number.isFinite(created.getTime())) {
-    return { kind: "invalid" };
-  }
-  const rects = [];
-  for (const legacyRect of candidate.rects) {
-    const rect = parseLegacyRect(legacyRect);
-    if (rect.kind === "invalid") {
-      return rect;
-    }
-    rects.push(rect.rect);
-  }
-  return {
-    kind: "valid",
-    annotation: {
-      id: candidate.id,
-      pageNumber: candidate.pageNumber,
-      color: candidate.color,
-      created: created.toISOString(),
-      rects,
-      text: candidate.text,
-      comment: candidate.comment,
-    },
-  };
-}
-
-function parseLegacyRect(value) {
-  if (typeof value !== "object" || value === null) {
-    return { kind: "invalid" };
-  }
-  const { xPct, yPct, wPct, hPct } = value;
-  if (
-    !Number.isFinite(xPct)
-    || !Number.isFinite(yPct)
-    || !Number.isFinite(wPct)
-    || !Number.isFinite(hPct)
-  ) {
-    return { kind: "invalid" };
-  }
-  return { kind: "valid", rect: { xPct, yPct, wPct, hPct } };
-}
-
-document.getElementById("notes-save").addEventListener("click", () => void saveNotes());
-document.getElementById("notes-mode-preview").addEventListener("click", () => {
-  notesPreview.hidden = !notesPreview.hidden;
-});
-
-if (launch.kind === "document") {
-  void postReadEvent(launch.key);
-  document.title = `MathRead — ${launch.key}`;
-} else {
-  selectOverlay("library");
 }

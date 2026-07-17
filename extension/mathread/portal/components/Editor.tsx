@@ -7,10 +7,13 @@ import { vim } from '@replit/codemirror-vim';
 interface EditorProps {
   value: string;
   onChange: (value: string) => void;
+  // The shipped reader contract is a plain CodeMirror editor; vim stays one
+  // toggle away rather than ambushing first keystrokes as normal-mode commands.
+  defaultVimMode?: boolean;
 }
 
-export function Editor({ value, onChange }: EditorProps) {
-  const [vimMode, setVimMode] = useState(true);
+export function Editor({ value, onChange, defaultVimMode = false }: EditorProps) {
+  const [vimMode, setVimMode] = useState(defaultVimMode);
   const [lineCount, setLineCount] = useState(value.split('\n').length);
 
   useEffect(() => {

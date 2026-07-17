@@ -695,8 +695,8 @@ test("reader Notes panel persists notes to the on-disk markdown file and renders
         (text) => text === "Saved",
       );
 
-      // Live preview renders sanitized GFM from the same buffer.
-      await reader.locator("#notes-mode-preview").click();
+      // The live preview pane is always visible beside the editor and
+      // renders GFM from the same buffer.
       await expectElementText(
         reader.locator("#notes-preview h1"),
         (text) => text === "Heading",
@@ -956,7 +956,7 @@ test("reader presents the MathRead library without constructing a custom PDF vie
     await page.goto(`chrome-extension://${extensionId}/reader/library.html`, {
       waitUntil: "domcontentloaded",
     });
-    await page.locator('.nav-expand-btn[data-tab="library"]').click();
+    // The library page mounts with its panel already open.
     await page.locator('[data-testid="library-open-root"]').waitFor();
     expect(await page.locator("#viewer").count()).toBe(0);
     expect(await page.locator("#pageNumber").count()).toBe(0);
