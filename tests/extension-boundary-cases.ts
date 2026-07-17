@@ -1166,6 +1166,24 @@ test("printing routes the raw PDF into a native blob frame, never the reader pag
       // overlays) entirely. Headless CDP does not deliver the trusted
       // browser accelerator to the page, so the wrapper listener is driven
       // synthetically; real keystrokes are part of the live acceptance pass.
+      //
+      // The dialog call itself is neutralized before it can fire: a headless
+      // print() on the blob frame wedges the process's next browser launch
+      // (four consecutive deterministic gate failures traced to it). The
+      // observer stubs the frame's print at attach time — a microtask, which
+      // always beats the frame's load event.
+      await reader.evaluate(() => {
+        const observer = new MutationObserver(() => {
+          const frame = document.querySelector<HTMLIFrameElement>(
+            '[data-testid="print-frame"]',
+          );
+          if (frame?.contentWindow !== null && frame?.contentWindow !== undefined) {
+            frame.contentWindow.print = () => undefined;
+            observer.disconnect();
+          }
+        });
+        observer.observe(document.body, { childList: true });
+      });
       await page.evaluate(() => {
         window.dispatchEvent(
           new KeyboardEvent("keydown", { key: "p", ctrlKey: true, cancelable: true }),
