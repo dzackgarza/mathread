@@ -90,6 +90,16 @@ async function takeOver(): Promise<void> {
       history.replaceState(history.state, "", `${sourceUrl}${data.hash}`);
     }
   });
+
+  // Printing the wrapper page would print a screenshot of the iframe; forward
+  // the shortcut to the reader, whose PDF.js print service renders real pages
+  // (the reference ships a dedicated print script for the same reason).
+  window.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "p") {
+      event.preventDefault();
+      target.postMessage({ type: "mathread:print" }, "*");
+    }
+  });
 }
 
 async function capturePdf(sourceUrl: string): Promise<string> {

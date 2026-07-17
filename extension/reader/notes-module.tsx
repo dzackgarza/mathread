@@ -311,7 +311,7 @@ export function NotesPanel({
           {editorElement}
         </div>
         <div id="notes-preview" className="min-h-0 overflow-auto" data-testid="notes-preview-pane">
-          <Preview markdown={note.text} />
+          <Preview markdown={previewMarkdown(note.text)} />
         </div>
       </div>
     </div>
@@ -502,6 +502,40 @@ function CommentField({
       }}
     />
   );
+}
+
+/**
+ * The preview renders annotation divs as readable highlight quotes instead of
+ * raw pandoc fence syntax. The sidecar format is untouched; this is a
+ * presentation-only transform.
+ */
+export function previewMarkdown(text: string): string {
+  const annotations = safeAnnotations(text);
+  let rendered = text;
+  for (const annotation of annotations) {
+    const block = findAnnotationBlock(rendered, annotation.id);
+    if (block === null) {
+      continue;
+    }
+    const comment = annotation.comment.length > 0 ? `\n> — ${annotation.comment}` : "";
+    rendered = rendered.replace(
+      block,
+      `> 🖍 **p.${annotation.pageNumber}** ${annotation.text}${comment}\n`,
+    );
+  }
+  return rendered;
+}
+
+function findAnnotationBlock(text: string, id: string): string | null {
+  const open = text.indexOf(`::: {.annotation id="${id}"`);
+  if (open === -1) {
+    return null;
+  }
+  const close = text.indexOf(":::", text.indexOf("\n", open));
+  if (close === -1) {
+    return null;
+  }
+  return text.slice(open, close + ":::".length + 1);
 }
 
 function safeAnnotations(text: string): Annotation[] {

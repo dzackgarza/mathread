@@ -57,7 +57,14 @@ if (launch.kind === "takeover") {
       return;
     }
     const data = event.data;
-    if (data === null || typeof data !== "object" || data.type !== "mathread:document") {
+    if (data === null || typeof data !== "object") {
+      return;
+    }
+    if (data.type === "mathread:print") {
+      void printDocument();
+      return;
+    }
+    if (data.type !== "mathread:document") {
       return;
     }
     assert(takeoverKey === null, "MathRead takeover received a second document");
@@ -91,6 +98,14 @@ function restoreCanonicalReaderUrl() {
     "",
     `${canonical.href}${location.hash}`,
   );
+}
+
+async function printDocument() {
+  const application = window.PDFViewerApplication;
+  assert(application !== null && typeof application === "object", "PDF.js application is unavailable for printing");
+  await application.initializedPromise;
+  // The viewer's own print path: renders print canvases and opens the dialog.
+  window.print();
 }
 
 function waitForPdfViewer() {

@@ -16,6 +16,7 @@ import {
   type NoteSaveResult,
   type NoteStore,
   NotesPanel,
+  previewMarkdown,
   useNote,
 } from "../extension/reader/notes-module";
 import { serializeAnnotation } from "../extension/reader/annotations";
@@ -192,4 +193,23 @@ test("NotesPanel renders the split, the annotations as Key Points, and conflict 
   await waitFor(() =>
     expect(document.querySelector("#ai-editor .cm-content")).not.toBeNull(),
   );
+});
+
+test("previewMarkdown renders annotation divs as highlight quotes, not raw fences", () => {
+  const annotated = `${serializeAnnotation({
+    id: "a-9",
+    pageNumber: 3,
+    color: "#bed2f4",
+    created: "2026-01-01T00:00:00.000Z",
+    rects: [{ xPct: 0, yPct: 0, wPct: 0.1, hPct: 0.01 }],
+    text: "a quoted phrase",
+    comment: "note to self",
+  })}\n# Body\n`;
+  const rendered = previewMarkdown(annotated);
+  expect(rendered).not.toContain("::: {.annotation");
+  expect(rendered).toContain("> 🖍 **p.3** a quoted phrase");
+  expect(rendered).toContain("> — note to self");
+  expect(rendered).toContain("# Body");
+  // The transform is presentation-only: the source text is untouched.
+  expect(annotated).toContain("::: {.annotation");
 });
