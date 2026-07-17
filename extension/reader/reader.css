@@ -199,3 +199,12 @@
   border-radius: 50%;
   border: 1px solid rgb(0 0 0 / 12%);
 }
+
+/* Never print the MathRead overlays; printing routes through the native
+ * blob-iframe pipeline, and this guards any residual in-page print. */
+@media print {
+  #mathread-root,
+  #mathread-overlay {
+    display: none !important;
+  }
+}

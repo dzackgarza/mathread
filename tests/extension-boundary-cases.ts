@@ -971,6 +971,7 @@ test("reader presents the MathRead library without constructing a custom PDF vie
 function registerReaderRenderingSemanticsBoundaryTests(): void {
   registerReaderHistoryBoundaryTest();
   registerHighlightBoundaryTest();
+  registerPrintBoundaryTest();
   registerInterceptedReaderShortcutsBoundaryTest();
 }
 
@@ -1145,6 +1146,43 @@ test("selection popup commits a highlight to the sidecar and paints the layer", 
       const screenshotPath = join(artifacts.root, "highlight-committed.png");
       await page.screenshot({ path: screenshotPath });
       assertPng(screenshotPath);
+    },
+  );
+}, 120_000);
+}
+
+function registerPrintBoundaryTest(): void {
+test("printing routes the raw PDF into a native blob frame, never the reader page", async () => {
+  await withExtensionReader(
+    async ({ courseServer, page, readingRoot }) => {
+      await page.goto(`${courseServer.url.origin}/notes.pdf`);
+      await waitForStoredPdf(readingRoot);
+      const reader = await waitForTakeoverReader(page);
+      await reader.locator("#viewer canvas").first().waitFor();
+
+      // The wrapper forwards Ctrl+P; the reader owns window.print and hands
+      // the document bytes to a hidden blob iframe (the reference mechanism),
+      // bypassing PDF.js's canvas print service and the reader page (with its
+      // overlays) entirely. Headless CDP does not deliver the trusted
+      // browser accelerator to the page, so the wrapper listener is driven
+      // synthetically; real keystrokes are part of the live acceptance pass.
+      await page.evaluate(() => {
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "p", ctrlKey: true, cancelable: true }),
+        );
+      });
+      await reader.locator('[data-testid="print-frame"]').waitFor({ state: "attached" });
+      const frameSrc = await reader
+        .locator('[data-testid="print-frame"]')
+        .getAttribute("src");
+      expect(frameSrc?.startsWith("blob:")).toBe(true);
+      // PDF.js's own print container stays empty: its rasterizing path never ran.
+      expect(
+        await reader.evaluate(() => {
+          const container = document.getElementById("printContainer");
+          return container === null ? 0 : container.children.length;
+        }),
+      ).toBe(0);
     },
   );
 }, 120_000);

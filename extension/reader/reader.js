@@ -100,13 +100,39 @@ function restoreCanonicalReaderUrl() {
   );
 }
 
+/**
+ * Reference print mechanism (Scholar reader): hand the raw PDF bytes to a
+ * hidden iframe as a blob URL and print that — the browser's native PDF
+ * print pipeline renders it near-instantly and prints only the document,
+ * never the reader page or its overlays. PDF.js's canvas-rasterizing print
+ * service is bypassed entirely, including from the viewer's own toolbar
+ * button, by owning window.print for the reader document.
+ */
+let printFrame = null;
+
 async function printDocument() {
   const application = window.PDFViewerApplication;
   assert(application !== null && typeof application === "object", "PDF.js application is unavailable for printing");
   await application.initializedPromise;
-  // The viewer's own print path: renders print canvases and opens the dialog.
-  window.print();
+  const pdfDocument = application.pdfDocument;
+  assert(pdfDocument !== null && typeof pdfDocument === "object", "No document is open to print");
+  const data = await pdfDocument.getData();
+  if (printFrame !== null) {
+    printFrame.remove();
+  }
+  const blobUrl = URL.createObjectURL(new Blob([data], { type: "application/pdf" }));
+  printFrame = document.createElement("iframe");
+  printFrame.style.display = "none";
+  printFrame.dataset.testid = "print-frame";
+  printFrame.addEventListener("load", () => {
+    assert(printFrame !== null && printFrame.contentWindow !== null, "MathRead print frame has no window");
+    printFrame.contentWindow.print();
+  }, { once: true });
+  printFrame.src = blobUrl;
+  document.body.append(printFrame);
 }
+
+
 
 function waitForPdfViewer() {
   const application = window.PDFViewerApplication;
@@ -122,6 +148,15 @@ function observePdfView(application) {
   assert(eventBus !== null && typeof eventBus === "object" && typeof eventBus.on === "function", "PDF.js view event bus is unavailable");
   assert(pdfViewer !== null && typeof pdfViewer === "object" && typeof pdfViewer.update === "function", "PDF.js viewer is unavailable");
   pdfViewerState = { kind: "ready", pdfViewer };
+  if (launch.kind === "takeover") {
+    // Claimed after PDF.js initializes: the viewer installs its own
+    // canvas-rasterizing window.print during startup, and every print entry
+    // (toolbar button, in-frame Ctrl+P) funnels through window.print. The
+    // native blob-frame pipeline replaces it.
+    window.print = () => {
+      void printDocument();
+    };
+  }
   eventBus.on("updateviewarea", ({ location }) => {
     currentPdfViewState = parsePdfView(location);
     if (launch.kind === "takeover" && currentPdfViewState.kind === "available") {
