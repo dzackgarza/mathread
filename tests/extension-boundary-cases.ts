@@ -932,7 +932,18 @@ test("legacy highlight migration rejects incomplete records instead of fabricati
 
 export function registerReaderRenderingBoundaryTests(): void {
   registerReaderNavigationBoundaryTests();
-  registerReaderRenderingSemanticsBoundaryTests();
+  registerReaderHistoryBoundaryTest();
+}
+
+/**
+ * The overlay-interaction tests run as their own file (fresh bun process):
+ * the residual CDP transport wedge (#42) strikes late in long multi-launch
+ * processes, and these tests sat at that tail.
+ */
+export function registerOverlayInteractionBoundaryTests(): void {
+  registerHighlightBoundaryTest();
+  registerPrintBoundaryTest();
+  registerInterceptedReaderShortcutsBoundaryTest();
 }
 
 function registerReaderNavigationBoundaryTests(): void {
@@ -975,12 +986,7 @@ test("reader presents the MathRead library without constructing a custom PDF vie
 
 }
 
-function registerReaderRenderingSemanticsBoundaryTests(): void {
-  registerReaderHistoryBoundaryTest();
-  registerHighlightBoundaryTest();
-  registerPrintBoundaryTest();
-  registerInterceptedReaderShortcutsBoundaryTest();
-}
+
 
 function registerReaderHistoryBoundaryTest(): void {
 
