@@ -122,3 +122,78 @@
 .mathread-library-mode #mainContainer {
   visibility: hidden;
 }
+
+/* ---------- Highlights (issue #39, Scholar-reference design) ---------- */
+
+.highlightLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.highlight-mark {
+  position: absolute;
+  border-radius: 1px;
+  mix-blend-mode: multiply;
+}
+
+.mathread-selection-popup {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: #fff;
+  padding: 8px 6px;
+  border-radius: 22px;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 28%);
+  z-index: 2147483001;
+}
+
+.mathread-popup-comment {
+  height: 30px;
+  width: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #f0f0f0;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  color: #555;
+}
+
+.mathread-popup-comment svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+.mathread-popup-comment:hover {
+  background: #e2e2e2;
+}
+
+.mathread-popup-swatches {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mathread-popup-swatches button {
+  height: 26px;
+  width: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.mathread-popup-swatches button > span {
+  display: block;
+  height: 18px;
+  width: 18px;
+  border-radius: 50%;
+  border: 1px solid rgb(0 0 0 / 12%);
+}

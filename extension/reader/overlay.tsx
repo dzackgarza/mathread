@@ -20,7 +20,13 @@ import {
 } from "./backend";
 
 import type { LibraryEntry, NoteContent } from "../mathread/portal/api";
-import { upsertAnnotation } from "./annotations";
+import {
+  type Annotation,
+  parseAnnotations,
+  removeAnnotation,
+  upsertAnnotation,
+} from "./annotations";
+import { HighlightController } from "./highlights";
 
 function versionOf(note: NoteContent): string {
   if (note.version === undefined) {
@@ -92,12 +98,22 @@ function OverlayApp({
 }) {
   const [doc, setDoc] = useState<OverlayDocument | null>(null);
   const [tab, setTab] = useState<Tab>(initialTab);
+  const noteApi = useNote(doc);
   useEffect(() => {
     register(setDoc);
   }, [register]);
 
   return (
     <div className="mathread-overlay-root pointer-events-none fixed inset-0 z-[2147483000] flex justify-end font-sans">
+      <HighlightController
+        noteText={noteApi.note.kind === "open" ? noteApi.note.text : null}
+        commit={(annotation, focusComment) => {
+          noteApi.applyExternal((text) => upsertAnnotation(text, annotation));
+          if (focusComment) {
+            setTab("notes");
+          }
+        }}
+      />
       <nav className="pointer-events-auto mr-2 mt-14 flex h-fit flex-col gap-2 self-start">
         <OverlayTabButton
           label="Notes"
@@ -134,7 +150,7 @@ function OverlayApp({
               <PanelRightClose size={16} />
             </button>
           </header>
-          {tab === "notes" ? <NotesPanel doc={doc} /> : <LibraryPanel />}
+          {tab === "notes" ? <NotesPanel doc={doc} noteApi={noteApi} /> : <LibraryPanel />}
         </aside>
       )}
     </div>
@@ -173,7 +189,15 @@ function OverlayTabButton({
   );
 }
 
-export function NotesPanel({ doc }: { doc: OverlayDocument | null }) {
+export type NoteApi = {
+  note: NoteState;
+  onChange: (text: string) => void;
+  applyExternal: (mutate: (text: string) => string) => void;
+  resolveFromDisk: () => void;
+  overwriteDisk: () => void;
+};
+
+export function useNote(doc: OverlayDocument | null): NoteApi {
   const [note, setNote] = useState<NoteState>({ kind: "closed" });
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -304,6 +328,50 @@ export function NotesPanel({ doc }: { doc: OverlayDocument | null }) {
     });
   }, [doc]);
 
+  const applyExternal = useCallback(
+    (mutate: (text: string) => string) => {
+      if (doc === null) {
+        return;
+      }
+      setNote((current) => {
+        if (current.kind !== "open") {
+          return current;
+        }
+        const text = mutate(current.text);
+        if (text === current.text) {
+          return current;
+        }
+        if (saveTimer.current !== null) {
+          clearTimeout(saveTimer.current);
+        }
+        const version = current.version;
+        saveTimer.current = setTimeout(() => {
+          persist(doc.key, text, version);
+        }, autosaveMs);
+        // External mutations reseed the editor; keystrokes never do.
+        return {
+          ...current,
+          text,
+          seed: { text, revision: current.seed.revision + 1 },
+          status: "saving",
+          message: null,
+        };
+      });
+    },
+    [doc, persist],
+  );
+
+  return { note, onChange, applyExternal, resolveFromDisk, overwriteDisk };
+}
+
+export function NotesPanel({
+  doc,
+  noteApi,
+}: {
+  doc: OverlayDocument | null;
+  noteApi: NoteApi;
+}) {
+  const { note, onChange, applyExternal, resolveFromDisk, overwriteDisk } = noteApi;
   if (doc === null || note.kind === "loading") {
     return (
       <p data-testid="notes-waiting" className="p-4 text-sm text-zinc-500">
@@ -351,6 +419,7 @@ export function NotesPanel({ doc }: { doc: OverlayDocument | null }) {
           </button>
         </div>
       )}
+      <KeyPointsList note={note} applyExternal={applyExternal} />
       {/* The half/half split: editor and live preview side by side, always. */}
       <div className="grid min-h-0 flex-1 grid-cols-2 divide-x divide-zinc-800">
         <div id="ai-editor" className="min-h-0 overflow-hidden" data-testid="notes-editor-pane">
@@ -480,6 +549,86 @@ function parseLegacyRect(value: unknown): LegacyRect | null {
     return null;
   }
   return { xPct, yPct, wPct, hPct };
+}
+
+function KeyPointsList({
+  note,
+  applyExternal,
+}: {
+  note: Extract<NoteState, { kind: "open" }>;
+  applyExternal: (mutate: (text: string) => string) => void;
+}) {
+  const annotations = safeAnnotations(note.text);
+  if (annotations.length === 0) {
+    return null;
+  }
+  return (
+    <section
+      data-testid="key-points-list"
+      className="max-h-48 shrink-0 overflow-auto border-b border-zinc-800/60 px-3 py-2"
+    >
+      {annotations.map((annotation) => (
+        <article
+          key={annotation.id}
+          data-highlight-id={annotation.id}
+          className="mb-2 flex items-start gap-2 text-xs"
+        >
+          <span
+            className="mt-0.5 h-3 w-3 shrink-0 rounded-sm"
+            style={{ background: annotation.color }}
+          />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-zinc-300" title={annotation.text}>
+              {annotation.text}
+            </p>
+            <CommentField annotation={annotation} applyExternal={applyExternal} />
+          </div>
+          <button
+            type="button"
+            title="Remove highlight"
+            data-testid="highlight-remove"
+            className="shrink-0 rounded border border-zinc-800 px-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+            onClick={() => applyExternal((text) => removeAnnotation(text, annotation.id))}
+          >
+            ×
+          </button>
+        </article>
+      ))}
+    </section>
+  );
+}
+
+function CommentField({
+  annotation,
+  applyExternal,
+}: {
+  annotation: Annotation;
+  applyExternal: (mutate: (text: string) => string) => void;
+}) {
+  const [draft, setDraft] = useState(annotation.comment);
+  return (
+    <input
+      className="highlight-item-comment mt-1 w-full rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 text-zinc-200 placeholder:text-zinc-600"
+      placeholder="Add comment…"
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => {
+        if (draft !== annotation.comment) {
+          applyExternal((text) =>
+            upsertAnnotation(text, { ...annotation, comment: draft }),
+          );
+        }
+      }}
+    />
+  );
+}
+
+function safeAnnotations(text: string): Annotation[] {
+  try {
+    return parseAnnotations(text);
+  } catch {
+    return [];
+  }
 }
 
 export function LibraryPanel() {
