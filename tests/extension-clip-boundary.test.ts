@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { chromium, type BrowserContext } from "playwright";
 import { chromiumExecutablePath } from "./browser-helpers";
 import { cleanupTestRoot, waitForTakeoverReader } from "./extension-boundary-cases";
+import { assertNoConsoleErrors, attachConsoleErrorGate, createTraceLogger } from "./test-logger";
 
 const ARXIV_ID = "1612.09116";
 const FIXTURE = join(import.meta.dir, "fixtures", "arxiv", `${ARXIV_ID}.pdf`);
@@ -69,6 +70,8 @@ test(
       });
       await waitForExtensionServiceWorker(context);
       const page = await context.newPage();
+      const { logger } = createTraceLogger(artifactsDir, "clip");
+      const consoleGate = attachConsoleErrorGate(page, logger);
       await page.goto(pdfUrl);
       const reader = await waitForTakeoverReader(page);
 
@@ -112,6 +115,7 @@ test(
       await waitFor(async () => (await previewImage.evaluate((el) => (el as HTMLImageElement).naturalWidth)) > 0, 30_000);
 
       await page.screenshot({ path: join(artifactsDir, "clip-e2e.png"), fullPage: false });
+      assertNoConsoleErrors(consoleGate);
       await page.close();
       completed = true;
     } finally {

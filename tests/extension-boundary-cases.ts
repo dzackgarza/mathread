@@ -32,7 +32,13 @@ import {
   type Worker,
 } from "playwright";
 import { chromiumExecutablePath } from "./browser-helpers";
-import { settleWithin } from "./test-logger";
+import {
+  type ConsoleErrorGate,
+  assertNoConsoleErrors,
+  attachConsoleErrorGate,
+  createTraceLogger,
+  settleWithin,
+} from "./test-logger";
 
 const pdfBytes = new TextEncoder().encode(
   [
@@ -812,6 +818,7 @@ test("reader Key Points panel blocks stale autosave and resolves disk conflicts"
         (text) => text === "Saved",
       );
     },
+    { expectsConsoleErrors: true },
   );
 }, 60_000);
 
@@ -848,7 +855,7 @@ test("reader Key Points panel surfaces a loud error when the backend dies (no lo
         text.startsWith("Save failed:"),
       );
     },
-    { isolated: true },
+    { isolated: true, expectsConsoleErrors: true },
   );
 }, 60_000);
 
@@ -1518,6 +1525,10 @@ type ExtensionReaderOptions = {
   // context-wide network routes, or drive native X11 shortcuts — get a fresh
   // browser + backend so they neither observe nor leak that state.
   isolated?: boolean;
+  // Opt out of the browser-console-error gate. Only for tests that deliberately
+  // drive a failure the browser logs (a forced 409 conflict, a killed backend);
+  // they assert the loud-failure UI behaviour themselves.
+  expectsConsoleErrors?: boolean;
 };
 
 type RunningXServer = {
@@ -1738,7 +1749,7 @@ async function withExtensionReader(
   try {
     await clearExtensionLocalStorage(harness.context, page, harness.extensionId);
     await stopLiveServiceWorkers(harness.context, page);
-    attachPageDiagnostics(page, harness.artifacts, "direct-pdf-tab");
+    const consoleGate = attachPageDiagnostics(page, harness.artifacts, "direct-pdf-tab");
     await callback({
       artifacts: harness.artifacts,
       backend: harness.backend,
@@ -1750,6 +1761,11 @@ async function withExtensionReader(
       readingRoot: harness.readingRoot,
       x11Display: undefined,
     });
+    // The reader must not have logged browser errors (console or uncaught) while
+    // the test drove it — the gap that let the app throw on load unnoticed.
+    if (options.expectsConsoleErrors !== true) {
+      assertNoConsoleErrors(consoleGate);
+    }
   } catch (error) {
     primaryError = error;
   }
@@ -1830,7 +1846,7 @@ async function withIsolatedExtensionReader(
       },
     ]);
     const page = await context.newPage();
-    attachPageDiagnostics(page, artifacts, "direct-pdf-tab");
+    const consoleGate = attachPageDiagnostics(page, artifacts, "direct-pdf-tab");
 
     await callback({
       artifacts,
@@ -1843,6 +1859,9 @@ async function withIsolatedExtensionReader(
       readingRoot,
       x11Display: xServer?.display,
     });
+    if (options.expectsConsoleErrors !== true) {
+      assertNoConsoleErrors(consoleGate);
+    }
     await page.close();
     completed = true;
   } finally {
@@ -2572,33 +2591,26 @@ function attachPageDiagnostics(
   page: Page,
   artifacts: CaptureArtifacts,
   scenario: CaptureScenario,
-): void {
+): ConsoleErrorGate {
+  const { logger } = createTraceLogger(artifacts.root, `page-${scenario}`);
   void page.addInitScript(() => {
     setInterval(() => {
       console.log(`mathread-heartbeat ${Date.now()}`);
     }, 2000);
   });
+  const gate = attachConsoleErrorGate(page, logger);
   page.on("console", (message) => {
-    appendEvent(artifacts.eventsLogPath, {
-      type: "browser-console",
-      scenario,
-      text: message.text(),
-    });
-  });
-  page.on("pageerror", (error) => {
-    appendEvent(artifacts.eventsLogPath, {
-      type: "browser-pageerror",
-      scenario,
-      text: String(error),
-    });
+    logger.info({ event: "browser-console", scenario, level: message.type(), text: message.text() });
   });
   page.on("framenavigated", (frame) => {
-    appendEvent(artifacts.eventsLogPath, {
-      type: "frame-navigated",
+    logger.info({
+      event: "frame-navigated",
       scenario,
-      text: `${frame === page.mainFrame() ? "main" : "sub"} ${frame.name()} ${frame.url()}`,
+      frame: frame === page.mainFrame() ? "main" : "sub",
+      url: frame.url(),
     });
   });
+  return gate;
 }
 
 function configuredExtensionCopy(

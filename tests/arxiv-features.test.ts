@@ -25,7 +25,15 @@ import { chromium, type BrowserContext, type Frame, type Page } from "playwright
 import type pino from "pino";
 import { chromiumExecutablePath } from "./browser-helpers";
 import { cleanupTestRoot, waitForTakeoverReader } from "./extension-boundary-cases";
-import { attachPageTrace, createTraceLogger, dumpBackendState, settleWithin, step } from "./test-logger";
+import {
+  assertNoConsoleErrors,
+  attachConsoleErrorGate,
+  attachPageTrace,
+  createTraceLogger,
+  dumpBackendState,
+  settleWithin,
+  step,
+} from "./test-logger";
 const ARXIV_IDS = ["1612.09116", "2312.13488"];
 const FIXTURE_DIR = join(import.meta.dir, "fixtures", "arxiv");
 
@@ -168,11 +176,13 @@ async function withArxivReader(
     );
     const page = await step(logger, "new-page", () => context!.newPage());
     attachPageTrace(page, logger);
+    const consoleGate = attachConsoleErrorGate(page, logger);
     await step(logger, "goto-pdf", () => page.goto(pdfUrl));
     const reader = await step(logger, "await-takeover-reader", () =>
       waitForTakeoverReader(page),
     );
     await run({ page, reader, backendPort, readingRoot, key, notePath, logger });
+    assertNoConsoleErrors(consoleGate);
     await step(logger, "page-close", () => page.close());
     completed = true;
   } catch (error) {

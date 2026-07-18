@@ -113,6 +113,51 @@ export async function settleWithin<T>(
   }
 }
 
+// Console-error messages that are test-harness artifacts, not app defects.
+// Kept deliberately narrow — the point of the gate is to surface real errors.
+const BENIGN_CONSOLE_ERROR = /\/favicon\.ico\b/;
+
+export interface ConsoleErrorGate {
+  readonly errors: ReadonlyArray<{ url: string; text: string }>;
+}
+
+// Collect browser console errors and uncaught page errors from the page and all
+// its frames, logging each through pino. Playwright's page-level console event
+// bubbles messages from cross-origin iframes (the reader runs in one), which a
+// top-page page.on("pageerror") listener misses entirely. The returned gate lets
+// a test FAIL when the reader logs an error, closing the blind spot where the
+// app threw on load while the suite stayed green.
+export function attachConsoleErrorGate(page: Page, logger: pino.Logger): ConsoleErrorGate {
+  const errors: { url: string; text: string }[] = [];
+  page.on("console", (message) => {
+    if (message.type() !== "error") {
+      return;
+    }
+    const url = message.location().url;
+    const text = message.text();
+    logger.warn({ event: "console-error", url, text });
+    if (BENIGN_CONSOLE_ERROR.test(url) || BENIGN_CONSOLE_ERROR.test(text)) {
+      return;
+    }
+    errors.push({ url, text });
+  });
+  page.on("pageerror", (error) => {
+    logger.error({ event: "pageerror", err: String(error) });
+    errors.push({ url: "pageerror", text: String(error) });
+  });
+  return { errors };
+}
+
+export function assertNoConsoleErrors(gate: ConsoleErrorGate): void {
+  if (gate.errors.length === 0) {
+    return;
+  }
+  const detail = gate.errors.map((entry) => `  [${entry.url}] ${entry.text}`).join("\n");
+  throw new Error(
+    `Reader logged ${gate.errors.length} unexpected browser error(s):\n${detail}`,
+  );
+}
+
 // Wrap one awaited operation. A hang leaves "start" with no "end"; a slow step
 // leaves an "end" with its own ms so ordinary latency is visible too.
 export async function step<T>(
