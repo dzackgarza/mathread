@@ -9,6 +9,9 @@ import { macros } from '../mathjax-macros';
 
 interface PreviewProps {
   markdown: string;
+  // Rewrites a note-relative image path (a captured clip) to a servable URL.
+  // Genuinely absent outside the reader overlay, which owns backend assets.
+  resolveImageSrc?: ((src: string) => string) | undefined;
 }
 
 // remark-math extracts $…$/$$…$$ before markdown emphasis can mangle
@@ -46,7 +49,19 @@ const CodeBlock: NonNullable<Components['code']> = ({ className, children, ref: 
   );
 };
 
-export function Preview({ markdown }: PreviewProps) {
+export function Preview({ markdown, resolveImageSrc }: PreviewProps) {
+  const image: NonNullable<Components['img']> = ({ src, alt, node: _node, ...props }) => {
+    const resolved =
+      typeof src === 'string' && resolveImageSrc !== undefined ? resolveImageSrc(src) : src;
+    return (
+      <img
+        {...props}
+        src={resolved}
+        alt={typeof alt === 'string' ? alt : ''}
+        className="mx-auto my-4 max-w-full rounded border border-zinc-200 shadow-sm"
+      />
+    );
+  };
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -61,7 +76,7 @@ export function Preview({ markdown }: PreviewProps) {
           <ReactMarkdown
             remarkPlugins={[remarkGfm, remarkMath]}
             rehypePlugins={[[rehypeMathjax, mathjaxOptions]]}
-            components={{ code: CodeBlock }}
+            components={{ code: CodeBlock, img: image }}
           >
             {markdown !== '' ? markdown : '*Start typing to see the preview...*'}
           </ReactMarkdown>

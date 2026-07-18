@@ -241,9 +241,13 @@ export function useNote(
 export function NotesPanel({
   doc,
   noteApi,
+  resolveImageSrc,
 }: {
   doc: OverlayDocument | null;
   noteApi: NoteApi;
+  // Rewrites a note-relative clip path to a servable URL; only the reader
+  // overlay can resolve backend assets, so this is genuinely absent elsewhere.
+  resolveImageSrc?: ((src: string) => string) | undefined;
 }) {
   const { note, onChange, applyExternal, resolveFromDisk, overwriteDisk } = noteApi;
   // The editor element is memoized per seed revision: keystrokes re-render
@@ -311,7 +315,7 @@ export function NotesPanel({
           {editorElement}
         </div>
         <div id="notes-preview" className="min-h-0 overflow-auto" data-testid="notes-preview-pane">
-          <Preview markdown={previewMarkdown(note.text)} />
+          <Preview markdown={previewMarkdown(note.text)} resolveImageSrc={resolveImageSrc} />
         </div>
       </div>
     </div>
