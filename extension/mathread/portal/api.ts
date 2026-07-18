@@ -301,10 +301,6 @@ export async function backendHealth(): Promise<BackendHealth> {
     : { ok: false, detail: `MathRead backend storage not ready: ${status.root}` };
 }
 
-export function pdfUrl(key: string): string {
-  return `${API_BASE}/pdf/${encodeURIComponent(key)}`;
-}
-
 /** Trash a library item: removes the PDF, its note, assets, and read-history. */
 export async function deleteLibraryEntry(key: string): Promise<void> {
   await ok(await fetch(`${API_BASE}/library/${encodeURIComponent(key)}`, { method: 'DELETE' }));

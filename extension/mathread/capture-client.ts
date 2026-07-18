@@ -211,18 +211,6 @@ export function captureBytesEndpointFromManifest(manifest: {
   return `${backendOriginFromManifest(manifest)}/capture-bytes`;
 }
 
-/**
- * A PDF served from the MathRead backend's own /pdf/{key} endpoint (the shell's library
- * reopen path) is by definition already captured — capturing it again would store the
- * backend's own copy as a new item.
- */
-export function isBackendServedPdfUrl(
-  pdfUrl: string,
-  manifest: { host_permissions?: string[] },
-): boolean {
-  return pdfUrl.startsWith(`${backendOriginFromManifest(manifest)}/pdf/`);
-}
-
 /** The library key is the stored PDF's filename (see src/mathread/library.py). */
 export function libraryKeyFromStoredPath(storedPath: string): string {
   const key = storedPath.split("/").pop();
@@ -231,16 +219,6 @@ export function libraryKeyFromStoredPath(storedPath: string): string {
     `MathRead stored_path has no filename: ${storedPath}`,
   );
   return key;
-}
-
-export function libraryKeyFromBackendPdfUrl(pdfUrl: string): string {
-  const segments = new URL(pdfUrl).pathname.split("/");
-  const lastSegment = segments[segments.length - 1];
-  invariant(
-    lastSegment !== undefined && lastSegment.length > 0,
-    `MathRead backend PDF URL has no key: ${pdfUrl}`,
-  );
-  return decodeURIComponent(lastSegment);
 }
 
 export function parseRuntimeCaptureResponse(

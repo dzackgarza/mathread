@@ -548,20 +548,6 @@ def test_note_asset_traversal_rejection_at_boundary(client: TestClient, sample_p
     assert client.get(f"/notes/{key}/assets/..%2fnotes.pdf").status_code == 404
 
 
-def test_key_path_traversal_is_rejected_at_http_boundary(
-    client: TestClient,
-    sample_pdf_bytes: bytes,
-    tmp_path: Path,
-) -> None:
-    key = capture(client, sample_pdf_bytes)
-    outside_pdf = tmp_path / "outside.pdf"
-    outside_pdf.write_bytes(sample_pdf_bytes)
-
-    response = client.get("/pdf/..%2foutside.pdf")
-
-    assert response.status_code in (400, 404)
-    assert stored_pdf_path(tmp_path / "reading-root", key).is_file()
-    assert outside_pdf.is_file()
 
 
 def test_note_image_for_provenance_less_pdf_uses_file_stem_clip_tree(

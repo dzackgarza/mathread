@@ -77,7 +77,6 @@
       "tw-animate-css"
     ],
     "ignoreFiles": [
-      "extension/mathread/capture-ui.ts",
       "vendor/pdfjs/content/web/wasm/*.js"
     ],
     "ignoreUnresolved": [
