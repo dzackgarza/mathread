@@ -5,7 +5,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, HttpUrl
 
-type CaptureMode = Literal["capture-url", "capture-bytes"]
+# Captures are always the extension uploading the PDF bytes; the backend never
+# fetches a PDF from a URL itself (the retired "capture-url" mode).
+type CaptureMode = Literal["capture-bytes"]
 
 
 class CaptureBytesRequest(BaseModel):

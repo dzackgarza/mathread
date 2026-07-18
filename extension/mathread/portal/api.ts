@@ -21,7 +21,7 @@ export interface LibraryEntry {
   stored_path: string;
   pdf_url?: string | undefined;
   source_url?: string | undefined;
-  capture?: 'capture-url' | 'capture-bytes' | undefined;
+  capture?: 'capture-bytes' | undefined;
   original_sha256?: string | undefined;
   title: string;
   has_note: boolean;
@@ -103,7 +103,7 @@ function nullableCaptureMode(value: Record<string, unknown>): LibraryEntry['capt
   if (candidate === undefined || candidate === null) {
     return undefined;
   }
-  invariant(candidate === 'capture-url' || candidate === 'capture-bytes', 'MathRead library entry capture mode is invalid');
+  invariant(candidate === 'capture-bytes', 'MathRead library entry capture mode is invalid');
   return candidate;
 }
 

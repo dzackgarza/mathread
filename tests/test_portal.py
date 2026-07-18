@@ -548,8 +548,6 @@ def test_note_asset_traversal_rejection_at_boundary(client: TestClient, sample_p
     assert client.get(f"/notes/{key}/assets/..%2fnotes.pdf").status_code == 404
 
 
-
-
 def test_note_image_for_provenance_less_pdf_uses_file_stem_clip_tree(
     client: TestClient,
     sample_pdf_bytes: bytes,

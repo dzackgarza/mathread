@@ -10,7 +10,7 @@ export type CaptureResult = {
   stored_sha256: string;
   pdf_url: string;
   source_url: string;
-  capture: "capture-url" | "capture-bytes";
+  capture: "capture-bytes";
   existing: boolean;
 };
 
@@ -281,7 +281,7 @@ function parseCaptureResult(value: unknown): CaptureResult {
   );
   const capture = value.capture;
   invariant(
-    capture === "capture-url" || capture === "capture-bytes",
+    capture === "capture-bytes",
     "MathRead backend capture response must declare a valid capture mode",
   );
   invariant(
