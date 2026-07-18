@@ -178,8 +178,25 @@ if (launch.kind === "takeover") {
 }
 
 function wireCopyMenu(moreMenu) {
-  document.getElementById("toggle-more").addEventListener("click", () => {
+  const toggle = document.getElementById("toggle-more");
+  toggle.addEventListener("click", () => {
     moreMenu.hidden = !moreMenu.hidden;
+  });
+
+  // Close the actions popup when the pointer goes down anywhere outside it and
+  // its toggle button (the toggle keeps owning its own open/close click).
+  document.addEventListener("mousedown", (event) => {
+    if (moreMenu.hidden) {
+      return;
+    }
+    const target = event.target;
+    if (!(target instanceof Node)) {
+      return;
+    }
+    if (moreMenu.contains(target) || toggle.contains(target)) {
+      return;
+    }
+    moreMenu.hidden = true;
   });
 
 // Reference-conformant copy (Scholar reader mechanism): a copy-event listener

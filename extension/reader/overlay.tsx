@@ -5,7 +5,7 @@
  * injected beside the vendored PDF.js viewer. Reference for layout and
  * behavior: the pre-e8ceaf5 reader (repo history) and the Scholar reader.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BookOpen, Library, PanelRightClose, StickyNote } from "lucide-react";
 import {
@@ -77,9 +77,36 @@ function OverlayApp({
   const [doc, setDoc] = useState<OverlayDocument | null>(null);
   const [tab, setTab] = useState<Tab>(initialTab);
   const noteApi = useNote(doc, backendNoteStore);
+  const navRef = useRef<HTMLElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
   useEffect(() => {
     register(setDoc);
   }, [register]);
+
+  // Dismiss the open panel (notes editor or library) when the pointer goes down
+  // outside it and the tab rail. The overlay root is pointer-events-none, so a
+  // click on the PDF is not the target — but it still bubbles to document, where
+  // this listener sees it. mousedown (not click) closes before focus moves; the
+  // effect is added after the tab opens, so the opening click never self-closes.
+  useEffect(() => {
+    if (tab === null) {
+      return;
+    }
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      const nav = navRef.current;
+      const sidebar = sidebarRef.current;
+      if ((nav !== null && nav.contains(target)) || (sidebar !== null && sidebar.contains(target))) {
+        return;
+      }
+      setTab(null);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [tab]);
 
   return (
     <div className="mathread-overlay-root pointer-events-none fixed inset-0 z-[2147483000] flex justify-end font-sans">
@@ -92,7 +119,7 @@ function OverlayApp({
           }
         }}
       />
-      <nav className="pointer-events-auto mr-2 mt-14 flex h-fit flex-col gap-2 self-start">
+      <nav ref={navRef} className="pointer-events-auto mr-2 mt-14 flex h-fit flex-col gap-2 self-start">
         <OverlayTabButton
           label="Notes"
           active={tab === "notes"}
@@ -110,6 +137,7 @@ function OverlayApp({
       </nav>
       {tab !== null && (
         <aside
+          ref={sidebarRef}
           data-testid="overlay-sidebar"
           className="pointer-events-auto flex h-full w-[min(52rem,60vw)] flex-col border-l border-zinc-800 bg-zinc-950 text-zinc-100 shadow-2xl"
         >
