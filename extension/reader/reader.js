@@ -7,6 +7,25 @@ function assert(condition, message) {
   }
 }
 
+// The vendored PDF.js Chromium viewer (viewer.mjs) opens a ChromeCom port to the
+// extension background it was built to expect from the upstream PDF.js extension.
+// MathRead has no such background, so the port always disconnects and the viewer
+// correctly falls back to loading the PDF directly — but because the viewer never
+// reads chrome.runtime.lastError on that disconnect, Chrome logged "Unchecked
+// runtime.lastError: Could not establish connection. Receiving end does not
+// exist." against reader.html on every load. Keep the native connect (the
+// fallback is load-bearing — a stub port makes the viewer wait forever) and just
+// read the error so Chrome considers it handled. This module loads before
+// viewer.mjs; same integration seam as the window.print override below.
+const nativeConnect = chrome.runtime.connect.bind(chrome.runtime);
+chrome.runtime.connect = (...args) => {
+  const port = nativeConnect(...args);
+  port.onDisconnect.addListener(() => {
+    void chrome.runtime.lastError;
+  });
+  return port;
+};
+
 function parseLaunch(params) {
   const file = params.get("file");
   if (window.parent === window) {
