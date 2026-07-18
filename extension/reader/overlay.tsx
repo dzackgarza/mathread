@@ -7,15 +7,18 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { BookOpen, Library, PanelRightClose, StickyNote } from "lucide-react";
+import { BookOpen, Library, PanelRightClose, Scissors, StickyNote } from "lucide-react";
 import {
   deleteLibraryEntry,
   getLibrary,
   getNote,
+  noteAssetUrl,
   openLibraryRoot,
   overwriteNote,
+  postNoteImage,
   saveNote,
 } from "./backend";
+import { ClipLayer } from "./clip";
 
 import type { LibraryEntry } from "../mathread/portal/api";
 import { upsertAnnotation } from "./annotations";
@@ -76,6 +79,7 @@ function OverlayApp({
 }) {
   const [doc, setDoc] = useState<OverlayDocument | null>(null);
   const [tab, setTab] = useState<Tab>(initialTab);
+  const [clipMode, setClipMode] = useState(false);
   const noteApi = useNote(doc, backendNoteStore);
   const navRef = useRef<HTMLElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
@@ -83,13 +87,48 @@ function OverlayApp({
     register(setDoc);
   }, [register]);
 
+  // A clip can only land in an open note; the button is gated on that so the
+  // uploaded PNG is never orphaned by applyExternal dropping the reference.
+  const noteOpen = noteApi.note.kind === "open";
+
+  const onClip = useCallback(
+    (png: Blob) => {
+      setClipMode(false);
+      if (doc === null) {
+        return;
+      }
+      void postNoteImage(doc.key, png).then((relativePath) => {
+        noteApi.applyExternal((text) => appendClipImage(text, relativePath));
+        setTab("notes");
+      });
+    },
+    [doc, noteApi],
+  );
+
+  // Clip references are stored as portable relative paths (clips/<key>/clip-NN.png,
+  // matching the on-disk layout); the preview resolves them to the backend asset
+  // URL so the image renders.
+  const resolveImageSrc = useCallback(
+    (src: string): string => {
+      if (doc === null || !src.endsWith(".png") || !src.includes("clips/")) {
+        return src;
+      }
+      const filename = src.split("/").pop();
+      if (filename === undefined) {
+        return src;
+      }
+      return noteAssetUrl(doc.key, filename);
+    },
+    [doc],
+  );
+
   // Dismiss the open panel (notes editor or library) when the pointer goes down
   // outside it and the tab rail. The overlay root is pointer-events-none, so a
   // click on the PDF is not the target — but it still bubbles to document, where
   // this listener sees it. mousedown (not click) closes before focus moves; the
   // effect is added after the tab opens, so the opening click never self-closes.
   useEffect(() => {
-    if (tab === null) {
+    if (tab === null || clipMode) {
       return;
     }
     const onPointerDown = (event: MouseEvent) => {
@@ -106,7 +145,7 @@ function OverlayApp({
     };
     document.addEventListener("mousedown", onPointerDown);
     return () => document.removeEventListener("mousedown", onPointerDown);
-  }, [tab]);
+  }, [tab, clipMode]);
 
   return (
     <div className="mathread-overlay-root pointer-events-none fixed inset-0 z-[2147483000] flex justify-end font-sans">
@@ -119,13 +158,18 @@ function OverlayApp({
           }
         }}
       />
-      <nav ref={navRef} className="pointer-events-auto mr-2 mt-14 flex h-fit flex-col gap-2 self-start">
+      {clipMode && <ClipLayer onCapture={onClip} onCancel={() => setClipMode(false)} />}
+      <nav
+        ref={navRef}
+        className="pointer-events-auto relative z-[2147483060] mr-2 mt-14 flex h-fit flex-col gap-2 self-start"
+      >
         <OverlayTabButton
           label="Notes"
           active={tab === "notes"}
           onClick={() => setTab(tab === "notes" ? null : "notes")}
           icon={<StickyNote size={16} />}
           testid="overlay-tab-notes"
+          disabled={false}
         />
         <OverlayTabButton
           label="Library"
@@ -133,6 +177,15 @@ function OverlayApp({
           onClick={() => setTab(tab === "library" ? null : "library")}
           icon={<Library size={16} />}
           testid="overlay-tab-library"
+          disabled={false}
+        />
+        <OverlayTabButton
+          label="Clip"
+          active={clipMode}
+          disabled={!noteOpen}
+          onClick={() => setClipMode((on) => !on)}
+          icon={<Scissors size={16} />}
+          testid="overlay-tab-clip"
         />
       </nav>
       {tab !== null && (
@@ -156,7 +209,11 @@ function OverlayApp({
               <PanelRightClose size={16} />
             </button>
           </header>
-          {tab === "notes" ? <NotesPanel doc={doc} noteApi={noteApi} /> : <LibraryPanel />}
+          {tab === "notes" ? (
+            <NotesPanel doc={doc} noteApi={noteApi} resolveImageSrc={resolveImageSrc} />
+          ) : (
+            <LibraryPanel />
+          )}
         </aside>
       )}
     </div>
@@ -169,12 +226,14 @@ function OverlayTabButton({
   onClick,
   icon,
   testid,
+  disabled,
 }: {
   label: string;
   active: boolean;
   onClick: () => void;
   icon: React.ReactNode;
   testid: string;
+  disabled: boolean;
 }) {
   return (
     <button
@@ -182,8 +241,9 @@ function OverlayTabButton({
       data-testid={testid}
       data-tab={label.toLowerCase()}
       aria-pressed={active}
+      disabled={disabled}
       onClick={onClick}
-      className={`nav-expand-btn flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium shadow-lg backdrop-blur ${
+      className={`nav-expand-btn flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium shadow-lg backdrop-blur disabled:cursor-not-allowed disabled:opacity-40 ${
         active
           ? "border-amber-500/60 bg-amber-500/20 text-amber-200"
           : "border-zinc-700 bg-zinc-900/90 text-zinc-300 hover:bg-zinc-800"
@@ -193,6 +253,16 @@ function OverlayTabButton({
       {label}
     </button>
   );
+}
+
+// Append a captured clip to the note as a portable markdown image. The path is
+// the backend's note-relative clips/<key>/clip-NN.png; the preview resolves it
+// to a servable URL.
+function appendClipImage(noteText: string, relativePath: string): string {
+  const filename = relativePath.split("/").pop();
+  const alt = filename === undefined ? "clip" : filename.replace(/\.png$/, "");
+  const separator = noteText.length === 0 ? "" : noteText.endsWith("\n") ? "\n" : "\n\n";
+  return `${noteText}${separator}![${alt}](${relativePath})\n`;
 }
 
 export function LibraryPanel() {
