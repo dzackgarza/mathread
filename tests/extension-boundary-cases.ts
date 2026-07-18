@@ -84,6 +84,14 @@ const numdamFixtureSha256 =
   "0b81cacbf796f3ea72d35ab0faaeec2215a8f390e050c9142d621cfd6922976e";
 const numdamFixtureChunkCount = 8;
 const numdamFixtureFetchAttempts = 4;
+const uioFindRegressionPdfUrl =
+  "https://www.mn.uio.no/math/personer/vit/ragnip/bsmf_1985__113__205_0.pdf";
+const uioFindRegressionFixturePath = join(
+  import.meta.dir,
+  "fixtures",
+  "uio",
+  "bsmf_1985__113__205_0.pdf",
+);
 declare global {
   interface Window {
     /** Print-seam recorder installed by the print routing test; the test
@@ -960,6 +968,7 @@ export function registerOverlayInteractionBoundaryTests(): void {
   registerHighlightBoundaryTest();
   registerPrintBoundaryTest();
   registerInterceptedReaderShortcutsBoundaryTest();
+  registerFindShortcutBoundaryTest();
 }
 
 function registerReaderNavigationBoundaryTests(): void {
@@ -1221,6 +1230,80 @@ test("Ctrl+P routes through the reader print seam, not PDF.js rasterization", as
   );
 }, 120_000);
 }
+
+function registerFindShortcutBoundaryTest(): void {
+
+test("Ctrl+F opens the PDF viewer finder without first clicking the reader", async () => {
+  await withExtensionReader(
+    async ({ artifacts, context, page, x11Display }) => {
+      assert(x11Display !== undefined, "Native browser shortcut proof requires an X11 display");
+      await context.route(uioFindRegressionPdfUrl, async (route) => {
+        await route.fulfill({
+          contentType: "application/pdf",
+          path: uioFindRegressionFixturePath,
+        });
+      });
+      await page.goto(uioFindRegressionPdfUrl, { waitUntil: "domcontentloaded" });
+      const reader = await waitForTakeoverReader(page);
+      await reader.locator("#viewer canvas").first().waitFor();
+
+      await page.bringToFront();
+      sendNativeShortcut(x11Display, "ctrl+f");
+      captureNativeDisplay(
+        x11Display,
+        join(artifacts.root, "ctrl-f-before-reader-focus.png"),
+      );
+
+      await reader.locator("#findbar:not(.hidden)").waitFor();
+      await reader.locator("#findInput:focus").waitFor();
+    },
+    { nativeBrowserShortcuts: true, isolated: true },
+  );
+}, 120_000);
+
+test("focused PDF finder advances to each visible kollar match", async () => {
+  await withExtensionReader(
+    async ({ artifacts, context, page, x11Display }) => {
+      assert(x11Display !== undefined, "Native browser shortcut proof requires an X11 display");
+      await context.route(uioFindRegressionPdfUrl, async (route) => {
+        await route.fulfill({
+          contentType: "application/pdf",
+          path: uioFindRegressionFixturePath,
+        });
+      });
+      await page.goto(uioFindRegressionPdfUrl, { waitUntil: "domcontentloaded" });
+      const reader = await waitForTakeoverReader(page);
+      await reader.locator("#viewer canvas").first().waitFor();
+
+      await reader.locator("#viewer").click({ position: { x: 20, y: 20 } });
+      sendNativeShortcut(x11Display, "ctrl+f");
+      const findInput = reader.locator("#findInput:focus");
+      await findInput.waitFor();
+      await page.keyboard.type("kollar");
+      await expectElementText(
+        reader.locator("#findResultsCount"),
+        (text) => readableFindCount(text) === "1 of 2 matches",
+      );
+      const selectedMatch = reader.locator(".textLayer .highlight.selected");
+      await selectedMatch.waitFor();
+      expect(await isVisibleInViewport(selectedMatch)).toBe(true);
+
+      await page.keyboard.press("Enter");
+      await expectElementText(
+        reader.locator("#findResultsCount"),
+        (text) => readableFindCount(text) === "2 of 2 matches",
+      );
+      expect(await isVisibleInViewport(selectedMatch)).toBe(true);
+      captureNativeDisplay(
+        x11Display,
+        join(artifacts.root, "pdf-finder-second-kollar-match.png"),
+      );
+    },
+    { nativeBrowserShortcuts: true, isolated: true },
+  );
+}, 120_000);
+}
+
 
 function registerInterceptedReaderShortcutsBoundaryTest(): void {
 
@@ -1948,16 +2031,33 @@ async function startXServer(): Promise<RunningXServer> {
   throw new Error("Xvfb did not create a display socket");
 }
 
-function sendNativeHistoryShortcut(display: string, direction: "Left" | "Right"): void {
+function captureNativeDisplay(display: string, path: string): void {
   const result = Bun.spawnSync(
-    ["xdotool", "key", "--clearmodifiers", `Alt+${direction}`],
+    ["import", "-window", "root", path],
     { env: { ...process.env, DISPLAY: display } },
   );
   if (result.exitCode !== 0) {
     throw new Error(
-      `xdotool failed to send Alt+${direction}: ${new TextDecoder().decode(result.stderr)}`,
+      `ImageMagick failed to capture ${display}: ${new TextDecoder().decode(result.stderr)}`,
     );
   }
+  assertPng(path);
+}
+
+function sendNativeShortcut(display: string, shortcut: string): void {
+  const result = Bun.spawnSync(
+    ["xdotool", "key", "--clearmodifiers", shortcut],
+    { env: { ...process.env, DISPLAY: display } },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `xdotool failed to send ${shortcut}: ${new TextDecoder().decode(result.stderr)}`,
+    );
+  }
+}
+
+function sendNativeHistoryShortcut(display: string, direction: "Left" | "Right"): void {
+  sendNativeShortcut(display, `Alt+${direction}`);
 }
 
 /** Capture a scenario PDF straight through the backend; returns its library key. */
@@ -2410,6 +2510,26 @@ async function waitForLibraryEntryCount(
   throw new Error(
     `Timed out waiting for ${expectedCount} library entry(ies); last count: ${await entries.count()}`,
   );
+}
+
+function readableFindCount(text: string): string {
+  return text.replaceAll("⁨", "").replaceAll("⁩", "");
+}
+
+async function isVisibleInViewport(
+  locator: ReturnType<Page["locator"]>,
+): Promise<boolean> {
+  return locator.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return (
+      rect.width > 0
+      && rect.height > 0
+      && rect.top >= 0
+      && rect.left >= 0
+      && rect.bottom <= window.innerHeight
+      && rect.right <= window.innerWidth
+    );
+  });
 }
 
 async function expectElementText(
