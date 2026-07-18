@@ -39,65 +39,6 @@ export function isLikelyPdfUrl(rawUrl: string): boolean {
   return new URL(rawUrl).pathname.toLowerCase().endsWith(".pdf");
 }
 
-const absoluteUrlPattern = new RegExp("^[-a-zA-Z0-9+.]+://");
-
-export function isLikelyOriginalPdfUrl(value: string): boolean {
-  return absoluteUrlPattern.test(value) || value.startsWith("file://");
-}
-
-function safeDecodeUriComponent(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-/**
- * Extracts the original PDF URL from a page's location, handling both the
- * declarativeNetRequest redirect format (`?DNR:<raw-unencoded-url>`, used because DNR
- * cannot URI-encode substitutions) and the content-script fallback format
- * (`?file=<encoded-url>`), plus a bare-pathname fallback.
- */
-export function pdfUrlFromLocation(
-  search: string,
-  pathname: string,
-): string | undefined {
-  const queryString = search.slice(1);
-  return (
-    pdfUrlFromFileQuery(queryString) ??
-    pdfUrlFromDnrQuery(queryString) ??
-    pdfUrlFromPathname(pathname)
-  );
-}
-
-function pdfUrlFromFileQuery(queryString: string): string | undefined {
-  const fileMatch = /(?:^|&)file=([^&]*)/.exec(queryString);
-  const fileParam = fileMatch?.[1];
-  if (fileParam !== undefined && fileParam.length > 0) {
-    return originalPdfUrlOrUndefined(safeDecodeUriComponent(fileParam));
-  }
-  return undefined;
-}
-
-function pdfUrlFromDnrQuery(queryString: string): string | undefined {
-  if (queryString.startsWith("DNR:")) {
-    return originalPdfUrlOrUndefined(queryString.slice(4));
-  }
-  return undefined;
-}
-
-function pdfUrlFromPathname(pathname: string): string | undefined {
-  if (pathname.startsWith("/")) {
-    return originalPdfUrlOrUndefined(safeDecodeUriComponent(pathname.slice(1)));
-  }
-  return undefined;
-}
-
-function originalPdfUrlOrUndefined(value: string): string | undefined {
-  return isLikelyOriginalPdfUrl(value) ? value : undefined;
-}
-
 export function captureRequestForClickedPdfLink(
   linkHref: string,
   sourceUrl: string,
