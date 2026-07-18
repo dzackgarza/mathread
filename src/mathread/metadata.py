@@ -61,7 +61,7 @@ def read_optional_capture_provenance(path: Path) -> CaptureProvenance | None:
         return None
 
     capture = required_docinfo(docinfo, path, "/MathReadCapture")
-    assert capture in {"capture-url", "capture-bytes"}, f"Stored MathRead PDF has invalid capture mode: {path}"
+    assert capture == "capture-bytes", f"Stored MathRead PDF has invalid capture mode: {path}"
 
     return CaptureProvenance(
         pdf_url=cast(HttpUrl, required_docinfo(docinfo, path, "/MathReadPDFURL")),

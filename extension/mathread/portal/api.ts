@@ -21,7 +21,7 @@ export interface LibraryEntry {
   stored_path: string;
   pdf_url?: string | undefined;
   source_url?: string | undefined;
-  capture?: 'capture-url' | 'capture-bytes' | undefined;
+  capture?: 'capture-bytes' | undefined;
   original_sha256?: string | undefined;
   title: string;
   has_note: boolean;
@@ -103,7 +103,7 @@ function nullableCaptureMode(value: Record<string, unknown>): LibraryEntry['capt
   if (candidate === undefined || candidate === null) {
     return undefined;
   }
-  invariant(candidate === 'capture-url' || candidate === 'capture-bytes', 'MathRead library entry capture mode is invalid');
+  invariant(candidate === 'capture-bytes', 'MathRead library entry capture mode is invalid');
   return candidate;
 }
 
@@ -299,10 +299,6 @@ export async function backendHealth(): Promise<BackendHealth> {
   return status.ready
     ? { ok: true, detail: `MathRead backend ready - ${API_BASE} -> ${status.root}` }
     : { ok: false, detail: `MathRead backend storage not ready: ${status.root}` };
-}
-
-export function pdfUrl(key: string): string {
-  return `${API_BASE}/pdf/${encodeURIComponent(key)}`;
 }
 
 /** Trash a library item: removes the PDF, its note, assets, and read-history. */

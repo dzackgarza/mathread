@@ -13,7 +13,6 @@ import {
   noteAssetUrl as noteAssetUrlImpl,
   openLibraryRoot as openLibraryRootImpl,
   overwriteNote as overwriteNoteImpl,
-  pdfUrl as pdfUrlImpl,
   postNoteImage as postNoteImageImpl,
   postReadEvent as postReadEventImpl,
   putNote as putNoteImpl,
@@ -30,7 +29,6 @@ export const getNote = getNoteImpl;
 export const noteAssetUrl = noteAssetUrlImpl;
 export const openLibraryRoot = openLibraryRootImpl;
 export const overwriteNote = overwriteNoteImpl;
-export const pdfUrl = pdfUrlImpl;
 export const postNoteImage = postNoteImageImpl;
 export const postReadEvent = postReadEventImpl;
 export const putNote = putNoteImpl;

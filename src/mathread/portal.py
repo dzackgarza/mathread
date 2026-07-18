@@ -57,11 +57,6 @@ def create_portal_router(
         asset_path = library.resolve_note_asset(root, key, filename)
         return Response(content=asset_path.read_bytes(), media_type="image/png")
 
-    @router.get("/pdf/{key}")
-    def get_pdf(key: str) -> Response:
-        pdf_path = library.resolve_pdf(root, key)
-        return Response(content=pdf_path.read_bytes(), media_type="application/pdf")
-
     @router.post("/read-event")
     def post_read_event(event: ReadEventRequest) -> Response:
         library.record_read_event(root, event.key)
