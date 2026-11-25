@@ -1256,6 +1256,20 @@ test("Ctrl+F opens the PDF viewer finder without first clicking the reader", asy
 
       await reader.locator("#findbar:not(.hidden)").waitFor();
       await reader.locator("#findInput:focus").waitFor();
+      await page.keyboard.type("kollar");
+      await expectElementText(
+        reader.locator("#findResultsCount"),
+        (text) => readableFindCount(text) === "1 of 2 matches",
+      );
+      const selectedMatch = reader.locator(".textLayer .highlight.selected");
+      await selectedMatch.waitFor();
+      expect(await isVisibleInViewport(selectedMatch)).toBe(true);
+      sendNativeShortcut(x11Display, "Return");
+      await expectElementText(
+        reader.locator("#findResultsCount"),
+        (text) => readableFindCount(text) === "2 of 2 matches",
+      );
+      expect(await isVisibleInViewport(selectedMatch)).toBe(true);
     },
     { nativeBrowserShortcuts: true, isolated: true },
   );
