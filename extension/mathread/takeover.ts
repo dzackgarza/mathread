@@ -160,6 +160,10 @@ function mountReaderFrame(sourceUrl: string): Promise<Window> {
       ) {
         window.removeEventListener("message", awaitReady);
         assert(frame.contentWindow !== null, "MathRead reader frame has no window");
+        // Transfer keyboard ownership to the actual reader once its document
+        // has loaded. Otherwise Chrome's wrapper handles Ctrl+F itself until
+        // the user clicks the iframe, bypassing PDF.js's page-aware finder.
+        frame.focus({ preventScroll: true });
         resolve(frame.contentWindow);
       }
     });
