@@ -32,7 +32,7 @@ export type RuntimeCaptureMessage = {
   request: CaptureRequest;
 };
 
-export const pdfLinkOriginsStorageKey = "mathread.pdfLinkOrigins";
+const pdfLinkOriginsStorageKey = "mathread.pdfLinkOrigins";
 const backendCaptureTimeoutMs = 30_000;
 
 export function isLikelyPdfUrl(rawUrl: string): boolean {
